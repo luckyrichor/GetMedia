@@ -134,6 +134,23 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
             count INTEGER NOT NULL,
             PRIMARY KEY(key, window_start))""",
     ]),
+    (2, [
+        # 活跃信息（含设备型号/版本）最长保留 30 天；长期只留 daily_stats 里的数字
+        """CREATE TABLE IF NOT EXISTS heartbeats(
+            day TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            app_version TEXT NOT NULL DEFAULT '',
+            os TEXT NOT NULL DEFAULT '',
+            device TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY(day, session_id))""",
+        "CREATE INDEX IF NOT EXISTS idx_heartbeats_user ON heartbeats(day, user_id)",
+        """CREATE TABLE IF NOT EXISTS daily_stats(
+            day TEXT PRIMARY KEY,
+            registrations INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 0)""",
+    ]),
 ]
 
 

@@ -19,6 +19,7 @@ from .security import (PasswordHasher, invite_hash, new_id, new_recovery_code, n
                        token_hash)
 
 import hmac as _hmac
+from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("getmedia.service")
 
@@ -33,6 +34,11 @@ class AuthCtx:
     channel: str
     tier: str
     login_name: str
+
+
+def stat_day(now: int) -> str:
+    """统计日按北京时间（UTC+8）划分。"""
+    return (datetime.fromtimestamp(now, timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
 
 
 def effective_tier(tier: str, expires_at: int | None, now: int) -> str:
@@ -188,6 +194,8 @@ class AccountService:
                     if n != 1:
                         raise ApiError(403, "invite_invalid", "邀请码无效或已使用")
                 sess = self._create_session(c, uid, req.client, ip, now)
+                c.execute(text("INSERT INTO daily_stats(day,registrations) VALUES(:d,1) ON CONFLICT(day) DO UPDATE SET registrations=registrations+1"),
+                          {"d": stat_day(now)})
                 self.audit(c, "register", uid, ip, path, "ok")
         except IntegrityError:
             raise ApiError(409, "name_taken", "该登录名已被使用") from None
@@ -310,6 +318,19 @@ class AccountService:
             c.execute(text("UPDATE sessions SET revoked_at=:n WHERE user_id=:i AND revoked_at IS NULL"), {"n": now, "i": u[0]})
             self.audit(c, "recover", u[0], ip, path, "ok")
         return {"recovery_code": code}
+
+    # ---------- 心跳 ----------
+    def heartbeat(self, ctx: AuthCtx, client) -> None:
+        """每个设备（会话）每天最多记一次；同一账号当天首次出现才计入活跃数。多余的静默成功。"""
+        now = self.now()
+        day = stat_day(now)
+        with self.engine.begin() as c:
+            seen_user = c.execute(text("SELECT 1 FROM heartbeats WHERE day=:d AND user_id=:u LIMIT 1"), {"d": day, "u": ctx.user_id}).first()
+            n = c.execute(text("INSERT OR IGNORE INTO heartbeats(day,session_id,user_id,channel,app_version,os,device) VALUES(:d,:s,:u,:ch,:v,:o,:dv)"),
+                          {"d": day, "s": ctx.session_id, "u": ctx.user_id, "ch": ctx.channel,
+                           "v": client.app_version, "o": client.os, "dv": client.device}).rowcount
+            if n and not seen_user:
+                c.execute(text("INSERT INTO daily_stats(day,active) VALUES(:d,1) ON CONFLICT(day) DO UPDATE SET active=active+1"), {"d": day})
 
     # ---------- 邀请码（管理 CLI 在 WP4 调用） ----------
     def create_invite(self, purpose: str = "", expires_at: int | None = None) -> str:

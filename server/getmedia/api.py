@@ -18,7 +18,9 @@ from .config import Settings
 from .db import make_engine, migrate
 from .errors import ApiError
 from .legal import LegalStore
+from .release import ReleaseStore
 from .runtime import RuntimeStore
+from .tiers import unprotected_routes
 from .security import PasswordHasher
 from .service import AccountService, AuthCtx
 
@@ -75,6 +77,10 @@ class LoginReq(BaseModel):
     evict_device_id: Optional[str] = Field(default=None, max_length=64)
 
 
+class HeartbeatReq(BaseModel):
+    client: ClientInfo
+
+
 class PasswordReq(BaseModel):
     old_password: str = Field(max_length=256)
     new_password: str = Field(max_length=256)
@@ -106,11 +112,12 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     legal.load_initial()  # 协议文件缺失/首部无法解析 → 抛错，拒绝启动
     hasher = PasswordHasher(settings.argon_memory_kib, settings.argon_iterations, settings.hash_concurrency)
     runtime = RuntimeStore(settings.runtime_file)
+    release = ReleaseStore(settings.release_file)
     svc = AccountService(engine, settings, hasher, legal, runtime, clock)
 
     app = FastAPI(title="GetMedia", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.engine, app.state.svc = settings, engine, svc
-    app.state.legal, app.state.runtime, app.state.alerts = legal, runtime, alerts
+    app.state.legal, app.state.runtime, app.state.alerts, app.state.release = legal, runtime, alerts, release
 
     # ---------- 错误与通用头 ----------
     @app.exception_handler(ApiError)
@@ -154,6 +161,17 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
             raise ApiError(401, "unauthenticated", "登录已失效，请重新登录")
         return ctx
 
+    def require_tier(*tiers: str):
+        """路由级依赖：账号等级不在 tiers 内 → 403 并写审计。"""
+        def dep(request: Request, ctx: AuthCtx = Depends(auth)) -> AuthCtx:
+            if ctx.tier not in tiers:
+                svc._audit_own("forbidden_tier", ctx.user_id, ip_of(request), request.url.path, f"need={'|'.join(tiers)}")
+                raise ApiError(403, "forbidden_tier", "当前账号无权使用该功能")
+            return ctx
+        dep._required_tiers = tuple(tiers)  # type: ignore[attr-defined]
+        return dep
+    app.state.require_tier = require_tier
+
     def with_session(resp_body: dict, channel: str, response: Response) -> dict:
         """App 在响应体拿令牌；网页只通过 HttpOnly Cookie 持有，响应体不含令牌。"""
         sess = resp_body["session"]
@@ -166,6 +184,18 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     @app.get("/health")
     def health():
         return {"ok": True}
+
+    @app.get("/v2/config")
+    def config():
+        rt, rel = runtime.get(), release.get()
+        return {"registration_open": rt.registration_open, "invite_required": rt.invite_required,
+                "maintenance": rt.maintenance, "min_version": rel["min_version"], "latest": rel["latest"],
+                "server_time": svc.now()}
+
+    @app.post("/v2/heartbeat", status_code=204)
+    def heartbeat(req: HeartbeatReq, ctx: AuthCtx = Depends(auth)):
+        svc.heartbeat(ctx, req.client)
+        return Response(status_code=204)
 
     @app.get("/v2/legal")
     def get_legal():
@@ -225,4 +255,7 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     def recover(req: RecoverReq, request: Request):
         return svc.recover(req.login_name, req.recovery_code, req.new_password, ip_of(request))
 
+    bad = unprotected_routes(app)
+    if bad:  # 默认拒绝：有未登记的路由则拒绝启动
+        raise RuntimeError(f"以下路由既不在免费白名单、也未挂 owner 级依赖：{bad}")
     return app

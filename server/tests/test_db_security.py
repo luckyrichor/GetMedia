@@ -11,8 +11,9 @@ from getmedia.security import PasswordHasher, new_recovery_code, normalize_recov
 def test_migrate_idempotent_and_wal(tmp_path):
     p = tmp_path / "a.db"
     e = db.make_engine(p)
-    assert db.migrate(e, p, tmp_path / "snap", 1000) == 1
-    assert db.migrate(e, p, tmp_path / "snap", 1001) == 1
+    latest = db.MIGRATIONS[-1][0]
+    assert db.migrate(e, p, tmp_path / "snap", 1000) == latest
+    assert db.migrate(e, p, tmp_path / "snap", 1001) == latest
     assert not (tmp_path / "snap").exists()  # 全新库、无待执行迁移：不做快照
     with e.begin() as c:
         assert c.exec_driver_sql("PRAGMA journal_mode").scalar() == "wal"
@@ -23,9 +24,10 @@ def test_pending_migration_snapshots_first(tmp_path, monkeypatch):
     p = tmp_path / "a.db"
     e = db.make_engine(p)
     db.migrate(e, p, tmp_path / "snap", 1000)
-    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS + [(2, ["CREATE TABLE IF NOT EXISTS t2(x INTEGER)"])])
-    assert db.migrate(e, p, tmp_path / "snap", 2000) == 2
-    snaps = list((tmp_path / "snap").glob("pre-migrate-v1-*.db"))
+    base = db.MIGRATIONS[-1][0]
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS + [(base + 1, ["CREATE TABLE IF NOT EXISTS t2(x INTEGER)"])])
+    assert db.migrate(e, p, tmp_path / "snap", 2000) == base + 1
+    snaps = list((tmp_path / "snap").glob(f"pre-migrate-v{base}-*.db"))
     assert len(snaps) == 1
     assert oct(snaps[0].stat().st_mode & 0o777) == "0o600" and oct((tmp_path / "snap").stat().st_mode & 0o777) == "0o700"
     conn = sqlite3.connect(snaps[0])
@@ -37,12 +39,13 @@ def test_failed_migration_aborts_and_rolls_back(tmp_path, monkeypatch):
     p = tmp_path / "a.db"
     e = db.make_engine(p)
     db.migrate(e, p, tmp_path / "snap", 1000)
-    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS + [(2, ["CREATE TABLE t3(x INTEGER)", "THIS IS NOT SQL"])])
+    base = db.MIGRATIONS[-1][0]
+    monkeypatch.setattr(db, "MIGRATIONS", db.MIGRATIONS + [(base + 1, ["CREATE TABLE t3(x INTEGER)", "THIS IS NOT SQL"])])
     with pytest.raises(db.MigrationError) as ei:
         db.migrate(e, p, tmp_path / "snap", 2000)
     assert "THIS IS NOT SQL" not in str(ei.value)
     with e.begin() as c:
-        assert c.exec_driver_sql("SELECT MAX(version) FROM schema_version").scalar() == 1
+        assert c.exec_driver_sql("SELECT MAX(version) FROM schema_version").scalar() == base
         assert c.exec_driver_sql("SELECT name FROM sqlite_master WHERE name='t3'").first() is None
 
 
