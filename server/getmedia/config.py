@@ -12,6 +12,33 @@ class ConfigError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class MailConfig:
+    """FEEDBACK_* 七个变量；只从环境读取。repr 不含任何值。"""
+    to: str = field(repr=False)
+    sender: str = field(repr=False)
+    host: str = field(repr=False)
+    port: int = field(repr=False)
+    security: str = field(repr=False)
+    user: str = field(repr=False)
+    password: str = field(repr=False)
+
+
+def load_mail(env: Mapping[str, str]) -> "MailConfig | None":
+    keys = ["FEEDBACK_MAIL_TO", "FEEDBACK_MAIL_FROM", "FEEDBACK_SMTP_HOST", "FEEDBACK_SMTP_PORT",
+            "FEEDBACK_SMTP_SECURITY", "FEEDBACK_SMTP_USER", "FEEDBACK_SMTP_PASSWORD"]
+    if not all(env.get(k) for k in keys):
+        return None
+    sec = env["FEEDBACK_SMTP_SECURITY"].lower()
+    if sec not in ("ssl", "starttls"):
+        raise ConfigError("FEEDBACK_SMTP_SECURITY 只能是 ssl 或 starttls")
+    try:
+        port = int(env["FEEDBACK_SMTP_PORT"])
+    except ValueError:
+        raise ConfigError("FEEDBACK_SMTP_PORT 必须是数字") from None
+    return MailConfig(env[keys[0]], env[keys[1]], env[keys[2]], port, sec, env[keys[5]], env[keys[6]])
+
+
+@dataclass(frozen=True)
 class Settings:
     data_dir: Path
     secret_key: bytes
@@ -39,6 +66,15 @@ class Settings:
     register_ip_limit: tuple = (5, 3600)
     recover_account_limit: tuple = (5, 3600)
     trusted_proxies: tuple = ("127.0.0.1", "::1")
+    # 反馈
+    mail: "MailConfig | None" = None
+    feedback_account_limit: tuple = (5, 86400)
+    feedback_ip_limit: tuple = (10, 86400)
+    feedback_min_interval: int = 30
+    feedback_daily_mail_cap: int = 50
+    feedback_image_total_cap: int = 2 * 1024**3
+    feedback_image_days: int = 90
+    feedback_text_days: int = 180
 
     def with_(self, **kw) -> "Settings":
         return replace(self, **kw)
@@ -70,6 +106,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         ledger_path=Path(env.get("GETMEDIA_LEDGER_PATH", str(data_dir.parent / "getmedia-ledger" / "deletion-ledger.log"))),
         feedback_image_dir=Path(env.get("GETMEDIA_FEEDBACK_IMAGE_DIR", str(data_dir / "feedback-images"))),
         bind=env.get("GETMEDIA_BIND", "127.0.0.1:8700"),
+        mail=load_mail(env),
     )
 
 

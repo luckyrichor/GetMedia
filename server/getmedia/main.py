@@ -6,4 +6,4 @@ from .config import load_settings
 
 
 def create() -> FastAPI:
-    return create_app(load_settings())
+    return create_app(load_settings(), start_workers=True)

@@ -7,7 +7,7 @@ import re
 import time
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, File, Form, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
@@ -17,6 +17,7 @@ from .alerts import AlertSink, LogAlertSink
 from .config import Settings
 from .db import make_engine, migrate
 from .errors import ApiError
+from .feedback import FeedbackService, MAX_IMAGE_BYTES
 from .legal import LegalStore
 from .release import ReleaseStore
 from .runtime import RuntimeStore
@@ -104,7 +105,7 @@ def client_ip(request: Request, trusted: tuple[str, ...]) -> str:
     return peer
 
 
-def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None = None) -> FastAPI:
+def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None = None, start_workers: bool = False) -> FastAPI:
     alerts = alerts or LogAlertSink()
     engine = make_engine(settings.database_path)
     migrate(engine, settings.database_path, settings.backup_dir, clock())
@@ -115,8 +116,10 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     release = ReleaseStore(settings.release_file)
     svc = AccountService(engine, settings, hasher, legal, runtime, clock)
 
+    fb = FeedbackService(engine, settings, alerts, svc.audit, clock)
     app = FastAPI(title="GetMedia", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.engine, app.state.svc = settings, engine, svc
+    app.state.fb = fb
     app.state.legal, app.state.runtime, app.state.alerts, app.state.release = legal, runtime, alerts, release
 
     # ---------- 错误与通用头 ----------
@@ -197,6 +200,20 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
         svc.heartbeat(ctx, req.client)
         return Response(status_code=204)
 
+    @app.post("/v2/feedback", status_code=201)
+    async def feedback(request: Request, ctx: AuthCtx = Depends(auth), text: str = Form("", max_length=4000),
+                       category: str = Form("other", max_length=32), contact: str = Form("", max_length=400),
+                       diagnostics: str | None = Form(None, max_length=4000),
+                       idempotency_key: str = Form("", max_length=128), images: list[UploadFile] = File(default=[])):
+        blobs = []
+        for up in images[:4]:  # 多读一张以便判定"超过 3 张"
+            blobs.append(await up.read(MAX_IMAGE_BYTES + 1))
+        import anyio
+        fid = await anyio.to_thread.run_sync(lambda: fb.submit(
+            ctx, ip_of(request), text_=text, category=category, contact=contact, diagnostics=diagnostics,
+            idempotency_key=idempotency_key, images=blobs))
+        return {"id": fid}
+
     @app.get("/v2/legal")
     def get_legal():
         return {"documents": legal.public()}
@@ -254,6 +271,9 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     @app.post("/account/recover")
     def recover(req: RecoverReq, request: Request):
         return svc.recover(req.login_name, req.recovery_code, req.new_password, ip_of(request))
+
+    if start_workers:
+        fb.start_worker()
 
     bad = unprotected_routes(app)
     if bad:  # 默认拒绝：有未登记的路由则拒绝启动

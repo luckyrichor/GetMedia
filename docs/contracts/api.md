@@ -48,6 +48,6 @@ App ≤ 5 台、网页 ≤ 3 个。设备项：`id`、`channel`、`device`、`ap
 `client`。每端每天最多记一次，多余的静默成功。`204`。
 
 ## POST /v2/feedback
-`multipart/form-data`：`text`（必填，≤ 2000 字）、`category`、`contact?`（≤ 200，只进正文）、`diagnostics?`（JSON，白名单字段）、`idempotency_key`、`images`（≤ 3，每张 ≤ 4 MB）。
-先落库，再异步发信；发信失败不影响响应。返回 `201 {"id": "<uuid>"}`；相同 `idempotency_key` 返回同一结果，不重复入库。
+`multipart/form-data`：`text`（必填，≤ 2000 字）、`category`、`contact?`（≤ 200，只进正文）、`diagnostics?`（JSON，白名单字段）、`idempotency_key`、`images`（≤ 3 张，每张 ≤ 5 MB，合计 ≤ 12 MB；只收 JPEG/PNG/WebP，服务端重新编码并清除元数据）。
+先落库，再异步发信；发信失败不影响响应。返回 `201 {"id": "<uuid>"}`；相同 `idempotency_key`（8–64 位字母数字/_/-，按账号隔离）返回同一结果，不重复入库、不计限流。限流：每账号每天 5 条、每 IP 每天 10 条、同账号间隔 ≥30 秒 → `429`；图片不合规 → `422 bad_image`；数量/大小超限 → `413 too_large`；图片总量达 2 GB → `507 storage_full`（可不带图重试）。`category`：bug/suggestion/account/other。
 诊断白名单：`app_version`、`os`、`device`、`channel`、`network_type`、`locale`、`last_error_code`。服务端二次过滤，丢弃含 cookie / token / password / Authorization / 带查询串完整 URL 的内容。

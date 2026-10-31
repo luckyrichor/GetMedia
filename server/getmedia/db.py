@@ -151,6 +151,26 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
             registrations INTEGER NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 0)""",
     ]),
+    (3, [
+        """CREATE TABLE IF NOT EXISTS feedback(
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            category TEXT NOT NULL DEFAULT '',
+            text TEXT,
+            contact TEXT NOT NULL DEFAULT '',
+            diagnostics_json TEXT NOT NULL DEFAULT '{}',
+            image_paths TEXT NOT NULL DEFAULT '[]',
+            image_bytes INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'new',
+            mail_state TEXT NOT NULL DEFAULT 'pending',
+            email_attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at INTEGER NOT NULL DEFAULT 0,
+            idempotency_key TEXT NOT NULL,
+            UNIQUE(user_id, idempotency_key))""",
+        "CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_feedback_mail ON feedback(mail_state, next_attempt_at)",
+    ]),
 ]
 
 
