@@ -319,6 +319,25 @@ class AccountService:
             self.audit(c, "recover", u[0], ip, path, "ok")
         return {"recovery_code": code}
 
+    # ---------- 注销 ----------
+    def delete_account(self, ctx: AuthCtx, password: str, ip: str, path: str) -> int:
+        """停用 + 吊销全部会话 + 进入冷静期；返回执行时间。仅需密码，限流同改密。"""
+        self._hit(f"delete:acct:{ctx.user_id}", (5, 3600))
+        with self.engine.begin() as c:
+            row = c.execute(text("SELECT password_hash FROM users WHERE id=:u AND status='active'"), {"u": ctx.user_id}).first()
+        if row is None or not self.hasher.verify(row[0], password):
+            self._audit_own("delete_fail", ctx.user_id, ip, path, "bad_password")
+            raise ApiError(401, "invalid_credentials", "密码不正确")
+        now = self.now()
+        at = now + self.s.deletion_cooldown_days * 86400
+        with self.engine.begin() as c:
+            c.execute(text("UPDATE users SET status='pending_deletion' WHERE id=:u"), {"u": ctx.user_id})
+            c.execute(text("UPDATE sessions SET revoked_at=:n WHERE user_id=:u AND revoked_at IS NULL"), {"n": now, "u": ctx.user_id})
+            c.execute(text("INSERT OR REPLACE INTO deletion_requests(user_id,requested_at,execute_at) VALUES(:u,:n,:a)"),
+                      {"u": ctx.user_id, "n": now, "a": at})
+            self.audit(c, "delete_request", ctx.user_id, ip, path, "ok")
+        return at
+
     # ---------- 心跳 ----------
     def heartbeat(self, ctx: AuthCtx, client) -> None:
         """每个设备（会话）每天最多记一次；同一账号当天首次出现才计入活跃数。多余的静默成功。"""

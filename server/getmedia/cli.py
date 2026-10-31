@@ -1,5 +1,5 @@
 """管理 CLI（仅 SSH 使用）。WP3 提供 feedback 子命令；WP4 增补其余。
-用法：python -m getmedia.cli feedback list|show <id>|export|mark-handled <id>
+用法：python -m getmedia.cli <命令> ...（见 --help）
 """
 from __future__ import annotations
 
@@ -54,6 +54,102 @@ def feedback_cmd(s: Settings, args, out=sys.stdout) -> int:
         return 0
 
 
+def _app(s: Settings):
+    from .api import create_app
+    return create_app(s)
+
+
+def ops_cmd(s: Settings, args, out=sys.stdout) -> int:
+    import getpass
+    from pathlib import Path
+    from .names import login_name_problem, normalize_login_name, password_problem
+    from .security import new_id, new_recovery_code, recovery_hmac
+    from .service import stat_day
+    app = _app(s)
+    svc, ops, eng = app.state.svc, app.state.ops, app.state.engine
+    now = svc.now()
+    cmd = args.cmd
+    if cmd == "stats":
+        with eng.begin() as c:
+            total = c.execute(text("SELECT COUNT(*) FROM users")).scalar_one()
+            print(f"注册总数：{total}", file=out)
+            for d in (1, 7, 30):
+                since = stat_day(now - (d - 1) * 86400)
+                n = c.execute(text("SELECT COUNT(DISTINCT user_id) FROM heartbeats WHERE day>=:d"), {"d": since}).scalar_one()
+                print(f"近 {d} 天活跃：{n}", file=out)
+            for r in c.execute(text("SELECT channel,app_version,COUNT(DISTINCT user_id) FROM heartbeats WHERE day>=:d GROUP BY 1,2 ORDER BY 3 DESC"), {"d": stat_day(now - 29 * 86400)}):
+                print(f"  {r[0]} {r[1] or '?'}：{r[2]}", file=out)
+            for r in c.execute(text("SELECT day,registrations FROM daily_stats WHERE registrations>0 ORDER BY day DESC LIMIT 14")):
+                print(f"  新增 {r[0]}：{r[1]}", file=out)
+        return 0
+    if cmd == "create-account":
+        norm = normalize_login_name(args.login_name)
+        pw = args.password or getpass.getpass("密码：")
+        p = login_name_problem(norm) or password_problem(pw, norm)
+        if p:
+            print(p, file=sys.stderr); return 1
+        uid, code = new_id("acct"), new_recovery_code()
+        h = svc.hasher.hash(pw)
+        with eng.begin() as c:
+            if c.execute(text("SELECT 1 FROM users WHERE login_name_norm=:n"), {"n": norm}).first():
+                print("登录名已存在", file=sys.stderr); return 1
+            c.execute(text("INSERT INTO users(id,login_name,login_name_norm,password_hash,tier,registered_channel,created_at) VALUES(:i,:n,:n,:p,:t,'cli',:c)"),
+                      {"i": uid, "n": norm, "p": h, "t": "owner" if args.owner else "free", "c": now})
+            c.execute(text("INSERT INTO recovery_codes(user_id,code_hmac,rotated_at) VALUES(:u,:h,:n)"), {"u": uid, "h": recovery_hmac(s.secret_key, code), "n": now})
+            svc.audit(c, "cli_create", uid, "cli", "", "owner" if args.owner else "free")
+        print(f"已创建 {norm}（{uid}），等级 {'owner' if args.owner else 'free'}\n恢复码（仅显示一次）：{code}", file=out)
+        return 0
+    if cmd in ("disable", "enable", "revoke-sessions", "set-owner", "unset-owner", "restore-account"):
+        norm = normalize_login_name(args.login_name)
+        with eng.begin() as c:
+            r = c.execute(text("SELECT id FROM users WHERE login_name_norm=:n"), {"n": norm}).first()
+            if r is None:
+                print("账号不存在", file=sys.stderr); return 1
+            uid = r[0]
+            if cmd == "disable":
+                c.execute(text("UPDATE users SET status='disabled' WHERE id=:u"), {"u": uid})
+            if cmd in ("disable", "revoke-sessions"):
+                c.execute(text("UPDATE sessions SET revoked_at=:n WHERE user_id=:u AND revoked_at IS NULL"), {"n": now, "u": uid})
+            if cmd == "enable":
+                c.execute(text("UPDATE users SET status='active' WHERE id=:u AND status='disabled'"), {"u": uid})
+            if cmd in ("set-owner", "unset-owner"):
+                c.execute(text("UPDATE users SET tier=:t, tier_expires_at=NULL WHERE id=:u"), {"t": "owner" if cmd == "set-owner" else "free", "u": uid})
+                c.execute(text("UPDATE sessions SET revoked_at=:n WHERE user_id=:u AND revoked_at IS NULL"), {"n": now, "u": uid})
+            svc.audit(c, f"cli_{cmd}", uid, "cli", "", "ok")
+        if cmd == "restore-account" and not ops.restore_account(uid):
+            print("该账号没有待执行的注销请求", file=sys.stderr); return 1
+        print("完成", file=out)
+        return 0
+    if cmd == "invite":
+        print(svc.create_invite(args.purpose, now + args.days * 86400 if args.days else None), file=out)
+        return 0
+    if cmd == "registration":
+        rt = app.state.runtime.write(registration_open=args.state == "open")
+        print(f"注册已{'开放' if rt.registration_open else '关闭'}", file=out)
+        return 0
+    if cmd == "audit":
+        with eng.begin() as c:
+            for r in c.execute(text("SELECT ts,event,user_id,ip,path,result FROM audit ORDER BY id DESC LIMIT :n"), {"n": args.limit}):
+                print(f"{_ts(r[0])} {r[1]:<16} {r[2] or '-':<22} {r[3]:<16} {r[4]} {r[5]}", file=out)
+        return 0
+    if cmd == "snapshot":
+        p = ops.snapshot()
+        print(f"快照：{p}" if p else "快照失败", file=out)
+        return 0 if p else 1
+    if cmd == "verify-backup":
+        snaps = ops._snaps()
+        bad = [p.name for p in snaps if not ops.verify(p)]
+        print(f"快照 {len(snaps)} 份，校验失败 {len(bad)} 份{'：' + ','.join(bad) if bad else ''}", file=out)
+        return 1 if bad or not snaps else 0
+    if cmd == "restore":
+        n = ops.restore(Path(args.snapshot), Path(args.target), args.replay_ledger)
+        print(f"已恢复到 {args.target}；按台账重放删除 {n} 个账号", file=out)
+        return 0
+    if cmd == "tick":
+        ops.tick(); print("完成", file=out); return 0
+    return 2
+
+
 def main(argv=None, settings: Settings | None = None, out=sys.stdout) -> int:
     p = argparse.ArgumentParser(prog="getmedia")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -62,13 +158,22 @@ def main(argv=None, settings: Settings | None = None, out=sys.stdout) -> int:
     f.add_argument("id", nargs="?", default="")
     f.add_argument("--all", action="store_true")
     f.add_argument("--limit", type=int, default=50)
+    sub.add_parser("stats")
+    ca = sub.add_parser("create-account"); ca.add_argument("login_name"); ca.add_argument("--owner", action="store_true"); ca.add_argument("--password")
+    for name in ("disable", "enable", "revoke-sessions", "set-owner", "unset-owner", "restore-account"):
+        sub.add_parser(name).add_argument("login_name")
+    iv = sub.add_parser("invite"); iv.add_argument("--purpose", default=""); iv.add_argument("--days", type=int, default=0)
+    rg = sub.add_parser("registration"); rg.add_argument("state", choices=["open", "close"])
+    au = sub.add_parser("audit"); au.add_argument("--limit", type=int, default=50)
+    sub.add_parser("snapshot"); sub.add_parser("verify-backup"); sub.add_parser("tick")
+    rs = sub.add_parser("restore"); rs.add_argument("snapshot"); rs.add_argument("target"); rs.add_argument("--replay-ledger", action="store_true", default=True)
     args = p.parse_args(argv)
     s = settings or load_settings()
     if args.cmd == "feedback":
         if args.action in ("show", "mark-handled") and not args.id:
             p.error("需要反馈编号（前缀即可）")
         return feedback_cmd(s, args, out)
-    return 2
+    return ops_cmd(s, args, out)
 
 
 if __name__ == "__main__":

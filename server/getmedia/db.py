@@ -171,6 +171,17 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "CREATE INDEX IF NOT EXISTS idx_feedback_user ON feedback(user_id, created_at)",
         "CREATE INDEX IF NOT EXISTS idx_feedback_mail ON feedback(mail_state, next_attempt_at)",
     ]),
+    (4, [
+        """CREATE TABLE IF NOT EXISTS deletion_requests(
+            user_id TEXT PRIMARY KEY,
+            requested_at INTEGER NOT NULL,
+            execute_at INTEGER NOT NULL,
+            executed_at INTEGER)""",
+        # 台账：只存账号编号与删除时间；同时追加写入快照目录之外的文件
+        """CREATE TABLE IF NOT EXISTS deletion_ledger(
+            user_id TEXT PRIMARY KEY,
+            deleted_at INTEGER NOT NULL)""",
+    ]),
 ]
 
 

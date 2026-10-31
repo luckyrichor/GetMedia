@@ -75,6 +75,14 @@ class Settings:
     feedback_image_total_cap: int = 2 * 1024**3
     feedback_image_days: int = 90
     feedback_text_days: int = 180
+    # 运维
+    deletion_cooldown_days: int = 7
+    retention_days: int = 30          # 审计 / 限流 / 活跃明细
+    snapshot_keep: int = 7
+    snapshot_max_age_days: int = 7
+    cert_path: "Path | None" = None
+    disk_path: Path = Path("/")
+    disk_alert_pct: int = 85
 
     def with_(self, **kw) -> "Settings":
         return replace(self, **kw)
@@ -107,6 +115,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         feedback_image_dir=Path(env.get("GETMEDIA_FEEDBACK_IMAGE_DIR", str(data_dir / "feedback-images"))),
         bind=env.get("GETMEDIA_BIND", "127.0.0.1:8700"),
         mail=load_mail(env),
+        cert_path=Path(env["GETMEDIA_CERT_PATH"]) if env.get("GETMEDIA_CERT_PATH") else None,
+        disk_path=Path(env.get("GETMEDIA_DISK_PATH", str(data_dir))),
     )
 
 

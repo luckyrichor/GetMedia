@@ -13,7 +13,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .alerts import AlertSink, LogAlertSink
+from .alerts import AlertSink, MailAlertSink
+from .ops import Ops
 from .config import Settings
 from .db import make_engine, migrate
 from .errors import ApiError
@@ -87,6 +88,10 @@ class PasswordReq(BaseModel):
     new_password: str = Field(max_length=256)
 
 
+class DeleteReq(BaseModel):
+    password: str = Field(max_length=256)
+
+
 class RecoverReq(BaseModel):
     login_name: str = Field(max_length=128)
     recovery_code: str = Field(max_length=64)
@@ -106,8 +111,8 @@ def client_ip(request: Request, trusted: tuple[str, ...]) -> str:
 
 
 def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None = None, start_workers: bool = False) -> FastAPI:
-    alerts = alerts or LogAlertSink()
     engine = make_engine(settings.database_path)
+    alerts = alerts or MailAlertSink(engine, settings, clock)
     migrate(engine, settings.database_path, settings.backup_dir, clock())
     legal = LegalStore(engine, settings.legal_dir, alerts, clock)
     legal.load_initial()  # 协议文件缺失/首部无法解析 → 抛错，拒绝启动
@@ -240,6 +245,14 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     def me(ctx: AuthCtx = Depends(auth)):
         return svc.me(ctx)
 
+    @app.delete("/account/me")
+    def delete_me(req: DeleteReq, request: Request, ctx: AuthCtx = Depends(auth)):
+        at = svc.delete_account(ctx, req.password, ip_of(request), request.url.path)
+        resp = JSONResponse({"delete_at": at})
+        if ctx.channel == "web":
+            resp.delete_cookie(COOKIE_NAME, path=settings.cookie_path, secure=True, httponly=True, samesite="strict")
+        return resp
+
     @app.post("/account/consent", status_code=204)
     def consent(c: Consent, request: Request, ctx: AuthCtx = Depends(auth)):
         svc.consent(ctx, c, ip_of(request), request.url.path)
@@ -272,8 +285,20 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     def recover(req: RecoverReq, request: Request):
         return svc.recover(req.login_name, req.recovery_code, req.new_password, ip_of(request))
 
+    ops = Ops(engine, settings, fb, alerts, clock)
+    app.state.ops = ops
     if start_workers:
         fb.start_worker()
+        import threading
+
+        def _ops_loop():
+            while True:
+                try:
+                    ops.tick()
+                except Exception as e:  # noqa: BLE001
+                    log.error("ops tick error: %s", type(e).__name__)
+                time.sleep(3600)
+        threading.Thread(target=_ops_loop, name="ops", daemon=True).start()
 
     bad = unprotected_routes(app)
     if bad:  # 默认拒绝：有未登记的路由则拒绝启动
