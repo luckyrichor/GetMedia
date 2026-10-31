@@ -16,18 +16,18 @@
 | 503 | 维护中 |
 
 ## 基址与路径前缀
-对外基址为 `https://<服务器>/getmedia`。nginx 剥掉 `/getmedia` 后转发，服务端路由不含前缀，因此 `api.md` 中的路径都相对于基址（如 `POST {基址}/account/login`）。服务端响应不得出现以 `/` 开头的绝对路径跳转。
+对外接口基址为 `https://<服务器>/getmedia/api`，网页在 `https://<服务器>/getmedia/`。nginx 去掉 `/getmedia/api` 后转发，**服务端路由不含前缀**，因此 `api.md` 中的路径（`/account/…`、`/v2/…`、`/health`）都是服务端内部路径，客户端访问时加上基址（如 `POST https://<服务器>/getmedia/api/account/login`）。服务端响应不得出现以 `/` 开头的绝对路径跳转。
 
 ## 认证
 - App：请求头 `X-GetMedia-Session: <token>`。
-- 网页：`__Secure-` 前缀 Cookie（`Secure; HttpOnly; SameSite=Strict; Path=/getmedia/`）；写操作另带 CSRF 头 `X-GetMedia-CSRF`。
+- 网页：`__Secure-gm_session` Cookie（`Secure; HttpOnly; SameSite=Strict; Path=/getmedia/api/`）；写操作另带自定义头并校验 `Origin`。CSRF 头 `X-GetMedia-CSRF`。
 - 同源、不开 CORS。令牌只放头或 Cookie，不放 URL、不进日志。
 
 ## 客户端信息 `client`
 注册与心跳携带：`channel`（`android`｜`web`）、`app_version`、`os`、`device`（均为短字符串，服务端截断并过滤控制字符）。
 
 ## 登录名
-ASCII 小写字母、数字、下划线、连字符，长度 3–32；不得形似手机号（全数字且长度 ≥ 7 拒绝）。入库同时存规范化形式（小写）并唯一。
+先做 NFKC 规范化并转小写，再要求只含 ASCII 字母、数字、下划线、连字符，长度 3–32；不得形似手机号（全数字且长度 ≥ 7 拒绝）。入库同时存规范化形式（小写）并唯一。
 
 ## 密码
 长度 ≥ 8，≤ 128；不与登录名相同。哈希为 Argon2id，参数写入哈希串。

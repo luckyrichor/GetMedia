@@ -1,6 +1,6 @@
 # 接口清单（任务一：免费档）
 
-> 路径相对于基址 `https://<服务器>/getmedia`（见 conventions.md）。免费档服务端只有下列接口。新增路由默认归 owner，须显式加入免费白名单。
+> 此处为服务端内部路径；客户端访问时加基址 `https://<服务器>/getmedia/api`（见 conventions.md）。免费档服务端只有下列接口。新增路由默认归 owner，须显式加入免费白名单。
 
 ## GET /health
 `200 {"ok": true}`。无需登录。
@@ -15,7 +15,7 @@
 ## POST /account/register
 请求：`login_name`、`password`、`invite_code?`、`age_confirmed`（必须为 true）、`consent`：`{user_agreement:{version,sha256}, privacy_policy:{version,sha256}}`、`client`。
 成功 `201`：`session`（`token`、`expires_at`）、`account`（`id`、`login_name`、`tier`）、`recovery_code`（仅此一次）。
-失败：`403 registration_closed`（未开放且无有效邀请码）、`409 name_taken`、`422`、`429`；协议版本或哈希与服务端当前不符 → `409 legal_mismatch`。
+失败：`403 registration_closed`（未开放且无有效邀请码）、`409 name_taken`、`422`、`429`；协议版本或哈希与服务端当前不符 → `409 legal_outdated`（客户端刷新文本后重新展示并重新勾选）。
 
 ## POST /account/login
 请求：`login_name`、`password`、`client`。成功返回 `session`、`account`、`consent_required`（bool）、`recovery_confirmed`（bool）。失败统一 `401 invalid_credentials`。设备数超限 → `409 device_limit`，返回设备列表供选择后重试（带 `evict_device_id`）。

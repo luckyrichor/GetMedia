@@ -1,7 +1,8 @@
 # GetMedia 开发方案
 
-**方案版本：v3（2026-10-31）**　状态：**用户已确认，生效**
+**方案版本：v4（2026-10-31）**　状态：**已生效**（用户 2026-10-31 指示"没有问题就对着这个方案开发"；v3 中未在 v4 变化里列出的部分，用户已确认，保持不变）
 **用途**：多个 Agent 接力开发的唯一依据。开工前依次读：本文 → `docs/STATUS.md` → `docs/DECISIONS.md`。方案有改动，必须先改本文并在 §16 登记，再动手。
+**v4 相对 v3 的变化**：①GetMedia 取消独立端口 `9443`，改为与 GetAudio、GetVideo 一致，挂在 443 的前缀 `/getmedia/` 下（网页 `/getmedia/`，接口 `/getmedia/api/`），不新增端口、不需要云防火墙规则；②网页会话 Cookie 改为 `__Secure-` 前缀并限定 `Path=/getmedia/api/`，同 IP 上其他项目的请求收不到；③nginx 交付改为"一个 snippet + 一个 http 级配置 + logrotate，用户在 443 块里加一行 include"；④签名密钥不再放生产服务器；⑤证书到期告警改为 24 小时；⑥WP5 拆为 5a（音频）与 5b（视频）；⑦删除方案中关于线上现网弱点的描述。
 **v3 相对 v2 的变化**：①澄清"免费版必须注册、开放注册"，把"注册全关"明确为上线前准备期；②澄清免费版 / 完整版 / owner 账号的关系；③修正协议热加载漏洞（同意记录绑定文本哈希）；④Argon2id 用 `cryptography` 自带实现，补上遗漏的 `python-multipart`；⑤登记证书依赖风险；⑥写明"验收通过"的含义；⑦用户确认 v2 其余部分（含 `9443` 端口、音频+视频合并）。
 
 来源标记：**[用户]** 用户明确说过　**[任务书]** 任务书条款　**[提议]** 本方案提出，用户已同意或未异议　**[待定]** 尚需用户决定（不阻塞当前工作包）
@@ -35,9 +36,9 @@
 |---|---|---|
 | 1 | 全部开发在 GetMedia；Audio/Video 只读 | [用户] |
 | 2 | 免费版包名用 media；**free = `com.getmedia.app`，full = `com.getmedia.app.full`**（单一常量处定义，发布前用户可改） | [用户]+[提议] |
-| 3 | GetMedia 服务端是**全新独立服务**：独立目录/DB/密钥/env/systemd/端口；**对外走现有 HTTPS 443，路径前缀 `/getmedia/`**（nginx 剥掉前缀后转发），回环 `127.0.0.1:8700`；不新增对外端口；GetAudio 自身的路由与 GetVideo 的 8443 不改 | [提议]；2026-10-31 用户确认"其余按方案" |
+| 3 | GetMedia 服务端是**全新独立服务**：独立目录/DB/密钥/env/systemd；回环 `127.0.0.1:8700`；**对外挂在 443 的前缀 `/getmedia/` 下**（与 GetAudio、GetVideo 的方式一致），**不新增端口、不需要云防火墙规则**；443 的 server 块由多个项目共用，GetMedia 只交付一个 snippet 文件，由用户在块内加一行 `include`，Agent 不编辑该块及其他项目的 include 文件 | [提议]；v4 由用户改为前缀方式 |
 | 4 | **公开网页端不能提取、不能播放**；**个人网页端（任务二）走服务器提取与播放，仅 owner 账号** | [用户] |
-| 5 | **签名密钥：只一把，免费版/完整版/调试版共用**，固定存放、
+| 5 | **签名密钥：只一把，免费版/完整版/调试版共用**，密钥只放用户的 Mac 与用户自己的离线加密备份（**不放生产服务器**），缺失即构建失败 | [用户] |
 | 6 | **协议文本**：产品名由 GetAudio 仅替换为 GetMedia，其余条款不动；**文本与发布信息放服务器、可改、无需重新构建**；APK 内置一份离线兜底 | [用户] |
 | 7 | **免费版必须注册、面向公众开放注册。** 首次部署时 `registration_open` 先关，作为上线前准备期（见 §15、§17）；验收后由用户开放。用户也可选择一上线就开放 | [用户]，2026-10-31 澄清 |
 | 8 | 接受**不备案**直接以 IP 对外服务，随时可关停 | [用户] |
@@ -53,12 +54,16 @@
 | 18 | **一个新应用同时做音频和视频**（WP5 合并 Audio+Video 本地功能），不再"先音频后视频" | [用户]，2026-10-31 确认 |
 | 19 | **协议同意记录绑定文本哈希**：同意记录存版本号 + 两份文本的 sha256；服务器发现"版本号不变但文本变了"时拒绝加载新文本并告警，必须改版本号 | [提议]，用户同意 |
 | 20 | **免费版 / 完整版 / owner 的关系**：owner 是账号等级，不是 App 类型。免费版 APK 里没有重型功能代码，用 owner 账号登录免费版也只有免费功能；重型功能只在任务二的完整版和个人网页里，且服务器按等级判权 | [用户]，2026-10-31 澄清 |
+| 21 | **前缀路由**：公开地址 `https://<IP>/getmedia/`（网页）与 `https://<IP>/getmedia/api/`（接口）；nginx 去掉 `/getmedia/api` 后转发到服务端，服务端路由保持 `/account/…`、`/v2/…` 不变 | [用户]，v4 |
+| 22 | **证书到期告警阈值 24 小时**（证书总寿命约 6 天 16 小时，48 小时会在续期前误报）；上线后观察一两个续期周期再调 | [提议]，v4 |
+| 23 | **WP5 分两步**：5a 以 Audio 为底，音频部分完整跑通、可构建、测试通过，作为可单独验收的节点；5b 再并入视频 | [提议]，v4 |
+| 24 | **证书续期任务最终由 GetMedia 维护**，GetAudio、GetVideo 在 GetMedia 开发完成后不久退役；交接分步进行，见 §15 第 8 步 | [用户]，v4 |
 
 ## 3. 现状事实（本方案的依据）
 
 | 项目 | GetAudio | GetVideo |
 |---|---|---|
-| 服务端 | FastAPI + SQLite；127.0.0.1:8800，经 443 对外 | 127.0.0.1:8900，经 8443 对外 |
+| 服务端 | FastAPI + SQLite；127.0.0.1:8800，经 443 的 `/getaudio/` 前缀对外 | 127.0.0.1:8900，经 443 的 `/getvideo/` 前缀对外（8443 已关闭） |
 | Android | 80 个 Kotlin 文件；`com.getaudio.app` 0.9.10；Room schema 9 | 85 个文件；`com.getvideo.app` 0.3.10；Room schema 9 |
 | 上游基线 | `dc2abeb` | `3dccb1c`（GetVideo 由 GetAudio 分叉） |
 
@@ -67,6 +72,7 @@
 - 数据模型几乎相同（Track 仅默认格式不同：`m4a` / `mp4`）。
 - 文件数、行数、"逐字相同"等统计为前期估算，**WP5 对照表会重新核对**，以对照表为准。
 - 旧服务端的游客体系、`legacy` 范围、共享 Basic 口令、旧路由，**GetMedia 不继承**。
+- 阶段 0 检查：GetAudio、GetVideo 的仓库与历史中**未发现**凭据、密钥、授权码或邮箱；服务器 IP 已公开（已编译进 APK）。
 - 运行环境：服务器 Python 3.12，Pillow 12.x；沙箱为 Python 3.13，测试须在两个版本语义下都通过（不使用 3.13 专有特性）。
 
 ## 4. 总体架构
@@ -123,7 +129,7 @@ GetMedia/
 - `main` 对重型能力只依赖小接口（如 `OwnerFeatures`）；`full` 提供真实实现，`free` 提供"暂未开放"实现；`main` 中**不得出现**重型类名与接口路径（禁用词扫描强制）。
 - 包名常量放 `android/app-ids.properties`（发布后不可改，所以只此一处）。
 - 数据库：全新 Room 库，schema 从 1 起，实体取 Audio/Video 并集并加 `mediaType`；**不迁移旧应用（GetAudio/GetVideo）的本地数据**，旧应用库里的内容不会进入 GetMedia。
-- 网络：只允许 HTTPS，关闭明文（`cleartextTrafficPermitted="false"`）；服务器地址为 `BuildConfig` 编译期常量，设置页不可改；证书校验保持开启，**不做证书固定**（IP 证书约 6 天轮换，固定叶证书会在续期时让全体用户失联）。
+- 网络：只允许 HTTPS，关闭明文（`cleartextTrafficPermitted="false"`）；服务器地址为 `BuildConfig` 编译期常量（形如 `https://<IP>/getmedia/api`，含前缀），设置页不可改；证书校验保持开启，**不做证书固定**（IP 证书约 6 天轮换，固定叶证书会在续期时让全体用户失联）。
 - 会话令牌用 Android Keystore 加密保存。
 - **首次使用必须注册或登录**；登录后离线可继续使用全部本地功能。
 
@@ -137,11 +143,11 @@ GetMedia/
 | 构建 | 独立产物，禁用词扫描保证无 owner 内容 | 独立产物 |
 
 - 技术：**Vite + Preact + TypeScript**；预计 gzip 后 30–60 KB；无第三方脚本/字体/统计/CDN；系统字体栈。
-- 同源：网页与接口同一来源；**不开 CORS**；`/getmedia/` 下的 nginx **只放行免费路径**。
-- 会话：`__Secure-` 前缀 Cookie，`Secure; HttpOnly; SameSite=Strict; Path=/getmedia/`（`__Host-` 要求 `Path=/`，会让 Cookie 对同源的其他应用路径可见，故不用）；写操作要求自定义头 + `Origin` 校验；网页会话 14 天滑动、最多 3 个。
-- 安全头：CSP `default-src 'self'`、`frame-ancestors 'none'`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`X-Robots-Tag: noindex, nofollow`，`robots.txt` 全站 Disallow。
+- 同源：网页在 `/getmedia/`，接口在 `/getmedia/api/`，同一来源；**不开 CORS**；`/getmedia/api/` 的 nginx **只放行免费路径**。注意：该来源（`https://<IP>`）与 GetAudio、GetVideo 等其他项目**同源**（见 §16 风险）；因此网页不得把任何机密放进 localStorage / sessionStorage，非敏感偏好的键统一加 `getmedia:` 前缀。
+- 会话：`__Secure-gm_session` Cookie，`Secure; HttpOnly; SameSite=Strict; Path=/getmedia/api/`（只随接口请求发送，同 IP 上其他项目的请求收不到；`__Host-` 要求 `Path=/`，所以不用）；写操作要求自定义头 + `Origin` 校验；网页会话 14 天滑动、最多 3 个。
+- 安全头：CSP `default-src 'self'`、`frame-ancestors 'none'`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`X-Robots-Tag: noindex, nofollow`，页面加 `<meta name="robots" content="noindex,nofollow">`（`robots.txt` 只能放在站点根，而根路径归共用的 443 块，GetMedia 不改，所以不依赖它）。
 - 输出一律转义，不用 `innerHTML` 渲染用户内容；协议 Markdown 用自带的极小渲染器，**不透传 HTML**。
-- **任务二的设计钩子（任务一先预留，不实现）**：`web-owner` 将通过 nginx `auth_request` 校验 owner 身份后才下发（避免任何人下载 owner 页面代码）；服务端需要一个仅限 nginx 内部调用的"是否 owner"检查接口；owner 的服务器提取受 10 Mbps 总带宽限制，需另做并发与限速设计。
+- **任务二的设计钩子（任务一先预留，不实现）**：`web-owner`（路径 `/getmedia/owner/`）将通过 nginx `auth_request` 校验 owner 身份后才下发（避免任何人下载 owner 页面代码）；服务端需要一个仅限 nginx 内部调用的"是否 owner"检查接口；owner 的服务器提取受 10 Mbps 总带宽限制，需另做并发与限速设计。
 
 ### 4.7 服务器侧可改、无需重新构建的内容 [用户]
 
@@ -166,9 +172,9 @@ GetMedia/
 - **只生成一把** Media 密钥库 `getmedia-release.jks`，**免费版、完整版、调试版共用**（包名不同，不冲突）；不再依赖各机器自动生成的临时调试签名，彻底避免"这台能覆盖安装、那台不行"。
 - 密钥与属性文件固定位置 `~/.android-keys/getmedia.properties`；**绝不入库**（`.gitignore` 含 `*.jks`、`*.keystore`、`keystore.properties`；泄露扫描也检查）。
 - `tools/make-release-key.sh`：在用户的 Mac 上一次性生成密钥（Agent 不接触私钥与口令）。
-- `tools/setup-release-key.sh`：把密钥从**用户指定的本机路径**复制到 `~/.android-keys/`，权限 600；不涉及服务器、不联网。
+- `tools/setup-release-key.sh`：在新的构建机（用户自己的电脑）上，从用户**自己指定的本机路径或离线备份**复制同一份密钥，权限 600。**密钥不放生产服务器**：该服务器对外提供网页、接收用户上传，一旦被攻破，攻击者可用这把密钥给所有用户签发恶意更新。
 - `build.gradle.kts`：找不到密钥时 **release 与 debug 构建都直接失败**并提示运行 setup 脚本（逃生开关 `-PallowTempSign=true` 仅供明确不发布的本机试验，构建日志会打印警示）；每次构建打印签名证书 SHA-256 指纹，指纹记录在 `docs/`（指纹是公开信息，可入库）。
-- 密钥丢失 = 已安装的 App 永远无法覆盖升级；密钥**只存在用户的 Mac**，外加用户自己的离线加密备份；**不放服务器、不入库**。
+- 密钥丢失 = 已安装的 App 永远无法覆盖升级；因此用户的 Mac 一份 + 用户自己的离线加密备份一份（两份，均不在服务器上）。
 
 ## 5. 免费版功能清单
 
@@ -186,6 +192,7 @@ GetMedia/
 - JSON 错误体 `{"detail": "...", "code": "..."}`；未登录 401；等级不足 403（写审计）；**他人资源一律 404**；限流 429 带 `Retry-After`；表单校验失败 422（不回显原始输入）。
 - App 用请求头 `X-GetMedia-Session`；网页用 Cookie（写操作另带 CSRF 头）。
 - 注册请求携带 `client`：`channel`（`android`/`web`）、`app_version`、`os`、`device`。
+- 对外路径映射：客户端访问 `https://<IP>/getmedia/api/<path>`，nginx 去掉 `/getmedia/api` 后转发；本契约里的路径（`/account/…`、`/v2/…`、`/health`）均指服务端内部路径。
 
 | 接口 | 说明 |
 |---|---|
@@ -230,25 +237,37 @@ GetMedia/
 
 **备份**：每日 SQLite `.backup` 一致快照 → 受限目录（目录 700、文件 600，不在站点目录下）→ 完成后 `integrity_check` → 保留最近 7 份；**不上传任何外部位置**。恢复流程：停服务 → 换库 → `restore --replay-ledger`（重放删除台账，已注销账号不得复活）→ 启动。需实际演练一次，结果写入验收报告。已知并接受：整机丢失时快照一并丢失；平台凭据加密密钥不在快照里（任务二才涉及）。
 
-**告警（复用邮件通道，同类每天最多一封）**：证书剩余有效期 <24 小时（可配置）、磁盘水位、快照失败、反馈图片总量接近上限、协议文本哈希不符。
+**告警（复用邮件通道，同类每天最多一封）**：证书剩余有效期 <24 小时、磁盘水位、快照失败、反馈图片总量接近上限、协议文本哈希不符。
 
 **管理 CLI（仅 SSH）**：注册总数、近 1/7/30 天活跃、分渠道与版本分布、按日新增；**直接创建账号并可设为 owner**、停用/启用账号、吊销会话、设为 owner、生成邀请码、开关注册、查看审计、反馈管理、恢复注销账号、执行/校验备份与恢复。
 
 ## 9. 配置与环境变量（只列名字）
 
-`GETMEDIA_DATA_DIR`、`GETMEDIA_DATABASE_URL`、`GETMEDIA_SECRET_KEY`（HMAC 用）、`GETMEDIA_LEGAL_DIR`、`GETMEDIA_RELEASE_FILE`、`GETMEDIA_RUNTIME_FILE`、`GETMEDIA_BACKUP_DIR`、`GETMEDIA_LEDGER_PATH`、`GETMEDIA_FEEDBACK_IMAGE_DIR`、`GETMEDIA_BIND`（默认 `127.0.0.1:8700`）；邮件：`FEEDBACK_MAIL_TO`、`FEEDBACK_MAIL_FROM`、`FEEDBACK_SMTP_HOST`、`FEEDBACK_SMTP_PORT`、`FEEDBACK_SMTP_SECURITY`（`ssl`/`starttls`）、`FEEDBACK_SMTP_USER`、`FEEDBACK_SMTP_PASSWORD`；告警阈值 `GETMEDIA_ALERT_CERT_HOURS`（默认 24）。仓库只提供 `*.example`，全占位值（占位邮箱用保留域名 `example.invalid`）。
+`GETMEDIA_DATA_DIR`、`GETMEDIA_DATABASE_URL`、`GETMEDIA_SECRET_KEY`（HMAC 用）、`GETMEDIA_LEGAL_DIR`、`GETMEDIA_RELEASE_FILE`、`GETMEDIA_RUNTIME_FILE`、`GETMEDIA_BACKUP_DIR`、`GETMEDIA_LEDGER_PATH`、`GETMEDIA_FEEDBACK_IMAGE_DIR`、`GETMEDIA_BIND`（默认 `127.0.0.1:8700`）；邮件：`FEEDBACK_MAIL_TO`、`FEEDBACK_MAIL_FROM`、`FEEDBACK_SMTP_HOST`、`FEEDBACK_SMTP_PORT`、`FEEDBACK_SMTP_SECURITY`（`ssl`/`starttls`）、`FEEDBACK_SMTP_USER`、`FEEDBACK_SMTP_PASSWORD`；公开前缀 `GETMEDIA_PUBLIC_PREFIX`（部署模板变量，默认 `/getmedia`，仅供 nginx 模板与网页构建使用）。仓库只提供 `*.example`，全占位值（占位邮箱用保留域名 `example.invalid`）。
 
 ## 10. nginx 模板要点（`deploy/`，用户手动部署）
 
-- 在**现有 443 server 块**内只加一行 `include /etc/nginx/snippets/getmedia.conf;`，全部 GetMedia 配置（`location = /getmedia` 重定向到 `/getmedia/`、`location /getmedia/` 等）放进该片段文件；沿用该块已有的 IP 证书，不新增监听端口。回滚 = 删除这一行并 reload。片段内用更长前缀，不与 GetAudio 的根路径路由冲突；`access_log`、`add_header`、`client_max_body_size` 在片段内显式重设（不继承外层）。
-- **证书依赖说明**：该证书由 GetAudio 现有的续期任务维护。GetMedia 与它共用同一张证书，因此只要该续期任务在，GetMedia 自动跟着续；**若日后停用或迁移 GetAudio，必须先给 GetMedia 建立独立的续期任务**（见 §16 风险）。部署手册写明证书路径、续期任务归属与失败处置。
-- 只放行免费路径：`/account/*`、`/health`、`/v2/config`、`/v2/legal`、`/v2/heartbeat`、`/v2/feedback`；其余 404。静态文件根在仓库之外。
-- `client_max_body_size`：全站小值，`/v2/feedback` 单独放到 14m；对注册/登录/恢复/反馈设 `limit_req`。
-- 反向代理到 `127.0.0.1:8700`，`X-Forwarded-For` 覆盖为 `$remote_addr`。
-- 安全头同 §4.6；**不开 CORS**；访问日志不记录 Cookie 与令牌（令牌只在头/Cookie 里，默认格式不记录；模板显式固定 `log_format`，并有测试断言不含 `$http_cookie`、`$http_authorization`、`$http_x_getmedia_session`）。
-- APK 直链备用：`limit_conn` 每 IP 1 个、全站同时下载数上限 3、`limit_rate` 约 300 KB/s（总带宽只有 10 Mbps）。主下载走 GitHub Release。
-- **不需要**新增防火墙规则（沿用已开放的 443）。
-- 路径前缀处理：nginx `proxy_pass http://127.0.0.1:8700/;`（带尾斜杠）剥掉 `/getmedia`，服务端契约与路由不变；客户端基址为 `https://<服务器 IP>/getmedia`；网页以 `base=/getmedia/` 构建；服务端响应不得出现以 `/` 开头的绝对路径跳转。同源意味着与 GetAudio 共享 Web 来源：GetMedia 网页不得写 localStorage 存敏感数据，CSP 与安全头在片段内设置。
+**总原则**：443 的 server 块（含 `ssl_certificate`，以及 80 端口的 ACME）由多个项目共用，**GetMedia 不改动它们，也不改动其他项目的 include 文件**。GetMedia 只交付以下文件，并要求用户在 443 块里加**一行** `include`：
+
+1. `deploy/nginx/getmedia-http.conf` → `/etc/nginx/conf.d/getmedia-http.conf`（http 级）：`limit_req_zone`、`limit_conn_zone`、专用 `log_format getmedia`（显式不含 `$http_cookie`、`$http_authorization`、`$http_x_getmedia_session`）。
+2. `deploy/nginx/getmedia-prefix.conf` → `/etc/nginx/snippets/getmedia-prefix.conf`（放在 server 块内 include）：全部 `/getmedia/` 路由。
+3. `deploy/logrotate/getmedia` → `/etc/logrotate.d/getmedia`：GetMedia 访问日志单独成文件，`daily`、`rotate 14`、`compress`（保留 ≤30 天，与隐私说明一致）。
+4. 用户在 443 块里、既有 include 之后加入：`include /etc/nginx/snippets/getmedia-prefix.conf;`。**回退：删除这一行并 reload**，GetAudio、GetVideo 不受影响。
+
+**路由（snippet 内）**
+- `location = /getmedia { return 308 /getmedia/; }`
+- `location ^~ /getmedia/api/`：只放行免费路径白名单（精确列出：`health`、`account/…`（register、login、logout、me、consent、recovery/ack、devices、devices/{id}、devices/revoke-others、password、recover）、`v2/config`、`v2/legal`、`v2/heartbeat`、`v2/feedback`）；白名单之外一律 `return 404`；通过 `rewrite ^/getmedia/api/(.*)$ /$1 break;` 去掉前缀后反向代理到 `127.0.0.1:8700`；设置 `Host $host`、`X-Forwarded-For $remote_addr`（覆盖客户端自填）、`X-Forwarded-Proto https`。
+  - 嵌套 `location = /getmedia/api/v2/feedback`：`client_max_body_size 14m`；其余沿用 server 块的 `1m`。
+  - 对注册、登录、恢复、反馈设 `limit_req`。
+- `location ^~ /getmedia/`：静态网页，`alias` 到仓库之外的目录（如 `/var/www/getmedia/public/`），`try_files $uri $uri/ /getmedia/index.html`。`/getmedia/api/` 前缀更长，优先匹配，二者不冲突。
+- `location ^~ /getmedia/download/`：APK 备用直链，`limit_conn` 每 IP 1 个、全站同时下载数上限 3、`limit_rate` 约 300 KB/s（总带宽只有 10 Mbps）；主下载走 GitHub Release。
+- GetMedia 的每个 location 里：安全头同 §4.6（`add_header` 不继承，每个 location 各自声明）；不开 CORS；`access_log /var/log/nginx/getmedia.access.log getmedia;`。
+
+**证书与端口**
+- **不新增端口，不需要在云控制台做任何操作**；80 端口的 ACME 与证书续期由现有配置负责。
+- **证书归属与交接**：443 块共用同一张 IP 证书，**续期任务最终由 GetMedia 维护**；GetAudio、GetVideo 在 GetMedia 开发完成后不久将退役。现状：续期任务在 GetAudio 名下。交接按 §15 第 8 步进行：**GetMedia 在交接前不得改动、停用或复制现有续期任务**；证书文件路径与 443 块里的 `ssl_certificate` 路径保持不变，交接只改"谁来续期、续期后 reload nginx"。Agent 交付新的续期任务模板（含 80 端口 ACME 验证方式、续期后 `nginx -t && reload`、失败告警）与交接手册，但不自行启用。
+- 因 443 块共用：部署前先备份现有配置；`nginx -t` 通过后才 reload；部署手册写明回退步骤。
+- 模板测试：配置里不得出现带 `$http_cookie`、`$http_authorization`、`$http_x_getmedia_session` 的 `log_format`；若沙箱有 nginx，用一个模拟 443 块 include 该 snippet 跑 `nginx -t`。
 
 ## 11. 工作包（WP）与依赖
 
@@ -260,15 +279,17 @@ GetMedia/
 | **WP1 服务端：账号、注册与会话** | 配置与 SQLite 初始化、迁移框架与迁移前快照；登录名；Argon2id；注册（含邀请码、`registration_open`、年龄确认）；会话/设备（App ≤5、网页 ≤3）；恢复码；同意记录（版本+哈希）；协议文件加载、哈希绑定与 `/v2/legal`；落库限流 | WP0 | 单测：恢复码重置后旧码与全部会话失效；设备超限；版本变更触发重新同意；`legal_outdated`；**同版本号文本被改时拒绝加载并告警**；注册关闭时无邀请码被拒、有邀请码可注册；限流重启不丢；恒定耗时 |
 | **WP2 服务端：tier、审计、config、心跳** | `require_tier`、默认拒绝路由遍历测试、审计、`/v2/config`、`/v2/heartbeat`、`daily_stats` | WP1 | free 访问测试 owner 路由 403 + 审计；遍历测试通过 |
 | **WP3 服务端：反馈** | 接口、图片处理、限流、幂等、保留期清理、后台发信队列、CLI | WP1 | 任务书验收项逐条测试；SMTP 不可用仍落库；仓库内无邮箱字符串（扫描证明）；发信失败日志中无收件地址 |
-| **WP4 服务端：运维** | 管理 CLI；注销与冷静期；保留期清理；快照 + 7 份滚动 + 台账重放；告警；`deploy/` 全部模板与部署手册（含证书依赖说明） | WP1–3 | 恢复演练实测；已注销账号不复活；告警去重测试 |
-| **WP5 Android 基座** | 合并 Audio+Video 本地功能（见 §12） | WP0 | JVM 单测通过；Mac 构建通过（回传证据）；真机项单列 |
-| **WP6 Android free** | 风味拆分、**注册**/登录/同意、账号与安全、联系作者、占位入口、禁明文、编译期地址、统一签名配置、内置协议种子与在线刷新 | WP5 + 契约 | 反编译 free APK 搜不到重型类名/路径/邮箱（Mac 回传）；离线时本地功能不受阻 |
-| **WP7 网页 web-public** | 页面（含注册）、协议渲染、下载页（读 release 信息）、Cookie/CSRF/CSP、noindex、产物体积、禁用词扫描 | 契约；联调依赖 WP1–3 | 无头 Chromium 验证 Cookie 属性、CSP、无第三方请求；360 px 可用 |
+| **WP4 服务端：运维** | 管理 CLI；注销与冷静期；保留期清理；快照 + 7 份滚动 + 台账重放；告警；`deploy/` 全部模板（nginx snippet、http 级配置、logrotate、systemd）与部署手册（含证书依赖说明与 443 块 include 的加入/回退步骤） | WP1–3 | 恢复演练实测；已注销账号不复活；告警去重测试 |
+| **WP5 Android 基座** | **5a** 以 Audio 为底，音频部分完整跑通（含 `MediaKind` 骨架）；**5b** 再并入视频（见 §12） | WP0 | 5a 完成即为可单独验收的节点（JVM 单测通过、Mac 构建通过，回传证据）；5b 同样；真机项单列 |
+| **WP6 Android free** | 风味拆分、**注册**/登录/同意、账号与安全、联系作者、占位入口、禁明文、编译期服务器地址（含 `/getmedia/api` 前缀）、统一签名配置、内置协议种子与在线刷新 | WP5 + 契约 | 反编译 free APK 搜不到重型类名/路径/邮箱（Mac 回传）；离线时本地功能不受阻 |
+| **WP7 网页 web-public** | 页面（含注册）、协议渲染、下载页（读 release 信息）、Vite `base=/getmedia/` 与 `/getmedia/api/` 调用、Cookie（`Path=/getmedia/api/`）/CSRF/CSP、noindex、产物体积、禁用词扫描 | 契约；联调依赖 WP1–3 | 无头 Chromium 验证 Cookie 属性、CSP、无第三方请求；360 px 可用 |
 | **WP8 验收** | `acceptance-report.md`，含义见 §17 | 全部 | 按任务书逐条给证据 |
 
 推荐顺序：WP0 → {WP1→WP2→WP3→WP4} 与 {WP5→WP6} 与 WP7 并行推进（WP7 联调等 WP1–3）。
 
 ## 12. WP5 细则：Audio + Video → 一个本地应用
+
+**分两步**：5a 完成下列各项中与音频有关的部分，音频版可单独构建、验收；5b 再并入视频（`VideoMuxer`/`VideoSources`、视频播放与剪辑）。不得为赶 5b 而破坏 5a 已通过的测试。
 
 1. 先写**对照表** `docs/reports/wp5-merge-map.md`：逐文件列 Audio/Video 差异、取舍、归宿（并重新核对 §3 的统计）；以 Audio 为底。
 2. **数据层**：`TrackEntity` 增加 `mediaType`；`TrackDao`/仓库按类型过滤；库页提供"全部 / 音频 / 视频"。
@@ -310,12 +331,17 @@ GetMedia/
 1. 建运行用户/目录；放代码、建虚拟环境、装依赖。
 2. 在 `/etc/getmedia/` 放 `feedback.env`（`root:root 600`，内容由用户填，**需另建一份，不复用 GetAudio 的**）、`legal/`（协议文件）、`release.json`、`runtime.json`。
 3. 安装 `getmedia-api.service`（`EnvironmentFile=` 注入）与每日快照 timer。
-4. 部署 nginx 新 server 块，`nginx -t` 通过后 reload。
-5. 把 `getmedia.conf` 片段放到 `/etc/nginx/snippets/`，在现有 443 server 块里加 `include` 一行，`nginx -t` 后 reload（无需防火墙操作）。
-6. **上线前准备期（注册暂关）**：`registration_open` 默认关。用管理 CLI 直接创建 owner 账号并生成邀请码；用免费版 App / 网页在真实服务器上走一遍注册（凭邀请码）、登录、改密码、联系作者、注销，确认整套在真实环境里可用。陌生人此时进不来。
-7. 跑验收清单（§17）；**通过后由用户用 CLI 开放注册**（可先仅邀请码，再全面开放；随时可再关）。用户也可以选择跳过准备期、一上线就开放。
-8. 在 Mac 上用统一密钥构建 free APK，真机验收；发布到 GitHub Release，把版本与 sha256 写入 `release.json`。
-- 证书续期（既有定时器）若失败的处置手册随部署手册交付；上线前确认到期告警已生效。
+4. 部署 nginx：先备份现有配置；放入 `getmedia-http.conf`、`getmedia-prefix.conf` 与 logrotate 文件；在 443 块里既有 include 之后加一行 `include /etc/nginx/snippets/getmedia-prefix.conf;`；`nginx -t` 通过后再 reload；确认 GetAudio、GetVideo 的入口照常（回退：删除那一行并 reload）。**不需要**新增端口，也不需要改云控制台。
+5. **上线前准备期（注册暂关）**：`registration_open` 默认关。用管理 CLI 直接创建 owner 账号并生成邀请码；用免费版 App / 网页在真实服务器上走一遍注册（凭邀请码）、登录、改密码、联系作者、注销，确认整套在真实环境里可用。陌生人此时进不来。
+6. 跑验收清单（§17）；**通过后由用户用 CLI 开放注册**（可先仅邀请码，再全面开放；随时可再关）。用户也可以选择跳过准备期、一上线就开放。
+7. 在 Mac 上用统一密钥构建 free APK，真机验收；发布到 GitHub Release，把版本与 sha256 写入 `release.json`。
+8. **续期任务交接（GetMedia 上线后，由用户手动执行）**：
+   - 前置：GetMedia 已在真实环境正常运行；新续期任务已安装但**未启用**；用其 dry-run / 测试模式验证通过（不消耗正式额度）。
+   - 切换：先停用 GetAudio 名下的旧续期任务，**同一操作窗口内**启用新任务，并立即手动触发一次真实续期，确认证书更新、nginx 已 reload、三个入口（`/getaudio/`、`/getvideo/`、`/getmedia/`）均正常、到期告警读到新有效期。**任何时刻只能有一个续期任务处于启用状态。**
+   - 观察：新任务自然续期一次成功后，才可退役 GetAudio、GetVideo（证书只有约 6 天 16 小时，所以这一次自然续期约需 3–6 天内发生）。
+   - 回退：新任务失败时，重新启用旧任务，并保留旧任务的备份直到退役完成。
+   - GetAudio、GetVideo 退役前，先在 443 块删除它们的 include 与前缀，再停服务；退役不得先于续期交接。
+- 证书续期若失败的处置手册随部署手册交付；上线前确认到期告警已生效。
 
 ## 16. 风险与变更记录
 
@@ -323,21 +349,23 @@ GetMedia/
 |---|---|
 | WP5 合并两个应用体量最大、易回归 | 先写对照表；以 Audio 为底增量并入视频；纯函数测试全迁移；真机验收单列 |
 | 沙箱无法构建 Android | Mac 构建 + 回传；契约先行，服务端/网页独立推进 |
-| IP 证书约 6 天有效，续期连续失败时 App 与网页同时连不上 | 到期前 24 小时告警（`GETMEDIA_ALERT_CERT_HOURS`，证书总寿命约 6 天 16 小时，上线后按实际续期周期再调）；续期手册；80 端口长期保留 ACME |
-| **GetMedia 共用 GetAudio 的证书与续期任务；GetAudio 停用后证书会过期** | 部署手册写明归属；停用 GetAudio 前先建独立续期任务；告警覆盖 |
-| 无备案以 IP 对外服务可能被阻断 | 用户已接受；随时可关停；无域名依赖 |
+| IP 证书约 6 天有效，续期连续失败时 App 与网页同时连不上 | 到期前 24 小时告警；续期手册；80 端口长期保留 ACME |
+| **证书续期任务由 GetAudio 交接给 GetMedia 的过程中，可能出现无人续期或双任务互相覆盖，导致证书过期** | 交接步骤见 §15 第 8 步：新任务先 dry-run、同一窗口内切换、任何时刻只有一个启用、切换后立即手动续期并检查三个入口；退役 GetAudio、GetVideo 必须在交接且自然续期成功之后；告警覆盖 |
+| 无备案以 IP 对外服务可能被阻断 | 用户已接受；随时可关停；无域名依赖；不使用非标端口 |
 | QQ 邮箱限频/授权码失效 | 反馈库为权威；发信日上限；CLI 可查 |
 | 公开仓库 + 已知 IP → 扫描、撞库 | 默认拒绝、限流、审计、注册先关 |
 | **协议文本在服务器上被改而版本号不变** | 同意记录绑定 sha256；同版本号文本变化则拒绝加载并告警 |
 | 上游 Audio/Video 后续演进，GetMedia 与之分叉 | provenance 记录基线；合入由用户决定 |
-| 签名密钥丢失 → 已安装 App 无法升级 | 只存用户 Mac + 用户自己的离线加密备份 |
+| 签名密钥丢失 → 已安装 App 无法升级 | 用户的 Mac + 离线加密备份（均不在服务器上） |
+| **443 的 server 块由多个项目共用**，配置出错会同时影响 GetAudio、GetVideo 等 | GetMedia 只交付 snippet 与 http 级文件，块内仅加一行 include；部署前备份；`nginx -t` 通过才 reload；回退即删一行 |
+| **GetMedia 网页与同 IP 的其他项目同源**（同一个 `https://<IP>`）：其他项目若出现脚本注入，可对 GetMedia 页面发起同源请求 | Cookie 为 HttpOnly 且 `Path=/getmedia/api/`；网页不在 localStorage 存机密；CSP `default-src 'self'`；写操作要求自定义头；同 IP 上其他项目的页面（如有）也应保持严格 CSP，由用户自行负责 |
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1 | 2026-10-31 | 首版 |
 | v2 | 2026-10-31 | 完整重写：并入用户全部答复；新增网页公开/个人划分、协议与发布信息服务器侧可改、统一签名密钥、数据表/配置/限流/nginx/备份细则、连续推进规则 |
-| v3.1 | 2026-10-31 | ①删除两处涉及线上现有服务弱点的表述（公开仓库不写线上弱点）；②签名密钥只存用户 Mac + 离线备份，不放服务器；③证书到期告警改为 <24 小时；④对外改走现有 443 的 `/getmedia/` 路径前缀，不再新增 9443，免防火墙规则，Cookie 改 `__Secure-`+`Path=/getmedia/`。 |
 | v3 | 2026-10-31 | 澄清免费版必须注册并开放注册（"注册全关"仅为上线前准备期）；澄清免费版/完整版/owner 关系；协议同意绑定文本哈希；Argon2id 改用 `cryptography`、补 `python-multipart`；登记证书依赖风险；写明"验收通过"含义（§17）；用户确认 `9443` 与音频+视频合并；用户确认生效 |
+| v4 | 2026-10-31 | GetMedia 改为挂在 443 的 `/getmedia/` 前缀（网页 `/getmedia/`，接口 `/getmedia/api/`），取消 `9443` 端口与防火墙步骤；Cookie 改为 `__Secure-` 前缀并限定路径；nginx 交付改为 snippet + http 级配置 + logrotate；签名密钥不放生产服务器；证书告警 24 小时；WP5 拆 5a/5b；删除关于线上现网弱点的描述；证书续期任务最终由 GetMedia 维护，增加交接步骤（§15-8），GetAudio、GetVideo 将退役；用户确认生效 |
 
 ## 17. "验收通过"的含义
 
@@ -350,7 +378,7 @@ WP8 产出 `acceptance-report.md`，按任务书逐条给证据；以下全部�
 5. **注册与同意**：注册开关与邀请码行为；未勾选不能注册；同意记录含版本与哈希；版本变更后重新同意；同版本号文本被改时拒绝加载并告警。
 6. **反馈**：文字/图片/诊断三种组合；超限、非图片、伪造扩展名、超大图/像素炸弹、含 EXIF GPS 的图（落盘后无 GPS）、邮件头注入、限流、重复提交；SMTP 不可用仍落库且可由 CLI 查看；邮件内容正确；日志与响应中无收件地址。
 7. **反编译与产物检查**：反编译 free APK、检查 `web-public` 产物，搜索重型功能类名、接口路径、模型调用代码与邮箱字符串，均应没有（给出命令与结果，Android 部分由用户在 Mac 回传）。
-8. **网页安全**：Cookie 属性、CSRF、CSP、无 CORS、无第三方请求、noindex、仅 HTTPS、不新增对外端口（走 443 的 `/getmedia/`）。
+8. **网页安全**：Cookie 属性（含 `Path=/getmedia/api/`，不会随其他项目的请求发送）、CSRF、CSP、无 CORS、无第三方请求、noindex、仅 HTTPS；**不新增任何端口**（监听端口集合与部署前一致）；443 块内只新增一行 include；部署前后 GetAudio、GetVideo 入口行为一致。
 9. **备份**：每日快照、7 份滚动、恢复演练与台账重放的执行证据；已注销账号不复活；确认没有任何备份流出服务器。
 10. **保留期**：审计/限流 ≤30 天、反馈文字 180 天、图片 90 天、快照 7 天的清理证据，与隐私说明一致。
 11. **自动测试**与手工流程记录。

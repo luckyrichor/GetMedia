@@ -9,3 +9,4 @@
 - 2026-10-31：签名密钥只在用户 Mac + 用户自己的离线加密备份，不放服务器；`setup-release-key.sh` 改为从本机路径复制（用户确认）。
 - 2026-10-31：证书到期告警阈值 24 小时，可配置，上线后按实际续期周期再调（用户确认）。
 - 2026-10-31：对外不再用 9443，改走现有 443 的 `/getmedia/` 路径前缀；nginx 剥前缀，片段文件 include 进现有 443 块；Cookie 改 `__Secure-` + `Path=/getmedia/`；不需要防火墙规则（用户决定，取代 PLAN v3 的 9443）。
+- 2026-10-31：PLAN v4 生效（用户："没有问题就对着这个方案开发"）。取代上面关于路径的条目：接口为 `/getmedia/api/`（网页 `/getmedia/`），Cookie 为 `__Secure-gm_session`、`Path=/getmedia/api/`；错误码用 `legal_outdated`；登录名先 NFKC 与小写再校验 ASCII；WP5 拆 5a/5b；证书续期任务最终由 GetMedia 维护（用户手动交接，见 PLAN §15-8）。
