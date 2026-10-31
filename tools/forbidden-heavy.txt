@@ -1,0 +1,52 @@
+# 免费版（android free 源码集 + main、反编译 APK、web/public-app 与 web/shared 及其构建产物）
+# 里不得出现的重型功能标识：接口路径、类名、数据表名、owner 内容。
+# 占位入口的中文名称（如"博主主页批量提取"）是允许的静态文案，不在此列。
+
+# 接口路径（带或不带前导斜杠都要拦）
+v2/extract
+v2/creators
+v2/scheduler
+v2/maintenance
+v2/recreations
+v2/platforms
+v2/sync
+v2/tracks
+v2/audio
+v2/memories
+v2/diagnostics
+v2/migration
+v2/resolve
+v2/extraction-jobs
+agent/v2
+agent/chat
+platform-auth
+platform-bindings
+login/qr
+login/cookies
+
+# 类名 / 标识符
+Recreation
+ExtractionAgent
+AgentScreen
+AgentOutbox
+PlatformAccount
+PlatformAuth
+CreatorBatch
+CreatorJob
+creator_jobs
+creator_items
+ServerAccessStore
+FailureOutbox
+FailureReportWorker
+OwnerFeatures_Full
+OwnerPanel
+
+# 网页 owner 内容
+owner-app
+web-owner
+re:(?i)owner[-_ ]?(page|route|panel|dashboard)
+
+# 被移除的界面文案
+从服务器提取
+服务器提取中
+服务器地址

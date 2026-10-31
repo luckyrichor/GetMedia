@@ -1,0 +1,12 @@
+# 旧产品名与旧标识不得残留在 GetMedia 的服务端、Android、网页源码里。
+# 例外：docs/provenance.md 与 docs/reports/ 用来记录来源，不在扫描范围内。
+GetAudio
+GetVideo
+getaudio
+getvideo
+GETAUDIO
+GETVIDEO
+com.getaudio
+com.getvideo
+X-GetAudio-Session
+X-GetVideo-Session

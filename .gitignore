@@ -1,0 +1,38 @@
+# 凭据与环境
+.env
+*.env
+!*.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+keystore.properties
+getmedia.properties
+.secret_key
+htpasswd
+server-access.json
+
+# 数据与运行期目录
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+snapshots/
+feedback-images/
+
+# 构建产物
+*.apk
+*.aab
+build/
+.gradle/
+local.properties
+node_modules/
+dist/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.idea/
+.DS_Store
