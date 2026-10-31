@@ -3,9 +3,9 @@
 | 表 | 主要列 | 保留 |
 |---|---|---|
 | `users` | `id`(`acct_…`)、`login_name`、`login_name_norm`(唯一)、`password_hash`、`tier`、`tier_expires_at`、`status`、`recovery_confirmed_at`、`created_at` | 至注销 |
-| `sessions` | token 的 SHA-256、`user_id`、渠道、设备名、版本、创建/最近使用/过期时间、最近 IP | 至过期/吊销 |
+| `sessions`（即"设备"，`id` 为 `dev_…`；吊销写 `revoked_at`） | token 的 SHA-256、`user_id`、渠道、设备名、版本、创建/最近使用/过期时间、最近 IP | 至过期/吊销 |
 | `recovery_codes` | `user_id`、HMAC、`rotated_at` | 至注销 |
-| `legal_versions` | 文档名、版本号、sha256、首次加载时间；(文档名,版本号) 唯一 | 长期 |
+| `legal_versions` | 文档名、版本号、sha256、生效日期、**全文 text**、首次加载时间；(文档名,版本号) 唯一。全文用于文本被改而版本号不变时继续提供已登记版本（含重启后） | 长期 |
 | `consents` | `user_id`、两份版本号、两份 sha256、时间 | 至注销 |
 | `invites` | 码哈希、用途、已用 | 至用完/过期 |
 | `audit` | 时间、事件、`user_id`、IP、路径、结果 | 30 天 |
