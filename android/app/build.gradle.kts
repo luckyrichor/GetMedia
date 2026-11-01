@@ -5,14 +5,13 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
-    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 // 固定发布证书：先找 ~/.android-keys/getmedia.properties，再找项目根的 keystore.properties。
 // 找不到就**直接构建失败**——绝不能悄悄用调试证书签一个 release 包出去，
 // 否则装到手机上又会撞上「签名不一致，无法覆盖安装」。
 // 新机器/新 Agent 环境先把密钥装回来：
-//   ./scripts/setup-release-key.sh          # 从服务器备份拉取
+//   GETMEDIA_KEY_SRC=<你的本机密钥目录> sh tools/setup-release-key.sh   # 从你指定的本机路径复制，不涉及服务器
 val releaseSigning: Properties? = sequenceOf(
     File(System.getProperty("user.home"), ".android-keys/getmedia.properties"),
     rootProject.file("keystore.properties"),
@@ -39,15 +38,21 @@ if (releaseSigning == null && releaseTaskRequested && providers.gradleProperty("
         找不到固定的发布密钥，已中止 release 构建。
 
         请把项目密钥安装到本机后再构建：
-            ./scripts/setup-release-key.sh
+            GETMEDIA_KEY_SRC=<你的本机密钥目录> sh tools/setup-release-key.sh
         或手工执行：
             mkdir -p ~/.android-keys && chmod 700 ~/.android-keys
             chmod 600 ~/.android-keys/*
+        （密钥只保存在你的 Mac 和你自己的离线加密备份里，不在服务器、不在仓库。）
 
         详见 docs/android-release-signing.md。
         确实只是本机临时调试、不打算发布时，才加 -PallowDebugSignRelease=true 绕过。
         """.trimIndent()
     )
+}
+
+// 包名常量来自 android/app-ids.properties
+val appIds: Properties = Properties().apply {
+    rootProject.file("app-ids.properties").inputStream().use { load(it) }
 }
 
 android {
@@ -68,12 +73,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.getmedia.app"
+        applicationId = appIds.getProperty("freeApplicationId")
         minSdk = 26          // Media3 和后台播放在 8.0 以下坑太多
-        testInstrumentationRunner = providers.gradleProperty("getmediaTestRunner").getOrElse("com.getmedia.app.BatchDeleteInstrumentation")
+        testInstrumentationRunner = "com.getmedia.app.BatchDeleteInstrumentation"
         targetSdk = 34
-        versionCode = 38
-        versionName = "0.9.10"
+        versionCode = 1
+        versionName = "0.1.0"
         manifestPlaceholders["appLabel"] = "@string/app_name"
 
     }
@@ -139,11 +144,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     // 网络
-    implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-    implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
 
     // 播放
     implementation("androidx.media3:media3-exoplayer:1.3.1")
@@ -151,13 +152,8 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.3.1")
     implementation("androidx.media3:media3-transformer:1.3.1")
 
-    // 后台同步
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
-
-    // 图片（封面、二维码）
+    // 图片（封面）
     implementation("io.coil-kt:coil-compose:2.6.0")
-
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

@@ -1,6 +1,6 @@
 # 状态
 
-最后更新：2026-10-31
+最后更新：2026-11-01
 
 | 工作包 | 状态 | 分支 |
 |---|---|---|
@@ -9,7 +9,8 @@
 | WP2 tier/审计/配置/心跳 | 完成（已推送） | `wp2-tier` |
 | WP3 反馈 | 完成（已推送） | `wp3-feedback` |
 | WP4 运维：CLI/注销/快照/告警/部署模板 | 完成（已推送）；**服务器侧验证项由用户执行**，见 `docs/reports/wp4-summary.md`（证书续期工具为假设、systemd 实际启动、真实 SMTP、恢复演练等未验证） | `wp4-ops` |
-| WP5 Android 底座合并（需用户在 Mac 构建） | 未开始 | |
+| WP5a Android 底座（音频部分，需用户在 Mac 构建） | 代码与文档已推送，**未编译、未测试**；等 Mac 构建结果，见 `docs/reports/wp5a-summary.md` | `wp5a-android-base` |
+| WP5b 并入视频 | 未开始（等 5a 构建通过） | |
 | WP6 Android free | 未开始 | |
 | WP7 web-public | 未开始 | |
 | WP8 验收报告 | 未开始 | |

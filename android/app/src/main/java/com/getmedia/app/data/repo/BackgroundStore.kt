@@ -102,7 +102,7 @@ object BackgroundStore {
     private const val KEY_MOTION_VIDEO = "background_motion_video"
     private const val KEY_FRAME_PREFIX = "frame_"
 
-    // 公开发布的免费版不内置壁纸（原 GetAudio 的内置图是游戏角色立绘，版权不明）。
+    // 公开发布的免费版不内置壁纸（游戏角色立绘版权不明）。
     // 保留列表与键的机制：以后若有自有版权的素材，放进 assets/backgrounds 并在此登记即可。
     val stills: List<BuiltinBackground> = emptyList()
     val motions: List<BuiltinBackground> = emptyList()

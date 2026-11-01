@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
- * GetMedia 本地库。schema 从 1 起，不迁移 GetAudio / GetVideo 的旧数据。
+ * GetMedia 本地库。schema 从 1 起，不迁移其他应用的旧数据。
  * 之后的结构变更必须新增 Migration，不得使用破坏性迁移。
  */
 @Database(
