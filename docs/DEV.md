@@ -6,6 +6,9 @@ python3 -m venv .venv && .venv/bin/pip install -r server/requirements.txt
 .venv/bin/python -m pytest -q server/tests tools/tests
 ```
 
+`tools/tests/test_deploy_nginx.py` 用真实 nginx 测 `deploy/nginx/` 模板，沙箱里先 `apt-get update && apt-get install -y nginx-light logrotate`；没有 nginx 时自动跳过。
+证书续期脚本的测试需要 `flock` 与 `openssl`，同样缺失时跳过。
+
 ## 扫描（提交前强制）
 ```bash
 python3 tools/scan_leaks.py --all

@@ -1,6 +1,6 @@
 # GetMedia 开发方案
 
-**方案版本：v4（2026-10-31）**　状态：**已生效**（用户 2026-10-31 指示"没有问题就对着这个方案开发"；v3 中未在 v4 变化里列出的部分，用户已确认，保持不变）
+**方案版本：v4.1（2026-10-31）**　状态：**已生效**（用户 2026-10-31 指示"没有问题就对着这个方案开发"；v3 中未在 v4 变化里列出的部分，用户已确认，保持不变）
 **用途**：多个 Agent 接力开发的唯一依据。开工前依次读：本文 → `docs/STATUS.md` → `docs/DECISIONS.md`。方案有改动，必须先改本文并在 §16 登记，再动手。
 **v4 相对 v3 的变化**：①GetMedia 取消独立端口 `9443`，改为与 GetAudio、GetVideo 一致，挂在 443 的前缀 `/getmedia/` 下（网页 `/getmedia/`，接口 `/getmedia/api/`），不新增端口、不需要云防火墙规则；②网页会话 Cookie 改为 `__Secure-` 前缀并限定 `Path=/getmedia/api/`，同 IP 上其他项目的请求收不到；③nginx 交付改为"一个 snippet + 一个 http 级配置 + logrotate，用户在 443 块里加一行 include"；④签名密钥不再放生产服务器；⑤证书到期告警改为 24 小时；⑥WP5 拆为 5a（音频）与 5b（视频）；⑦删除方案中关于线上现网弱点的描述。
 **v3 相对 v2 的变化**：①澄清"免费版必须注册、开放注册"，把"注册全关"明确为上线前准备期；②澄清免费版 / 完整版 / owner 账号的关系；③修正协议热加载漏洞（同意记录绑定文本哈希）；④Argon2id 用 `cryptography` 自带实现，补上遗漏的 `python-multipart`；⑤登记证书依赖风险；⑥写明"验收通过"的含义；⑦用户确认 v2 其余部分（含 `9443` 端口、音频+视频合并）。
@@ -155,7 +155,7 @@ GetMedia/
 |---|---|---|
 | 用户协议、隐私说明 | `GETMEDIA_LEGAL_DIR`（默认 `/etc/getmedia/legal/`）下两个 `.md` 文件 | 改文件即生效（按修改时间热加载）；**必须同时改版本号**，否则拒绝加载（见下） |
 | APK 发布信息（版本、sha256、下载地址、更新说明、最低版本） | `GETMEDIA_RELEASE_FILE`（`/etc/getmedia/release.json`） | 改文件即生效；网页下载页与 `/v2/config` 读取同一份 |
-| 注册开关、维护提示 | `/etc/getmedia/runtime.json` 或管理 CLI | 即时生效 |
+| 注册开关、邀请码开关、维护提示 | `GETMEDIA_RUNTIME_FILE`（`/var/lib/getmedia/runtime.json`，放数据目录，因为管理 CLI 要原子改写它）；用管理 CLI 切换 | 即时生效 |
 
 **协议文本机制（v3 含哈希绑定）**
 - 文件首部必须含 `版本：vN　生效日期：YYYY 年 M 月 D 日`；服务端解析版本号，**解析失败则拒绝启动并报错**（不静默回退）。
@@ -249,15 +249,15 @@ GetMedia/
 
 **总原则**：443 的 server 块（含 `ssl_certificate`，以及 80 端口的 ACME）由多个项目共用，**GetMedia 不改动它们，也不改动其他项目的 include 文件**。GetMedia 只交付以下文件，并要求用户在 443 块里加**一行** `include`：
 
-1. `deploy/nginx/getmedia-http.conf` → `/etc/nginx/conf.d/getmedia-http.conf`（http 级）：`limit_req_zone`、`limit_conn_zone`、专用 `log_format getmedia`（显式不含 `$http_cookie`、`$http_authorization`、`$http_x_getmedia_session`）。
+1. `deploy/nginx/getmedia-http.conf` → `/etc/nginx/conf.d/getmedia-http.conf`（http 级）：免费路径白名单 `map`（正则键，不调全局 `map_hash_bucket_size`）、`limit_req_zone`、`limit_conn_zone`、专用 `log_format getmedia`（显式不含 `$http_cookie`、`$http_authorization`、`$http_x_getmedia_session`）。
 2. `deploy/nginx/getmedia-prefix.conf` → `/etc/nginx/snippets/getmedia-prefix.conf`（放在 server 块内 include）：全部 `/getmedia/` 路由。
 3. `deploy/logrotate/getmedia` → `/etc/logrotate.d/getmedia`：GetMedia 访问日志单独成文件，`daily`、`rotate 14`、`compress`（保留 ≤30 天，与隐私说明一致）。
 4. 用户在 443 块里、既有 include 之后加入：`include /etc/nginx/snippets/getmedia-prefix.conf;`。**回退：删除这一行并 reload**，GetAudio、GetVideo 不受影响。
 
 **路由（snippet 内）**
 - `location = /getmedia { return 308 /getmedia/; }`
-- `location ^~ /getmedia/api/`：只放行免费路径白名单（精确列出：`health`、`account/…`（register、login、logout、me、consent、recovery/ack、devices、devices/{id}、devices/revoke-others、password、recover）、`v2/config`、`v2/legal`、`v2/heartbeat`、`v2/feedback`）；白名单之外一律 `return 404`；通过 `rewrite ^/getmedia/api/(.*)$ /$1 break;` 去掉前缀后反向代理到 `127.0.0.1:8700`；设置 `Host $host`、`X-Forwarded-For $remote_addr`（覆盖客户端自填）、`X-Forwarded-Proto https`。
-  - 嵌套 `location = /getmedia/api/v2/feedback`：`client_max_body_size 14m`；其余沿用 server 块的 `1m`。
+- `location ^~ /getmedia/api/`：只放行免费路径白名单（精确列出：`health`、`account/…`（register、login、logout、me、consent、recovery/ack、devices、devices/{id}、devices/revoke-others、password、recover）、`v2/config`、`v2/legal`、`v2/heartbeat`、`v2/feedback`）；白名单之外一律 `return 404`；通过带 URI 的 `proxy_pass http://127.0.0.1:8700/;` 去掉前缀后反向代理（**不用 `rewrite`**：rewrite 阶段早于 `limit_req`，会改掉 `$uri` 使认证限流的键静默失效，已由测试守护）；设置 `Host $host`、`X-Forwarded-For $remote_addr`（覆盖客户端自填）、`X-Forwarded-Proto https`。
+  - 独立的精确匹配 `location = /getmedia/api/v2/feedback`（优先于前缀匹配）：`client_max_body_size 14m`；其余沿用 server 块的 `1m`。
   - 对注册、登录、恢复、反馈设 `limit_req`。
 - `location ^~ /getmedia/`：静态网页，`alias` 到仓库之外的目录（如 `/var/www/getmedia/public/`），`try_files $uri $uri/ /getmedia/index.html`。`/getmedia/api/` 前缀更长，优先匹配，二者不冲突。
 - `location ^~ /getmedia/download/`：APK 备用直链，`limit_conn` 每 IP 1 个、全站同时下载数上限 3、`limit_rate` 约 300 KB/s（总带宽只有 10 Mbps）；主下载走 GitHub Release。
@@ -329,7 +329,7 @@ GetMedia/
 ## 15. 部署与上线（均由用户手动执行；Agent 只产出模板与手册）
 
 1. 建运行用户/目录；放代码、建虚拟环境、装依赖。
-2. 在 `/etc/getmedia/` 放 `feedback.env`（`root:root 600`，内容由用户填，**需另建一份，不复用 GetAudio 的**）、`legal/`（协议文件）、`release.json`、`runtime.json`。
+2. 在 `/etc/getmedia/` 放 `feedback.env`（`root:root 600`，内容由用户填，**需另建一份，不复用 GetAudio 的**）、`legal/`（协议文件）、`release.json`（`runtime.json` 在数据目录 `/var/lib/getmedia/`，由管理 CLI 改写，无需手工创建）。
 3. 安装 `getmedia-api.service`（`EnvironmentFile=` 注入）与每日快照 timer。
 4. 部署 nginx：先备份现有配置；放入 `getmedia-http.conf`、`getmedia-prefix.conf` 与 logrotate 文件；在 443 块里既有 include 之后加一行 `include /etc/nginx/snippets/getmedia-prefix.conf;`；`nginx -t` 通过后再 reload；确认 GetAudio、GetVideo 的入口照常（回退：删除那一行并 reload）。**不需要**新增端口，也不需要改云控制台。
 5. **上线前准备期（注册暂关）**：`registration_open` 默认关。用管理 CLI 直接创建 owner 账号并生成邀请码；用免费版 App / 网页在真实服务器上走一遍注册（凭邀请码）、登录、改密码、联系作者、注销，确认整套在真实环境里可用。陌生人此时进不来。
@@ -366,6 +366,7 @@ GetMedia/
 | v2 | 2026-10-31 | 完整重写：并入用户全部答复；新增网页公开/个人划分、协议与发布信息服务器侧可改、统一签名密钥、数据表/配置/限流/nginx/备份细则、连续推进规则 |
 | v3 | 2026-10-31 | 澄清免费版必须注册并开放注册（"注册全关"仅为上线前准备期）；澄清免费版/完整版/owner 关系；协议同意绑定文本哈希；Argon2id 改用 `cryptography`、补 `python-multipart`；登记证书依赖风险；写明"验收通过"含义（§17）；用户确认 `9443` 与音频+视频合并；用户确认生效 |
 | v4 | 2026-10-31 | GetMedia 改为挂在 443 的 `/getmedia/` 前缀（网页 `/getmedia/`，接口 `/getmedia/api/`），取消 `9443` 端口与防火墙步骤；Cookie 改为 `__Secure-` 前缀并限定路径；nginx 交付改为 snippet + http 级配置 + logrotate；签名密钥不放生产服务器；证书告警 24 小时；WP5 拆 5a/5b；删除关于线上现网弱点的描述；证书续期任务最终由 GetMedia 维护，增加交接步骤（§15-8），GetAudio、GetVideo 将退役；用户确认生效 |
+| v4.1 | 2026-10-31 | WP4 实现中的修订（均不改变对外行为与安全目标）：①nginx 去前缀改用带 URI 的 `proxy_pass`，因 `rewrite` 会让认证限流失效；②免费路径白名单放进 http 级 `map`（正则键）；③反馈用独立的精确 location；④`runtime.json` 移到数据目录；⑤管理 CLI 增加 `invite-required on/off`（补齐 §8 要求）、`alert`、`mail-test` |
 
 ## 17. "验收通过"的含义
 

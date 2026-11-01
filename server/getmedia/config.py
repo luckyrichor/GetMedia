@@ -95,6 +95,19 @@ def _sqlite_path(url: str) -> Path:
     return Path(url[len(prefix):])
 
 
+def _int_env(env: Mapping[str, str], name: str, default: int, lo: int, hi: int) -> int:
+    raw = env.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        v = int(raw)
+    except ValueError:
+        raise ConfigError(f"{name} 必须是整数") from None
+    if not lo <= v <= hi:
+        raise ConfigError(f"{name} 超出允许范围 {lo}–{hi}")
+    return v
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
     data_dir = Path(env.get("GETMEDIA_DATA_DIR", "/var/lib/getmedia"))
@@ -103,6 +116,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         raise ConfigError("GETMEDIA_SECRET_KEY 未设置或过短（至少 32 个字符）")
     db_url = env.get("GETMEDIA_DATABASE_URL")
     etc = Path("/etc/getmedia")
+    # Argon2id 参数：在服务器规格上复测后可调到单次约 100–200 ms；参数写入哈希串，已有哈希不受影响
+    argon_mem = _int_env(env, "GETMEDIA_ARGON_MEMORY_KIB", 65536, 8192, 1048576)
+    argon_iter = _int_env(env, "GETMEDIA_ARGON_ITERATIONS", 3, 1, 10)
     return Settings(
         data_dir=data_dir,
         secret_key=key.encode("utf-8"),
@@ -114,6 +130,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         ledger_path=Path(env.get("GETMEDIA_LEDGER_PATH", str(data_dir.parent / "getmedia-ledger" / "deletion-ledger.log"))),
         feedback_image_dir=Path(env.get("GETMEDIA_FEEDBACK_IMAGE_DIR", str(data_dir / "feedback-images"))),
         bind=env.get("GETMEDIA_BIND", "127.0.0.1:8700"),
+        argon_memory_kib=argon_mem,
+        argon_iterations=argon_iter,
         mail=load_mail(env),
         cert_path=Path(env["GETMEDIA_CERT_PATH"]) if env.get("GETMEDIA_CERT_PATH") else None,
         disk_path=Path(env.get("GETMEDIA_DISK_PATH", str(data_dir))),

@@ -171,3 +171,17 @@ def test_heartbeat_sanitizes_client_strings(open_reg):
     with open_reg.app.state.engine.begin() as c:
         dev = c.exec_driver_sql("SELECT device FROM heartbeats").scalar()
     assert "\n" not in dev and len(dev) <= 64
+
+
+def test_argon_parameters_configurable_with_bounds():
+    import pytest
+    from getmedia.config import ConfigError, load_settings
+    base = {"GETMEDIA_SECRET_KEY": "k" * 40}
+    s = load_settings(base)
+    assert (s.argon_memory_kib, s.argon_iterations) == (65536, 3)
+    s = load_settings({**base, "GETMEDIA_ARGON_MEMORY_KIB": "32768", "GETMEDIA_ARGON_ITERATIONS": "4"})
+    assert (s.argon_memory_kib, s.argon_iterations) == (32768, 4)
+    for bad in ({"GETMEDIA_ARGON_MEMORY_KIB": "abc"}, {"GETMEDIA_ARGON_MEMORY_KIB": "16"}, {"GETMEDIA_ARGON_ITERATIONS": "0"},
+                {"GETMEDIA_ARGON_ITERATIONS": "99"}):
+        with pytest.raises(ConfigError):
+            load_settings({**base, **bad})
