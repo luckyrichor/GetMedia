@@ -3,7 +3,7 @@
 日期：2026-11-01　分支：`wp5a-android-base`（基于 `wp4-ops`）　实现者：Claude
 
 ## 结论先说
-**代码从未编译过，也没跑过任何测试。** 沙箱没有 Gradle、Maven 与 Android SDK，Kotlin 是盲写的。5a 能不能算完成，取决于你在 Mac 上的构建结果。
+代码在沙箱内盲写（无 Gradle/SDK）。**用户在 Mac 上对提交 `0f4dfc3` 的回传结果（2026-11-01，用户口述，未附完整日志）**：JVM 单测 81 项通过；Lint 0 错误、19 警告、3 条信息；debug 构建成功，耗时 1 分 40 秒。release 构建未做；真机项全部未做。
 
 ## 做了什么
 - 以 GetAudio `dc2abeb` 为底复制 Android 工程，改包名 `com.getmedia.app`，产品名 GetMedia（逐文件见 `wp5-merge-map.md`，来源登记见 `docs/provenance.md`）。
@@ -18,7 +18,7 @@
 - `scan_forbidden.py legacy android`、`heavy android/app/src` 通过；`scan_leaks.py android` 通过。
 - import 引用图：所有 `com.getmedia.app.*` 的 import 都指得到本仓库里存在的声明（只查 import，不查调用与类型）。
 
-## 需要你在 Mac 上做（我不能声称通过）
+## 构建命令（已由用户执行 debug 部分）
 ```sh
 export JAVA_HOME=<JDK17 路径>
 export ANDROID_HOME=<Android SDK 路径>
@@ -30,7 +30,7 @@ sh android/gradlew -p android testDebugUnitTest lintDebug assembleDebug --consol
 `GETMEDIA_KEY_SRC=<本机密钥目录> sh tools/setup-release-key.sh`，再 `assembleRelease`。
 
 ## 未验收
-- 编译、JVM 单测、Lint、debug/release 构建：全部未做。
+- release 构建（需先装签名密钥）：未做。
 - 真机：提取（B 站/抖音）、播放、队列拖动、导入、剪辑、背景、冷启动恢复：全部未做。
 - 5a 的 GetAudio 单测迁移后哪些因删代码被删，见 merge-map「未带入」。
 
