@@ -134,6 +134,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                        com.getmedia.app.ui.screen.AccountGates()
                     }
                 }
             }
@@ -142,6 +143,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        lifecycleScope.launch {
+            // 联网失败一律静默：账号状态对一次、每天一次心跳，都不影响本地功能。
+            try {
+                com.getmedia.app.account.AccountService.refresh()
+                com.getmedia.app.account.AccountService.heartbeat()
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {}
+        }
         lifecycleScope.launch {
             try { PlayerHolder.restore(applicationContext) }
             catch (cancelled: CancellationException) { throw cancelled }

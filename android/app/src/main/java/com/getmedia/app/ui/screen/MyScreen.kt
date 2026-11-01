@@ -65,6 +65,9 @@ fun MyScreen() {
     val tracks by AppDatabase.get(context).trackDao().observeAll().collectAsState(initial = emptyList())
     var dialog by remember { mutableStateOf<String?>(null) }
     var showAppearance by remember { mutableStateOf(false) }
+    var page by remember { mutableStateOf<String?>(null) }
+    val session by com.getmedia.app.account.SessionStore.current.collectAsState()
+    val placeholders = com.getmedia.app.placeholder.PlaceholderCatalog.items
     val background by com.getmedia.app.data.repo.BackgroundStore.state.collectAsState()
     val version = remember { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "未知" }
     val diagnosticExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
@@ -85,16 +88,32 @@ fun MyScreen() {
         SubPageScaffold("背景图片", onBack = { showAppearance = false }) { AppearanceScreen() }
         return
     }
+    when (page) {
+        "auth" -> { BackHandler { page = null }; AuthPage(onDone = { page = null }); return }
+        "account" -> { BackHandler { page = null }; SubPageScaffold("账号与安全", onBack = { page = null }) { AccountPage(onLoggedOut = { page = null }) }; return }
+        "contact" -> { BackHandler { page = null }; SubPageScaffold("联系作者", onBack = { page = null }) { ContactPage(needLogin = { page = "auth" }) }; return }
+        "more" -> { BackHandler { page = null }; SubPageScaffold("更多能力", onBack = { page = null }) { PlaceholderPage() }; return }
+    }
     PageColumn(Modifier.verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(14.dp))
         Text("我的", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
         Text(
-            "外观、存储与诊断",
+            "账号、外观、存储与诊断",
             style = MaterialTheme.typography.bodySmall,
             color = uiMuted(),
             modifier = Modifier.padding(top = 4.dp),
         )
         Spacer(Modifier.height(16.dp))
+        SectionTitle("账号")
+        SectionCard {
+            SettingRow(
+                Icons.Rounded.Person,
+                session?.loginName ?: "登录 / 注册",
+                subtitle = if (session == null) "联系作者需要账号；本机功能无需登录" else "账号与安全、已登录设备",
+                showChevron = true,
+                onClick = { page = if (session == null) "auth" else "account" },
+            )
+        }
         SectionTitle("外观")
         SectionCard {
             SettingRow(
@@ -130,7 +149,14 @@ fun MyScreen() {
                     .onFailure { Toast.makeText(context, "复制失败，请重试", Toast.LENGTH_SHORT).show() }
             } })
             RowDivider()
-            SettingRow(Icons.Rounded.Feedback, "意见反馈", onClick = { dialog = "feedback" })
+            SettingRow(Icons.Rounded.Feedback, "联系作者", subtitle = "反馈问题或提出建议", showChevron = true, onClick = { page = "contact" })
+        }
+
+        if (placeholders.isNotEmpty()) {
+            SectionTitle("更多")
+            SectionCard {
+                SettingRow(Icons.Rounded.Cloud, "更多能力", subtitle = "即将到来的功能", showChevron = true, onClick = { page = "more" })
+            }
         }
 
         SectionTitle("关于")
@@ -149,7 +175,6 @@ fun MyScreen() {
     }
     when (dialog) {
         "storage" -> InfoDialog("存储空间", "本机已保存 ${tracks.size} 首音频，约 ${bytes / 1024 / 1024} MB。") { dialog = null }
-        "feedback" -> InfoDialog("意见反馈", "意见反馈功能暂未开放。") { dialog = null }
         "about" -> InfoDialog("GetMedia $version", "分享链接提取音频，分类、播放和管理均可在本机完成。") { dialog = null }
     }
 }

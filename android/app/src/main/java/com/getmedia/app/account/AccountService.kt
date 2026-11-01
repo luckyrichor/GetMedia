@@ -67,6 +67,12 @@ object AccountService {
         }
     }
 
+    /** 每天一次的使用心跳；服务端按设备去重，失败静默（不影响任何功能）。 */
+    suspend fun heartbeat() {
+        if (SessionStore.current.value == null) return
+        runCatching { api.heartbeat(clientInfo()) }
+    }
+
     /** 退出：先尽力通知服务器吊销，不管成败都清掉本机会话。本地媒体库不受影响。 */
     suspend fun logout() {
         runCatching { api.logout() }
