@@ -7,7 +7,7 @@
 
 - GetAudio android/app/src 文件数：156；GetMedia 5a 现有：88。
 - 仅机械改名（包名与产品名）、内容相同：68 个。
-- 有实质修改：17 个；新增：3 个；未带入：71 个。
+- 有实质修改：17 个；新增：3 个；未带入：31 个（40 个壁纸素材已按用户决定带入）。
 
 ## 实质修改与新增
 
@@ -41,46 +41,6 @@
 | 路径 | 说明 |
 |---|---|
 | `androidTest/java/com/getaudio/app/AccountIsolationInstrumentation.kt` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/motion/furina.webp` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/motion/hutao.webp` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/motion/lauma.webp` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/furina.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/furina_art.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/hutao.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/ineffa.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/lauma.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/nahida.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/nefer.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/nicole.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/odette.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/raiden.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/sandrone.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/vesna.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/vodyanitsa.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/static/yae.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/furina.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/furina_art.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/hutao.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/ineffa.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/lauma.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/m_furina.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/m_hutao.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/m_lauma.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/nahida.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/nefer.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/nicole.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/odette.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/raiden.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/sandrone.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/v_nicole.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/v_raiden.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/v_sandrone.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/vesna.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/vodyanitsa.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/thumb/yae.jpg` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/video/nicole.mp4` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/video/raiden.mp4` | 服务器/账号/同步/上报相关 |
-| `main/assets/backgrounds/video/sandrone.mp4` | 服务器/账号/同步/上报相关 |
 | `main/java/com/getaudio/app/GetAudioApp.kt` | 服务器/账号/同步/上报相关 |
 | `main/java/com/getaudio/app/data/local/SyncMerge.kt` | 服务器/账号/同步/上报相关 |
 | `main/java/com/getaudio/app/data/remote/Dto.kt` | 服务器/账号/同步/上报相关 |
