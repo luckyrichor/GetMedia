@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- 只允许 HTTPS；不做证书固定（服务器 IP 证书约 6 天轮换，固定叶证书会在续期时让全体用户失联）。 -->
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
