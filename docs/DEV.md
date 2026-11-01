@@ -22,3 +22,10 @@ sh tools/install-hooks.sh                                    # 安装 pre-commit
 
 ## 分支与提交
 每个工作包一个分支 `wp<N>-<简述>`，小步提交，只推分支；不推 main、不强推。
+
+## 网页（web/）
+```
+cd web && npm ci && npm run build && npm test && npm run size      # 构建、组件测试、体积检查（JS+CSS gzip ≤ 60 KB）
+.venv/bin/python -m pytest -q web/e2e                                # 真实 Chromium × 真实服务端 × 构建产物（需先 build；需要 playwright 与 Chromium）
+```
+`web/e2e` 单独运行（它和 `server/tests` 各有一个 `conftest.py`，同一次收集会冲突）。
