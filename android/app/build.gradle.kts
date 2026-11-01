@@ -55,6 +55,14 @@ val appIds: Properties = Properties().apply {
     rootProject.file("app-ids.properties").inputStream().use { load(it) }
 }
 
+val appConfig: Properties = Properties().apply {
+    rootProject.file("app-config.properties").inputStream().use { load(it) }
+}
+val serverBase: String = (providers.gradleProperty("getmediaServerBase").orNull ?: appConfig.getProperty("serverBase")).trim()
+require(serverBase.startsWith("https://") && !serverBase.endsWith("/")) {
+    "serverBase 必须以 https:// 开头且不以 / 结尾：当前值不合法"
+}
+
 android {
     namespace = "com.getmedia.app"
     compileSdk = 34
@@ -73,14 +81,27 @@ android {
     }
 
     defaultConfig {
-        applicationId = appIds.getProperty("freeApplicationId")
         minSdk = 26          // Media3 和后台播放在 8.0 以下坑太多
         testInstrumentationRunner = "com.getmedia.app.BatchDeleteInstrumentation"
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
         manifestPlaceholders["appLabel"] = "@string/app_name"
+        buildConfigField("String", "SERVER_BASE", "\"$serverBase\"")
+    }
 
+    // 免费版与完整版是两个独立安装包（包名不同，可同机并存）。任务一只构建 free；
+    // full 仅保留空壳，真实的重型功能在任务二放进 src/full。
+    flavorDimensions += "edition"
+    productFlavors {
+        create("free") {
+            dimension = "edition"
+            applicationId = appIds.getProperty("freeApplicationId")
+        }
+        create("full") {
+            dimension = "edition"
+            applicationId = appIds.getProperty("fullApplicationId")
+        }
     }
 
     // 预览版可与正式版并存：包名加 .preview，桌面名称带「新版」，方便在保留旧数据的前提下试新版本
@@ -156,6 +177,7 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.6.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
 }
