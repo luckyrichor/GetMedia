@@ -171,3 +171,59 @@ def test_cert_and_disk_checks(u, tmp_path):
     assert any(k == "cert_expiring" for k, _ in env.alerts.items)
     ops.s = env.settings.with_(cert_path=pem, disk_alert_pct=0)
     assert "disk" in ops.health_checks()
+
+
+# ---------- 部署辅助命令：alert / mail-test ----------
+
+def _mail_env(open_reg):
+    cfg = MailConfig("to@example.invalid", "f@example.invalid", "h.example.invalid", 465, "ssl", "u", "p")
+    open_reg.settings = open_reg.settings.with_(mail=cfg)
+    return open_reg
+
+
+def test_cli_alert_dedup_and_validation(open_reg, monkeypatch):
+    from getmedia.feedback import FeedbackService
+    sent = []
+    monkeypatch.setattr(FeedbackService, "mailer", lambda self, msg: sent.append(msg))
+    env = _mail_env(open_reg)
+    assert run(env, "alert", "cert_renew_failed", "退出码 1")[0] == 0
+    assert run(env, "alert", "cert_renew_failed", "退出码 1")[0] == 0   # 同类同日第二次不再发
+    assert [m["Subject"] for m in sent] == ["[GetMedia 告警] cert_renew_failed"]
+    assert run(env, "alert", "Bad Kind\r\nBcc: x@example.invalid")[0] == 1  # 类型含空白/换行 → 拒绝
+    assert len(sent) == 1
+
+
+def test_cli_mail_test_success_failure_and_unconfigured(open_reg, monkeypatch):
+    import smtplib
+    from getmedia.feedback import FeedbackService
+    assert run(open_reg, "mail-test")[0] == 1            # 未配置邮件
+    env = _mail_env(open_reg)
+    sent = []
+    monkeypatch.setattr(FeedbackService, "mailer", lambda self, msg: sent.append(msg))
+    rc, out = run(env, "mail-test")
+    assert rc == 0 and sent and sent[0]["Subject"].startswith("[GetMedia 反馈]")
+
+    def boom(self, msg):
+        raise smtplib.SMTPAuthenticationError(535, b"bad login for to@example.invalid with p")
+    monkeypatch.setattr(FeedbackService, "mailer", boom)
+    import contextlib
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        rc, out = run(env, "mail-test")
+    assert rc == 1
+    shown = err.getvalue() + out
+    assert "SMTPAuthenticationError" in shown and "535" in shown
+    assert "example.invalid" not in shown and "bad login" not in shown   # 不泄露收件地址/服务器回复原文
+
+
+def test_cli_invite_required_toggle_while_registration_open(open_reg):
+    env = open_reg
+    assert register(env, "pub1").status_code == 201                    # 开放且不要求邀请码：直接注册
+    rc, out = run(env, "invite-required", "on")
+    assert rc == 0 and "开启" in out and "注册开放" in out
+    assert register(env, "pub2").status_code == 403                    # 开放但要求邀请码：无码被拒
+    code = run(env, "invite")[1].strip()
+    assert register(env, "pub2", invite_code=code).status_code == 201
+    assert register(env, "pub3", invite_code=code).status_code == 403  # 邀请码一次性
+    assert run(env, "invite-required", "off")[0] == 0
+    assert register(env, "pub3").status_code == 201                    # 关闭后恢复"开放即可注册"

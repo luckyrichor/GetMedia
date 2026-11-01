@@ -1,0 +1,26 @@
+#!/bin/sh
+# 管理 CLI 包装。安装位置建议：/usr/local/sbin/getmedia-admin（root:root 755）
+# 用法：sudo getmedia-admin stats | create-account NAME [--owner] | invite | registration open|close | feedback list | ...
+#       （完整子命令见 sudo getmedia-admin --help）
+#
+# 以 getmedia 用户、加载与服务完全相同的环境文件运行 python -m getmedia.cli，
+# 这样数据库/runtime.json 的文件属主始终一致。用 systemd-run 注入 EnvironmentFile，
+# 而不是用 shell 去解析 env 文件（口令里可能含 $ 等字符，shell 解析会出错）。
+# 首次使用前先让 getmedia-api 启动过一次（由它的 StateDirectory 创建并赋权数据目录）。
+set -eu
+
+[ "$(id -u)" -eq 0 ] || { echo "请用 root 运行：sudo getmedia-admin ..." >&2; exit 1; }
+APP="${GETMEDIA_APP_DIR:-/opt/getmedia}"
+[ -x "$APP/venv/bin/python" ] || { echo "找不到 $APP/venv/bin/python" >&2; exit 1; }
+
+# 交互终端用 --pty（create-account 会提示输入密码）；重定向/管道用 --pipe（feedback export > a.csv）
+if [ -t 0 ] && [ -t 1 ]; then MODE=--pty; else MODE=--pipe; fi
+
+exec systemd-run "$MODE" --wait --collect --quiet \
+    -p User=getmedia -p Group=getmedia \
+    -p "WorkingDirectory=$APP/server" \
+    -p EnvironmentFile=/etc/getmedia/getmedia.env \
+    -p EnvironmentFile=-/etc/getmedia/feedback.env \
+    -p UMask=0077 \
+    -p "StateDirectory=getmedia getmedia-ledger" -p StateDirectoryMode=0700 \
+    "$APP/venv/bin/python" -m getmedia.cli "$@"

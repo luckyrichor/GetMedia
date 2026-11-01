@@ -1,0 +1,25 @@
+# 安装位置：/etc/systemd/system/getmedia-snapshot.service（由 getmedia-snapshot.timer 触发）
+# 每日一致快照（SQLite .backup）→ 受限目录 → integrity_check → 保留最近 7 份；不上传任何外部位置。
+# 失败时由程序发 snapshot_failed 告警（同类每天最多一封）。
+# 用 systemd 定时器而不是进程内线程：进程重启会漏跑，定时器带 Persistent=true 会补跑。
+[Unit]
+Description=GetMedia daily database snapshot
+After=getmedia-api.service
+
+[Service]
+Type=oneshot
+User=getmedia
+Group=getmedia
+WorkingDirectory=/opt/getmedia/server
+EnvironmentFile=/etc/getmedia/getmedia.env
+EnvironmentFile=-/etc/getmedia/feedback.env
+ExecStart=/opt/getmedia/venv/bin/python -m getmedia.cli snapshot
+UMask=0077
+StateDirectory=getmedia getmedia-ledger
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadOnlyPaths=/etc/getmedia

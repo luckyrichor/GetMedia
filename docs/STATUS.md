@@ -8,7 +8,7 @@
 | WP1 账号/注册/会话/同意/协议 | 完成（已推送） | `wp1-accounts` |
 | WP2 tier/审计/配置/心跳 | 完成（已推送） | `wp2-tier` |
 | WP3 反馈 | 完成（已推送） | `wp3-feedback` |
-| WP4 运维：CLI/注销/快照/告警/部署模板 | 进行中（服务端部分已完成并推送；deploy/ 模板与部署手册待做） | `wp4-ops` |
+| WP4 运维：CLI/注销/快照/告警/部署模板 | 进行中（服务端部分已完成；deploy/ 模板与测试已完成并推送；部署手册 DEPLOY.md、证书交接手册 CERT-HANDOVER.md、wp4-summary 待写；**未验证**：CLI `invite-required` 及其测试刚加入、尚未运行） | `wp4-ops` |
 | WP5 Android 底座合并（需用户在 Mac 构建） | 未开始 | |
 | WP6 Android free | 未开始 | |
 | WP7 web-public | 未开始 | |

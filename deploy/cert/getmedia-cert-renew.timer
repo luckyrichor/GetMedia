@@ -1,0 +1,13 @@
+# 安装位置：/etc/systemd/system/getmedia-cert-renew.timer
+# !! 交接前不得 enable。脚本自己判断"剩余有效期够长就什么都不做"，所以可以频繁触发。
+[Unit]
+Description=GetMedia certificate renewal timer (template, not enabled until handover)
+
+[Timer]
+# 每 4 小时一次（证书总寿命约 160 小时，续期窗口约 56 小时，多次机会）
+OnCalendar=*-*-* 00/4:10:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

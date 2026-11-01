@@ -127,6 +127,11 @@ def ops_cmd(s: Settings, args, out=sys.stdout) -> int:
         rt = app.state.runtime.write(registration_open=args.state == "open")
         print(f"注册已{'开放' if rt.registration_open else '关闭'}", file=out)
         return 0
+    if cmd == "invite-required":
+        # 注册开放时是否仍要求邀请码（方案 §15-6："可先仅邀请码，再全面开放"）
+        rt = app.state.runtime.write(invite_required=args.state == "on")
+        print(f"邀请码要求已{'开启' if rt.invite_required else '关闭'}（当前注册{'开放' if rt.registration_open else '关闭'}）", file=out)
+        return 0
     if cmd == "audit":
         with eng.begin() as c:
             for r in c.execute(text("SELECT ts,event,user_id,ip,path,result FROM audit ORDER BY id DESC LIMIT :n"), {"n": args.limit}):
@@ -144,6 +149,29 @@ def ops_cmd(s: Settings, args, out=sys.stdout) -> int:
     if cmd == "restore":
         n = ops.restore(Path(args.snapshot), Path(args.target), args.replay_ledger)
         print(f"已恢复到 {args.target}；按台账重放删除 {n} 个账号", file=out)
+        return 0
+    if cmd == "alert":
+        # 供部署脚本（证书续期失败等）发告警；与服务内告警共用去重：同类每天最多一封
+        import re
+        if not re.fullmatch(r"[a-z0-9_]{1,40}", args.kind):
+            print("告警类型只能是小写字母、数字、下划线（最长 40 位）", file=sys.stderr); return 1
+        app.state.alerts.notify(args.kind, args.detail[:500])
+        print("已提交（同类告警每天最多一封）", file=out)
+        return 0
+    if cmd == "mail-test":
+        # 邮件通道自检：成功只提示成功；失败只给异常类别与 SMTP 数字码，不输出地址或口令
+        if s.mail is None:
+            print("未配置邮件（FEEDBACK_* 七个变量不全）", file=sys.stderr); return 1
+        from email.message import EmailMessage
+        m = EmailMessage()
+        m["From"], m["To"], m["Subject"] = s.mail.sender, s.mail.to, "[GetMedia 反馈] 邮件通道自检"
+        m.set_content("这是管理命令发出的自检邮件。收到即说明发信通道可用。")
+        try:
+            app.state.fb.mailer(m)
+        except Exception as e:  # noqa: BLE001
+            print(f"发送失败：{type(e).__name__}  SMTP 码：{getattr(e, 'smtp_code', None)}", file=sys.stderr)
+            return 1
+        print("发送成功（请到收件箱确认）", file=out)
         return 0
     if cmd == "tick":
         ops.tick(); print("完成", file=out); return 0
@@ -164,8 +192,10 @@ def main(argv=None, settings: Settings | None = None, out=sys.stdout) -> int:
         sub.add_parser(name).add_argument("login_name")
     iv = sub.add_parser("invite"); iv.add_argument("--purpose", default=""); iv.add_argument("--days", type=int, default=0)
     rg = sub.add_parser("registration"); rg.add_argument("state", choices=["open", "close"])
+    ir = sub.add_parser("invite-required"); ir.add_argument("state", choices=["on", "off"])
     au = sub.add_parser("audit"); au.add_argument("--limit", type=int, default=50)
-    sub.add_parser("snapshot"); sub.add_parser("verify-backup"); sub.add_parser("tick")
+    sub.add_parser("snapshot"); sub.add_parser("verify-backup"); sub.add_parser("tick"); sub.add_parser("mail-test")
+    al = sub.add_parser("alert"); al.add_argument("kind"); al.add_argument("detail", nargs="?", default="")
     rs = sub.add_parser("restore"); rs.add_argument("snapshot"); rs.add_argument("target"); rs.add_argument("--replay-ledger", action="store_true", default=True)
     args = p.parse_args(argv)
     s = settings or load_settings()

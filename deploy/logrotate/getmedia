@@ -1,0 +1,17 @@
+# 安装位置：/etc/logrotate.d/getmedia
+# GetMedia 访问日志单独成文件；保留 14 天（隐私说明要求访问日志 ≤30 天）。
+# 日志属主/属组按发行版调整：Debian/Ubuntu 为 www-data:adm，RHEL 系为 nginx:nginx。
+/var/log/nginx/getmedia.access.log {
+    daily
+    rotate 14
+    maxage 30
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 www-data adm
+    sharedscripts
+    postrotate
+        if [ -s /run/nginx.pid ]; then kill -USR1 "$(cat /run/nginx.pid)"; fi
+    endscript
+}

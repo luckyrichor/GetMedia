@@ -1,0 +1,9 @@
+{
+  "min_version": "0.1.0",
+  "latest": {
+    "version": "0.1.0",
+    "notes": "首个版本（占位说明，发布时改）",
+    "apk": "https://example.invalid/PLACEHOLDER/getmedia-0.1.0.apk",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+}

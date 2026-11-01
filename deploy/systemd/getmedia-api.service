@@ -1,0 +1,46 @@
+# 安装位置：/etc/systemd/system/getmedia-api.service
+# 约定的目录（按需整体替换）：代码 /opt/getmedia，虚拟环境 /opt/getmedia/venv，
+#   配置 /etc/getmedia，数据 /var/lib/getmedia，删除台账 /var/lib/getmedia-ledger
+#
+# 必须只有一个 worker：反馈发信队列与后台清理线程在进程内运行，多 worker 会重复发信、重复清理。
+# 监听地址须与 nginx 的 proxy_pass、GETMEDIA_BIND 一致（默认 127.0.0.1:8700）。
+[Unit]
+Description=GetMedia API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=getmedia
+Group=getmedia
+WorkingDirectory=/opt/getmedia/server
+# getmedia.env：服务配置与 GETMEDIA_SECRET_KEY；feedback.env：七个 FEEDBACK_*（可缺省，缺省则只入库不发信）。
+# EnvironmentFile 由 systemd 以 root 读取，所以 feedback.env 可以是 root:root 600。
+EnvironmentFile=/etc/getmedia/getmedia.env
+EnvironmentFile=-/etc/getmedia/feedback.env
+ExecStart=/opt/getmedia/venv/bin/python -m uvicorn getmedia.main:create --factory --host 127.0.0.1 --port 8700 --workers 1 --no-access-log --no-server-header
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+# 数据目录由 systemd 创建并赋权（0700）；台账放在数据目录之外，快照目录里没有它。
+StateDirectory=getmedia getmedia-ledger
+StateDirectoryMode=0700
+
+# 加固（只用常见且保守的选项）
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadOnlyPaths=/etc/getmedia
+
+[Install]
+WantedBy=multi-user.target

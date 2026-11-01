@@ -1,0 +1,10 @@
+# 安装位置：/etc/systemd/system/getmedia-cert-renew.service
+# !! 交接前不得启用、不得 start（任何时刻只能有一个续期任务处于启用状态，见 deploy/CERT-HANDOVER.md）。
+# 演练：systemctl start 会真实续期，所以演练请直接运行  /usr/local/sbin/getmedia-cert-renew.sh --dry-run
+[Unit]
+Description=GetMedia certificate renewal (template, not enabled until handover)
+
+[Service]
+Type=oneshot
+# 续期与 reload nginx 需要 root；脚本自己不接受外部输入。
+ExecStart=/usr/local/sbin/getmedia-cert-renew.sh

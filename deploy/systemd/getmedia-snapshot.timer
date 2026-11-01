@@ -1,0 +1,13 @@
+# 安装位置：/etc/systemd/system/getmedia-snapshot.timer
+# 启用：systemctl enable --now getmedia-snapshot.timer
+[Unit]
+Description=GetMedia daily database snapshot timer
+
+[Timer]
+# 服务器本地时间凌晨 3:30（避开白天流量）；Persistent：关机/重启错过的会在开机后补跑。
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
