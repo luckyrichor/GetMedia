@@ -7,6 +7,7 @@ import android.provider.OpenableColumns
 import androidx.room.withTransaction
 import com.getmedia.app.player.PlayerHolder
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.localextract.DirectExtractor
 import kotlinx.coroutines.Dispatchers
@@ -96,7 +97,7 @@ class TrackRepository(private val context: Context) {
                             trackDao.deleteByIds(it)
                         }
                         tracks
-                    }.also { removed -> removed.forEach { it.localPath?.let { path -> File(path).delete() } } }
+                    }.also { removed -> removed.forEach { it.localPath?.let { path -> File(path).delete() }; CoverCache.forget(context, it.id) } }
                 }
             }
             withContext(Dispatchers.Main) { PlayerHolder.removeTracks(context, removed.map { it.id }.toSet()) }
@@ -109,12 +110,12 @@ class TrackRepository(private val context: Context) {
     // ---------- 提取 ----------
 
     /** 分享文本由手机直接提取，保存到本地库；不经过任何服务器。 */
-    suspend fun extract(text: String, onDiagnostic: (String) -> Unit = {}): Result<TrackEntity> = runCatching {
+    suspend fun extract(text: String, kind: MediaKind = MediaKind.AUDIO, onDiagnostic: (String) -> Unit = {}): Result<TrackEntity> = runCatching {
         withContext(Dispatchers.IO) {
             val entity = fileMutex.withLock {
                 val extracted = DirectExtractor(context) { line ->
                     withContext(Dispatchers.Main) { onDiagnostic(line) }
-                }.extract(text)
+                }.extract(text, kind)
                 trackDao.upsertLocal(extracted)
                 extracted
             }

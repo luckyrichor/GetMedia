@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.player.PlayerHolder
 import com.getmedia.app.data.repo.PlaylistRepository
 import kotlinx.coroutines.launch
@@ -35,11 +36,17 @@ fun QueueBar() {
     var showTimer by remember { mutableStateOf(false) }
     var showMode by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
+    // 当前曲目是视频时，在播放条上方展开画面；同一个 Media3 会话，不重新加载。
+    var showVideo by remember { mutableStateOf(false) }
+    val current = queue.getOrNull(index)?.track
+    val isVideo = current?.mediaType == MediaKind.VIDEO.name
+    LaunchedEffect(current?.id) { showVideo = isVideo }
     if (queue.isNotEmpty()) {
         Column {
+            if (isVideo && showVideo) VideoPlaybackPanel { showVideo = false }
             HorizontalDivider()
             Row(Modifier.fillMaxWidth().height(88.dp).padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                Column(Modifier.weight(1f).padding(end = 8.dp).clickable(enabled = isVideo) { showVideo = true }) {
                     Text(queue.getOrNull(index)?.track?.title ?: queue.first().track.title,
                         style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     key(queue.getOrNull(index)?.track?.id) {

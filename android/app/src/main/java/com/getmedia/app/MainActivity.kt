@@ -47,7 +47,7 @@ import com.getmedia.app.ui.screen.QueueBar
 import com.getmedia.app.ui.theme.GetMediaTheme
 
 private enum class Tab(val label: String, val icon: ImageVector) {
-    LIBRARY("音频库", Icons.Default.LibraryMusic),
+    LIBRARY("媒体库", Icons.Default.LibraryMusic),
     EXTRACT("提取", Icons.Default.Link),
     MY("我的", Icons.Default.Person),
 }

@@ -6,6 +6,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -38,54 +39,67 @@ class DirectExtractor(
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    suspend fun extract(text: String): TrackEntity = withContext(Dispatchers.IO) {
+    suspend fun extract(text: String, kind: MediaKind = MediaKind.AUDIO): TrackEntity = withContext(Dispatchers.IO) {
         report("开始解析分享内容")
         val link = resolve(text)
         report("已识别平台：${if (link.platform == "douyin") "抖音" else "B 站"}")
         val id = localId(link.platform, link.key)
-        val audioDir = File(context.filesDir, "audio").apply { mkdirs() }
-        val dest = File(audioDir, "$id.audio")
+        val video = kind == MediaKind.VIDEO
+        val audioDir = File(context.filesDir, if (video) "video" else "audio").apply { mkdirs() }
+        val dest = File(audioDir, if (video) "$id.mp4" else "$id.audio")
         val media = when (link.platform) {
-            "douyin" -> douyin(link)
-            else -> bilibili(link)
+            "douyin" -> douyin(link, kind)
+            else -> bilibili(link, kind)
         }
         report("已取得媒体信息，可尝试地址 ${media.urls.size} 个")
         val work = File.createTempFile("getmedia-", ".source", context.cacheDir)
-        val output = File.createTempFile("getmedia-", ".m4a", context.cacheDir)
-        val staged = File(audioDir, "$id.audio.part")
+        val output = File.createTempFile("getmedia-", if (video) ".mp4" else ".m4a", context.cacheDir)
+        val staged = File(audioDir, dest.name + ".part")
+        val sound = File.createTempFile("getmedia-", ".sound", context.cacheDir)
         try {
             download(media.urls, work, media.referer)
             report("媒体下载完成：${work.length()} 字节")
-            val format = audioOnly(work, output)
-            report("音轨处理完成：$format")
-            val ready = if (output.length() > 1024) output else work
+            val format: String
+            if (video) {
+                if (media.audioUrls.isNotEmpty()) download(media.audioUrls, sound, media.referer)
+                VideoMuxer.remux(work, output, sound.takeIf { media.audioUrls.isNotEmpty() })
+                format = "mp4"
+                report("视频封装完成：$format")
+            } else {
+                format = audioOnly(work, output)
+                report("音轨处理完成：$format")
+            }
+            val ready = if (video || output.length() > 1024) output else work
             val hash = sha256(ready)
             // Replace only after the complete audio has been downloaded and validated.
             ready.copyTo(staged, overwrite = true)
             if (!staged.renameTo(dest)) {
                 staged.delete()
-                error("无法保存音频")
+                error(if (video) "无法保存视频" else "无法保存音频")
             }
-            report("音频文件已保存：${dest.length()} 字节")
+            report("${if (video) "视频" else "音频"}文件已保存：${dest.length()} 字节")
             TrackEntity(
                 id = id, platform = link.platform, videoId = link.key,
                 title = media.title, uploader = media.uploader,
                 durationSec = duration(dest), audioBytes = dest.length(),
                 coverUrl = media.coverUrl,
                 audioFormat = format,
+                mediaType = kind.name,
                 sourceUrl = link.url,
                 audioSha256 = hash, localPath = dest.absolutePath,
             )
         } finally {
             work.delete()
             output.delete()
+            sound.delete()
             staged.delete()
         }
     }
 
     private data class Media(
         val title: String, val uploader: String?, val urls: List<String>,
-        val referer: String, val coverUrl: String? = null,
+        val referer: String, val audioUrls: List<String> = emptyList(),
+        val coverUrl: String? = null,
     )
 
     private suspend fun resolve(text: String): DirectLink {
@@ -102,11 +116,11 @@ class DirectExtractor(
         return DirectLinkParser.parse(url)
     }
 
-    private suspend fun douyin(link: DirectLink): Media {
+    private suspend fun douyin(link: DirectLink, kind: MediaKind): Media {
         val shareItem = fetchSharePageItem(link)
         if (shareItem != null) {
             report("公开分享页：取得目标作品数据")
-            return douyinMedia(shareItem, link, "https://www.iesdouyin.com/")
+            return douyinMedia(shareItem, link, "https://www.iesdouyin.com/", kind)
         }
         report("公开分享页：未取得作品数据，尝试作品详情接口")
         val ua = BROWSER_UA
@@ -157,7 +171,7 @@ class DirectExtractor(
         report("作品详情内容：status_code=${response.optInt("status_code", -1)}，作品数据${if (response.optJSONObject("aweme_detail") == null) "缺失" else "存在"}")
         val detail = response.optJSONObject("aweme_detail")
             ?: error("抖音没有返回作品信息；可能需要登录，或该作品不可见")
-        return douyinMedia(detail, link, "https://www.douyin.com/")
+        return douyinMedia(detail, link, "https://www.douyin.com/", kind)
     }
 
     private suspend fun fetchSharePageItem(link: DirectLink): JSONObject? {
@@ -184,8 +198,17 @@ class DirectExtractor(
         return null
     }
 
-    private suspend fun douyinMedia(detail: JSONObject, link: DirectLink, referer: String): Media {
+    private suspend fun douyinMedia(detail: JSONObject, link: DirectLink, referer: String, kind: MediaKind): Media {
         val video = detail.optJSONObject("video")
+        if (kind == MediaKind.VIDEO) {
+            val picked = VideoSources.douyin(detail)
+            report("视频候选：${picked.size} 个；保留完整画面和声音")
+            val vTitle = detail.optString("desc").take(60).ifBlank { "抖音 ${link.videoId}" }
+            val vCover = video?.optJSONObject("cover")?.optJSONArray("url_list")?.optString(0)?.takeIf(String::isNotBlank)
+                ?: video?.optJSONObject("origin_cover")?.optJSONArray("url_list")?.optString(0)?.takeIf(String::isNotBlank)
+            return Media(vTitle, detail.optJSONObject("author")?.optString("nickname"),
+                picked.distinct(), referer, coverUrl = vCover)
+        }
         val music = detail.optJSONObject("music")
         val videoSeconds = detail.optDouble("duration", 0.0) / 1000.0
         val musicSeconds = music?.optDouble("duration", 0.0) ?: 0.0
@@ -205,11 +228,11 @@ class DirectExtractor(
         val cover = video?.optJSONObject("cover")?.optJSONArray("url_list")?.optString(0)?.takeIf(String::isNotBlank)
             ?: video?.optJSONObject("origin_cover")?.optJSONArray("url_list")?.optString(0)?.takeIf(String::isNotBlank)
         return Media(title, detail.optJSONObject("author")?.optString("nickname"),
-            selected.distinct(), referer, cover)
+            selected.distinct(), referer, coverUrl = cover)
     }
 
-    private suspend fun bilibili(link: DirectLink): Media {
-        report("B 站：开始请求作品与音轨信息")
+    private suspend fun bilibili(link: DirectLink, kind: MediaKind): Media {
+        report(if (kind == MediaKind.VIDEO) "B 站：开始请求作品、画面与声音信息" else "B 站：开始请求作品与音轨信息")
         withOptionalBilibiliWarmup(
             warmup = { get("https://www.bilibili.com/", ua = BROWSER_UA, stage = "B 站首页预热"); report("B 站首页预热：成功") },
             onFailure = { report("B 站首页预热：${failureKind(it)}，继续请求作品接口") },
@@ -242,16 +265,26 @@ class DirectExtractor(
             JSONObject(biliGet(playUrl, "B 站播放地址", link.url))
         } catch (error: PlatformHttpException) {
             if (!shouldUseBilibiliBrowser(error.code)) throw error
-            report("B 站播放地址：HTTP 412，尝试浏览器请求同一音轨")
+            report("B 站播放地址：HTTP 412，尝试浏览器请求同一播放信息")
             BilibiliBrowserAudio.fetch(context, link.url, playUrl, BROWSER_UA, report)
         }
         require(play.optInt("code") == 0) { "B 站没有返回播放地址：${play.optString("message")}" }
-        val audio = play.getJSONObject("data").getJSONObject("dash").getJSONArray("audio")
-        val track = (0 until audio.length()).map { audio.getJSONObject(it) }
-            .maxByOrNull { it.optLong("bandwidth") } ?: error("B 站没有可用音轨")
-        val selected = listOfNotNull(track.optString("baseUrl").takeIf(String::isNotBlank)) +
-            strings(track.optJSONArray("backupUrl"))
-        report("B 站音轨：取得 ${selected.size} 个候选地址")
+        val dash = play.getJSONObject("data").getJSONObject("dash")
+        val selected: List<String>
+        var audioUrls: List<String> = emptyList()
+        if (kind == MediaKind.VIDEO) {
+            val streams = VideoSources.bilibili(dash)
+            selected = streams.video
+            audioUrls = streams.audio
+            report("B 站：画面 ${selected.size} 个地址，声音 ${audioUrls.size} 个地址")
+        } else {
+            val audio = dash.getJSONArray("audio")
+            val track = (0 until audio.length()).map { audio.getJSONObject(it) }
+                .maxByOrNull { it.optLong("bandwidth") } ?: error("B 站没有可用音轨")
+            selected = listOfNotNull(track.optString("baseUrl").takeIf(String::isNotBlank)) +
+                strings(track.optJSONArray("backupUrl"))
+            report("B 站音轨：取得 ${selected.size} 个候选地址")
+        }
         val part = pages?.optJSONObject(link.page - 1)?.optString("part").orEmpty()
         val title = item.optString("title").ifBlank { "B 站 ${link.videoId}" } +
             if (link.page > 1) " - P${link.page} $part" else ""
@@ -264,7 +297,7 @@ class DirectExtractor(
             }
         }
         return Media(title, item.optJSONObject("owner")?.optString("name"), selected,
-            "https://www.bilibili.com/", cover)
+            "https://www.bilibili.com/", audioUrls, cover)
     }
 
     /**

@@ -32,6 +32,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.repo.ErrorText
 import com.getmedia.app.data.repo.TrackRepository
@@ -50,6 +51,8 @@ import kotlinx.coroutines.launch
 class ExtractViewModel(private val repo: TrackRepository, private val version: String) : ViewModel() {
 
     var input by mutableStateOf("")
+    /** 要保存成音频还是视频；批量提取沿用同一个选择。 */
+    var kind by mutableStateOf(MediaKind.AUDIO)
     var busy by mutableStateOf(false)
         private set
     var result by mutableStateOf<TrackEntity?>(null)
@@ -99,10 +102,10 @@ class ExtractViewModel(private val repo: TrackRepository, private val version: S
             notification.take()
             startedAt = SystemClock.elapsedRealtime()
             DiagnosticsStore.beginLocal(version)
-            repo.extract(text, ::record)
+            repo.extract(text, kind, ::record)
                 .onSuccess {
                     result = it
-                    notification.post("${it.title} · ${formatDuration(it.durationSec)} · 已加入音频库")
+                    notification.post("${it.title} · ${formatDuration(it.durationSec)} · 已加入${if (it.mediaType == MediaKind.VIDEO.name) "视频" else "音频"}库")
                     DiagnosticsStore.finish(true)
                 }
                 .onFailure {
@@ -139,7 +142,7 @@ class ExtractViewModel(private val repo: TrackRepository, private val version: S
                 batchIndex = i + 1
                 batchCurrent = "第 ${i + 1}/${found.size} 条 · ${link.label} ${link.key}"
                 record("---- ${link.label} ${link.url}")
-                val outcome = runCatching { repo.extract(link.url, ::record) }
+                val outcome = runCatching { repo.extract(link.url, kind, ::record) }
                 val entity = outcome.getOrNull()?.getOrNull()
                 if (entity != null) {
                     ok++
@@ -216,7 +219,11 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("提取音频", style = MaterialTheme.typography.headlineSmall)
+            Text(if (vm.kind == MediaKind.VIDEO) "提取视频" else "提取音频", style = MaterialTheme.typography.headlineSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(vm.kind == MediaKind.AUDIO, { vm.kind = MediaKind.AUDIO }, { Text("音频") }, enabled = !vm.busy)
+                FilterChip(vm.kind == MediaKind.VIDEO, { vm.kind = MediaKind.VIDEO }, { Text("视频") }, enabled = !vm.busy)
+            }
             Text("粘贴视频链接或完整分享文本，自动识别 B站、抖音。多个链接可以一起粘贴。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             OutlinedTextField(
                 value = vm.input, onValueChange = { vm.input = it }, enabled = !vm.busy,

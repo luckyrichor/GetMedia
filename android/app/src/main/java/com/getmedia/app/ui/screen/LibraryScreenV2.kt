@@ -66,6 +66,7 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.CategoryEntity
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.repo.CategoryRepository
 import com.getmedia.app.data.repo.PlaylistRepository
@@ -253,16 +254,21 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
     val allTracks by db.trackDao().allWithTimeRange(query, startMs, endMs).collectAsState(initial = emptyList())
     val libraryTracks by db.trackDao().observeAll().collectAsState(initial = emptyList())
     val categoryTracks by db.trackDao().inCategory(categoryId ?: -1L).collectAsState(initial = emptyList())
-    val visibleTracks = if (section == 0) allTracks else categoryTracks
+    // 类型筛选：全部 / 音频 / 视频。只改显示，不改库里顺序；手动排序仍只重排可见槽位。
+    var kindFilter by remember { mutableStateOf<MediaKind?>(null) }
+    fun matches(t: TrackEntity) = kindFilter == null || t.mediaType == kindFilter!!.name
+    val typedTracks = remember(allTracks, kindFilter) { allTracks.filter(::matches) }
+    val typedCategoryTracks = remember(categoryTracks, kindFilter) { categoryTracks.filter(::matches) }
+    val visibleTracks = if (section == 0) typedTracks else typedCategoryTracks
     // 排序：字段从按钮右侧的下拉里选，方向点按钮主体切换；默认「手动」= 拖动出来的顺序。
     var sortField by remember { mutableStateOf(SortField.MANUAL) }
     var sortAsc by remember { mutableStateOf(false) }
-    val displayTracks = remember(allTracks, sortField, sortAsc) { SortField.apply(sortField, sortAsc, allTracks) }
+    val displayTracks = remember(typedTracks, sortField, sortAsc) { SortField.apply(sortField, sortAsc, typedTracks) }
     LaunchedEffect(visibleTracks, selecting) {
         if (selecting) batchIds = batchIds.intersect(visibleTracks.map { it.id }.toSet())
     }
     val snackbar = remember { SnackbarHostState() }
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("audio/*")) { uri: Uri? ->
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri: Uri? ->
         val track = exportTrack
         if (uri != null && track != null) scope.launch {
             trackRepo.download(track).onSuccess { file ->
@@ -431,14 +437,19 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
                 if (startMs != null || endTimeMs != null) {
                     AreaButton(onClick = { startMs = null; endTimeMs = null }) { Text("${startMs?.let { displayDateTime(it) } ?: "不限"} ~ ${endTimeMs?.let { displayDateTime(it) } ?: "不限"} ×") }
                 }
-                if (allTracks.isEmpty()) EmptyLibrary()
+                Row(Modifier.padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(kindFilter == null, { kindFilter = null }, { Text("全部") })
+                    FilterChip(kindFilter == MediaKind.AUDIO, { kindFilter = MediaKind.AUDIO }, { Text("音频") })
+                    FilterChip(kindFilter == MediaKind.VIDEO, { kindFilter = MediaKind.VIDEO }, { Text("视频") })
+                }
+                if (typedTracks.isEmpty()) EmptyLibrary()
                 else LibraryTrackList(
                     tracks = displayTracks,
                     dragEnabled = sortField == SortField.MANUAL,
                     selecting = selecting,
                     batchIds = batchIds,
                     deleting = deleting,
-                    onReorder = { ids -> trackRepo.reorderLibrary(allTracks.map { it.id }, ids) },
+                    onReorder = { ids -> trackRepo.reorderLibrary(typedTracks.map { it.id }, ids) },
                     onPlay = { track -> queueItems(listOf(track), true) },
                     onMore = { track -> target = LibraryTarget.Audio(track) },
                     onSelect = { id -> selectTrack(id) },
@@ -622,12 +633,15 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
             }
             if (item is LibraryTarget.Audio) {
                 SheetGroup("音频") {
-                    SheetRow(
-                        "剪辑音频", Icons.Default.ContentCut,
-                        status = if (item.track.locallyEdited) "本地剪辑版" else null,
-                        onClick = { editTrack = item.track; target = null },
-                    )
-                    SheetDivider()
+                    // 剪辑只处理音频；视频暂不支持剪辑（见 docs/reports/wp5b-summary.md）。
+                    if (item.track.mediaType != MediaKind.VIDEO.name) {
+                        SheetRow(
+                            "剪辑音频", Icons.Default.ContentCut,
+                            status = if (item.track.locallyEdited) "本地剪辑版" else null,
+                            onClick = { editTrack = item.track; target = null },
+                        )
+                        SheetDivider()
+                    }
                     SheetRow(
                         "导出", Icons.Default.IosShare,
                         onClick = {

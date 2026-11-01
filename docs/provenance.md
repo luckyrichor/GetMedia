@@ -148,3 +148,9 @@ GetMedia 由 GetAudio 与 GetVideo 复制改名而来，不用子模块；基线
 | `android/app/src/main/assets/backgrounds/video/nicole.mp4` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/video/nicole.mp4` | 原样复制（内置壁纸，版权不明，待替换） |
 | `android/app/src/main/assets/backgrounds/video/raiden.mp4` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/video/raiden.mp4` | 原样复制（内置壁纸，版权不明，待替换） |
 | `android/app/src/main/assets/backgrounds/video/sandrone.mp4` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/video/sandrone.mp4` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/java/com/getvideo/app/data/localextract/VideoMuxer.kt` | GetVideo@3dccb1c | `android/app/src/main/java/com/getmedia/app/data/localextract/VideoMuxer.kt` | 包名改名；其余原文 |
+| `android/app/src/main/java/com/getvideo/app/data/localextract/VideoSources.kt` | GetVideo@3dccb1c | `android/app/src/main/java/com/getmedia/app/data/localextract/VideoSources.kt` | 包名改名；其余原文 |
+| `android/app/src/main/java/com/getvideo/app/data/repo/CoverCache.kt` | GetVideo@3dccb1c | `android/app/src/main/java/com/getmedia/app/data/repo/CoverCache.kt` | 包名改名；5b 仅在删除曲目时调用 `forget`，`poster` 尚未接入界面 |
+| `android/app/src/main/java/com/getvideo/app/ui/screen/VideoPlaybackPanel.kt` | GetVideo@3dccb1c | `android/app/src/main/java/com/getmedia/app/ui/screen/VideoPlaybackPanel.kt` | 包名改名；其余原文 |
+| `android/app/src/main/java/com/getvideo/app/ui/screen/VideoSurface.kt` | GetVideo@3dccb1c | `android/app/src/main/java/com/getmedia/app/ui/screen/VideoSurface.kt` | 包名改名；其余原文 |
+| `android/app/src/test/java/com/getvideo/app/data/localextract/VideoSourcesTest.kt` | GetVideo@3dccb1c | `android/app/src/test/java/com/getmedia/app/data/localextract/VideoSourcesTest.kt` | 包名改名；其余原文 |
