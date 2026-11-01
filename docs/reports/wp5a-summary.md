@@ -12,7 +12,7 @@
 - Room schema 从 1 起，库名 `getmedia.db`。
 - 网络配置只允许 HTTPS。
 - `app/build.gradle.kts`：包名取自 `android/app-ids.properties`；版本 0.1.0 / code 1；签名只认 `~/.android-keys/getmedia.properties`，缺失时 release 构建直接失败（`-PallowDebugSignRelease=true` 可绕过，仅限不发布）；去掉源码零引用的依赖。
-- 不带内置壁纸（待你确认，见 DECISIONS）。
+- 内置壁纸按你的决定先原样带入（14 静态 + 3 动图 + 3 视频，18 MB），公开发布前须替换，见 DECISIONS。
 
 ## 沙箱内做过的检查
 - `scan_forbidden.py legacy android`、`heavy android/app/src` 通过；`scan_leaks.py android` 通过。
@@ -35,4 +35,4 @@ sh android/gradlew -p android testDebugUnitTest lintDebug assembleDebug --consol
 - 5a 的 GetAudio 单测迁移后哪些因删代码被删，见 merge-map「未带入」。
 
 ## 提醒
-- 沙箱里 `getaudio/`（只读基线）工作区有未提交改动（`.gitignore`、`config.py`、`requirements.txt`、`snapshot.py`，10-31 05:02 修改）。不是本任务写的，我没动它；请确认是否来自你或另一个会话。
+- 沙箱会话里 `getaudio/` 基线工作区曾有未提交的快照/依赖改动；GetMedia 已有等价实现，已丢弃（补丁备份在会话临时目录，不在仓库）。

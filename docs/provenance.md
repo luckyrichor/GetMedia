@@ -108,3 +108,43 @@ GetMedia 由 GetAudio 与 GetVideo 复制改名而来，不用子模块；基线
 | `android/gradle/wrapper/gradle-wrapper.properties` | GetAudio@dc2abeb | `android/gradle/wrapper/gradle-wrapper.properties` | 改名；build.gradle.kts 另改包名常量/签名/版本/依赖 |
 | `android/gradle/wrapper/gradle-wrapper.jar` | GetAudio@dc2abeb | `android/gradle/wrapper/gradle-wrapper.jar` | 改名；build.gradle.kts 另改包名常量/签名/版本/依赖 |
 | `android/app/build.gradle.kts` | GetAudio@dc2abeb | `android/app/build.gradle.kts` | 改名；build.gradle.kts 另改包名常量/签名/版本/依赖 |
+| `android/app/src/main/assets/backgrounds/motion/furina.webp` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/motion/furina.webp` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/motion/hutao.webp` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/motion/hutao.webp` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/motion/lauma.webp` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/motion/lauma.webp` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/furina.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/furina.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/furina_art.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/furina_art.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/hutao.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/hutao.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/ineffa.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/ineffa.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/lauma.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/lauma.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/nahida.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/nahida.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/nefer.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/nefer.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/nicole.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/nicole.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/odette.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/odette.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/raiden.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/raiden.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/sandrone.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/sandrone.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/vesna.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/vesna.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/vodyanitsa.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/vodyanitsa.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/static/yae.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/static/yae.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/furina.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/furina.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/furina_art.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/furina_art.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/hutao.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/hutao.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/ineffa.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/ineffa.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/lauma.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/lauma.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/m_furina.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/m_furina.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/m_hutao.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/m_hutao.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/m_lauma.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/m_lauma.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/nahida.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/nahida.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/nefer.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/nefer.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/nicole.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/nicole.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/odette.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/odette.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/raiden.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/raiden.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/sandrone.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/sandrone.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/v_nicole.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/v_nicole.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/v_raiden.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/v_raiden.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/v_sandrone.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/v_sandrone.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/vesna.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/vesna.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/vodyanitsa.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/vodyanitsa.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/thumb/yae.jpg` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/thumb/yae.jpg` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/video/nicole.mp4` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/video/nicole.mp4` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/video/raiden.mp4` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/video/raiden.mp4` | 原样复制（内置壁纸，版权不明，待替换） |
+| `android/app/src/main/assets/backgrounds/video/sandrone.mp4` | GetAudio@dc2abeb | `android/app/src/main/assets/backgrounds/video/sandrone.mp4` | 原样复制（内置壁纸，版权不明，待替换） |

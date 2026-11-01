@@ -17,5 +17,5 @@
   - `runtime.json` 放 `/var/lib/getmedia/`（`GETMEDIA_RUNTIME_FILE`），不放 root 只读的 `/etc/getmedia/`：管理 CLI 要同目录写临时文件再原子替换。
   - 管理 CLI 增加 `invite-required on|off`（方案 §8 要求邀请码开关可由 CLI 切换，此前缺失）、`alert KIND`（证书续期脚本失败时发告警）、`mail-test`（邮件通道自检，失败只输出异常类别与 SMTP 数字码）。
   - 证书续期脚本按 certbot 编写，**这是假设**（开发环境看不到服务器上现有续期任务）；交接手册第 0–1 步要求先只读确认，若是别的 ACME 客户端只改 `run_acme` 一个函数。
-- 2026-11-01（WP5a，Agent 提议，**待用户确认**）：免费版不带任何内置壁纸与 `assets/backgrounds`（GetAudio 的内置图是游戏角色立绘，公开发布有版权风险）；保留用户自选背景。若要内置，需换成有版权的素材。
+- 2026-11-01（用户决定）：先带入 GetAudio 的 14 张静态 + 3 动图 + 3 视频内置壁纸（`assets/backgrounds`，18 MB），之后由用户安排其他 Agent 替换为有版权的素材；**公开发布前必须完成替换**（版权不明）。
 - 2026-11-01（WP5a，按 PLAN §12 执行）：Android 本地库 Room schema 从 1 起，不迁移 GetAudio / GetVideo 旧数据；`TrackEntity.mediaType`（`MediaKind`）5a 只写 `AUDIO`；删除失败上报与全部服务器调用代码；依赖去掉 Retrofit / kotlinx-serialization / WorkManager / DataStore / logging-interceptor（源码零引用）。

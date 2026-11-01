@@ -102,10 +102,35 @@ object BackgroundStore {
     private const val KEY_MOTION_VIDEO = "background_motion_video"
     private const val KEY_FRAME_PREFIX = "frame_"
 
-    // 公开发布的免费版不内置壁纸（游戏角色立绘版权不明）。
-    // 保留列表与键的机制：以后若有自有版权的素材，放进 assets/backgrounds 并在此登记即可。
-    val stills: List<BuiltinBackground> = emptyList()
-    val motions: List<BuiltinBackground> = emptyList()
+    // 临时内置壁纸（游戏角色立绘，版权不明）。用户已决定：先放进来，之后由其他 Agent 替换为有版权的素材。
+    /** 14 张静态壁纸。 */
+    val stills = listOf(
+        BuiltinBackground("furina", "芙宁娜", BuiltinKind.STILL),
+        // 竖版立绘。
+        BuiltinBackground("furina_art", "芙宁娜立绘", BuiltinKind.STILL),
+        BuiltinBackground("raiden", "雷电将军", BuiltinKind.STILL),
+        BuiltinBackground("yae", "八重神子", BuiltinKind.STILL),
+        BuiltinBackground("hutao", "胡桃", BuiltinKind.STILL),
+        BuiltinBackground("nahida", "纳西妲", BuiltinKind.STILL),
+        BuiltinBackground("ineffa", "伊涅芙", BuiltinKind.STILL),
+        BuiltinBackground("lauma", "菈乌玛", BuiltinKind.STILL),
+        BuiltinBackground("nefer", "奈芙尔", BuiltinKind.STILL),
+        BuiltinBackground("nicole", "妮可", BuiltinKind.STILL),
+        BuiltinBackground("sandrone", "桑多涅", BuiltinKind.STILL),
+        BuiltinBackground("odette", "奥黛塔", BuiltinKind.STILL),
+        BuiltinBackground("vesna", "薇斯纳", BuiltinKind.STILL),
+        BuiltinBackground("vodyanitsa", "沃雅妮莎", BuiltinKind.STILL),
+    )
+
+    /** 3 张动图 + 3 段视频，都是慢推镜循环、无声。 */
+    val motions = listOf(
+        BuiltinBackground("furina", "芙宁娜 · 动图", BuiltinKind.MOTION),
+        BuiltinBackground("hutao", "胡桃 · 动图", BuiltinKind.MOTION),
+        BuiltinBackground("lauma", "菈乌玛 · 动图", BuiltinKind.MOTION),
+        BuiltinBackground("raiden", "雷电将军 · 视频", BuiltinKind.VIDEO),
+        BuiltinBackground("sandrone", "桑多涅 · 视频", BuiltinKind.VIDEO),
+        BuiltinBackground("nicole", "妮可 · 视频", BuiltinKind.VIDEO),
+    )
 
     val builtins: List<BuiltinBackground> = stills + motions
 
