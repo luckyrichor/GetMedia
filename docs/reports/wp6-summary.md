@@ -1,6 +1,6 @@
 # WP6 小结：Android 免费版（free 风味）
 
-状态：**代码已写完，未在沙箱编译**（沙箱无 Gradle/Maven）。以下全部待 Mac 回传，未回传前不得写"构建通过"。
+状态：代码已写完；Mac 回传（`cef7bd9`）free debug 的单测、lint、assemble 成功；release 反编译与真机待验。
 
 ## 已完成
 - WP6a（`fc23045`）：free/full 风味与包名常量、编译期服务器地址（含 `/getmedia/api`，仅 https）、账号接口客户端、Keystore 加密会话、协议种子与单测。

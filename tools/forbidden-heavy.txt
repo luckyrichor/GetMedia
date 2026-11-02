@@ -25,7 +25,8 @@ login/qr
 login/cookies
 
 # 类名 / 标识符
-Recreation
+# 只拦项目自己的 Recreation* 类；裸 "Recreation" 会误伤 AndroidX 的 OnRecreation / runOnNextRecreation。
+re:Recreation(Dto|Repository|Rules|Screen|Api|Entity|Dao|Worker|Service|Store)
 ExtractionAgent
 AgentScreen
 AgentOutbox
