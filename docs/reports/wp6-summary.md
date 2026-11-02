@@ -1,6 +1,6 @@
 # WP6 小结：Android 免费版（free 风味）
 
-状态：代码已写完；Mac 回传（`cef7bd9`）free debug 的单测、lint、assemble 成功；release 反编译与真机待验。
+状态：代码已写完；Mac 回传（`cef7bd9`）free debug 的单测、lint、assemble 成功；release 包构建成功且扫描通过（heavy/legacy/泄露）；真机与服务端联调待验。
 
 ## 已完成
 - WP6a（`fc23045`）：free/full 风味与包名常量、编译期服务器地址（含 `/getmedia/api`，仅 https）、账号接口客户端、Keystore 加密会话、协议种子与单测。
@@ -20,7 +20,7 @@
 
 ## 待 Mac 回传
 1. `./gradlew testFreeDebugUnitTest lintFreeDebug assembleFreeDebug`（Compose 新页面首次编译，最可能出小错）。
-2. release 包反编译：不含重型功能类名/路径/邮箱（§11 WP6 完成标准）。
+2. ~~release 包反编译~~ 已完成：Mac 回传 `assembleFreeRelease` 成功，解压后三项扫描通过（未使用 minify，类名未混淆，扫描有效）。
 3. 真机：离线启动本地功能正常；注册→恢复码→登录→设备列表→改密→反馈→注销全流程（需已部署服务端）。
 
 ## 已知缺口
