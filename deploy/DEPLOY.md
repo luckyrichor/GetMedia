@@ -35,6 +35,9 @@ sudo /opt/getmedia/venv/bin/pip install -r /opt/getmedia/server/requirements.txt
 sudo install -d -m 750 -o root -g getmedia /etc/getmedia /etc/getmedia/legal
 sudo install -m 600 -o root -g root /opt/getmedia/deploy/env/getmedia.env.example  /etc/getmedia/getmedia.env
 sudo install -m 600 -o root -g root /opt/getmedia/deploy/env/feedback.env.example  /etc/getmedia/feedback.env
+# 平台 Cookie 加密密钥单独一个文件（root:root 600，systemd 以 root 读取）：
+# 先装占位文件，再按 docs/credential-key.md 用 openssl 直接生成覆盖，密钥不经过聊天/不落历史。
+sudo install -m 600 -o root -g root /opt/getmedia/deploy/env/credentials.env.example /etc/getmedia/credentials.env
 sudo install -m 640 -o root -g getmedia /opt/getmedia/docs/legal/user-agreement.md  /etc/getmedia/legal/
 sudo install -m 640 -o root -g getmedia /opt/getmedia/docs/legal/privacy-policy.md  /etc/getmedia/legal/
 sudo install -m 640 -o root -g getmedia /opt/getmedia/deploy/env/release.json.example /etc/getmedia/release.json
@@ -51,6 +54,10 @@ sudo install -m 640 -o root -g getmedia /opt/getmedia/deploy/env/release.json.ex
 
 > **密钥备份**：`GETMEDIA_SECRET_KEY` 用于恢复码与邀请码的 HMAC。丢失或更换后，所有尚未使用的恢复码与邀请码都会失效。
 > 请单独离线备份，不要和数据库快照放在一起。
+
+> **`GETMEDIA_CRED_KEY`**：平台 Cookie 的 AES-256-GCM 密钥，base64url 编码的 32 字节（44 字符），只放
+> `/etc/getmedia/credentials.env`。生成、校验、离线备份与丢失后果见 **`docs/credential-key.md`**；
+> 丢了就只能让用户重新导入 Cookie——数据库快照里没有它。
 
 协议文本改版：改 `/etc/getmedia/legal/*.md` 即生效，**必须同时改文件首部的版本号**；同版本号文本被改，服务拒绝加载并发告警（方案 §4.7）。
 

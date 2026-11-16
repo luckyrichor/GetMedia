@@ -123,8 +123,42 @@
 
 ## 10. 未做 / 下一步
 
-- **P3 迁移工具**（`plan/apply/verify/rollback`）：等你确认后再动真实环境。
+- **P3 迁移工具**：`tools/migrate_legacy.py` 已完成并在真实库副本上演练，见 `p3-report.md`；真实执行等 P2 部署后。
 - **P4 Android 契约**：full 接这批新接口（媒体库同步、批量任务、定时、Agent、授权、AI），free 保持"暂未开放"；`ui-plan.md` 先出。
+
+## 11. 进度快照与目标 schema（2026-11-16 补）
+
+### 11.1 七个工作包全部完成
+
+| 工作包 | 接口 | 数据表 | 迁移版本 | 测试 | 状态 |
+|---|---|---|---|---|---|
+| P2a 媒体库/提取/媒体流 | 12 + 维护 3 | `tracks`、`extract_jobs`、`extraction_failures` | v5 | `test_media.py` 11 项 | 完成 |
+| P2b 博主批量 | 12 | `creator_jobs`、`creator_items` | v6 | `test_creator_jobs.py` 10 项 | 完成 |
+| P2c 定时 | 7 | `schedules`、`schedule_runs` | v7 | `test_schedules.py` 5 项 | 完成 |
+| P2d Agent | 8 | `agent_conversations/messages/memories` | v8 | `test_agent.py` 5 项 | 完成 |
+| P2e 平台授权 | 9 | `platform_credentials`、`platform_auth_sessions`、`account_platform_bindings` | v9 | `test_platform_auth.py` 6 项 | 完成 |
+| P2f 失败上报 | 4 | 复用 `extraction_failures` | — | `test_diagnostics.py` 3 项 | 完成 |
+| P2g AI 重建 | 12 | `recreations`、`recreation_runs` | v10 | `test_recreations.py` 9 项 | 完成，默认关闭 |
+
+合计 **67 条 owner 路由**、P2 测试 **49 项**；加上 P1 与工具测试，当前 **261 passed / 38 skipped**（skip 是需要 nginx、
+真实网络或模型密钥的原有用例）。启动自检未防护路由 **0**，权限矩阵违反 **0**。
+
+### 11.2 目标 schema 版本 = v10
+
+- 目标库由服务端 `server/getmedia/db.py` 的 `MIGRATIONS` 建到 **v10**；版本号记在 `schema_version` 表的最大值。
+- `tools/migrate_legacy.py` 顶部有 `TARGET_SCHEMA = 10`，`apply` / `verify` 打开目标库后先校验：
+  版本不等于 10 直接 `错误：目标库 schema v9，本工具要求 v10…`（退出码 2），**不会写一半**。
+- `plan` 不校验（它只读旧库），所以可以在目标库还没建好时先盘点。
+- **P2 之后没有新的表结构变动**：v5–v10 是 P2 期间一次做齐的，迁移工具的字段映射（`tracks.media_type/storage/bytes/sha256`、
+  `extract_jobs` 状态、`platform_credentials.cookie_blob`、`account_platform_bindings`、`recreations`）都是按 v10 写的，
+  没有需要补迁的 P2 增量。
+- 以后若再加迁移（v11…），**必须同时改 `TARGET_SCHEMA`**，否则 `apply` 会拒绝在 v11 库上写入——这是故意的。
+
+### 11.3 尚未完成、但不属于 P2 的
+
+- 抖音"带 Cookie"那一行实测：服务器上还没有任何抖音 Cookie，要等授权流程上线后导入一次再补；
+- AI 真模型：没有密钥，`GETMEDIA_AI_PLUGIN` 留空，任务一律 `ai_unconfigured`；
+- 部署（P6）与 Android 契约（P4）未开始。
 - **P5 网页**：`web-owner` 需要 nginx `location ^~ /getmedia/owner/api/` + `auth_request`，否则服务端判权再对也进不来。
 - **抖音带 Cookie 行**：服务器上没有可用 Cookie，实测矩阵缺这一行；等 P2e 授权流程上线后补测。
 - **AI 真模型**：没有密钥，`GETMEDIA_AI_PLUGIN` 留空；接入时只写一个函数并配置该变量。

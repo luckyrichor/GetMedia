@@ -38,6 +38,11 @@ sys.path.insert(0, str(ROOT / "server"))
 from getmedia.credentials import CredentialError, CredentialVault  # noqa: E402
 
 BATCH = 500
+# 本工具写入的目标 schema 版本，必须等于 server/getmedia/db.py 里 MIGRATIONS 的最大版本。
+# P2 的表（v6 creator_jobs/creator_items、v7 schedules/schedule_runs、v8 agent_*、
+# v9 platform_credentials/account_platform_bindings、v10 recreations）都落在这套版本里，
+# 所以 P2 完成后目标库就是这个版本；表结构再变时必须同步改这里，否则 apply 会拒绝写库。
+TARGET_SCHEMA = 10
 STATUS_MAP = {"pending": "queued", "queued": "queued", "running": "running",
               "done": "done", "failed": "failed"}
 # 旧库里明确要丢弃的测试残留（plan.md §9.4-4）
@@ -79,6 +84,24 @@ def count(conn: sqlite3.Connection, table: str) -> int:
     if not has_table(conn, table):
         return 0
     return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+
+def check_target_schema(conn: sqlite3.Connection) -> int:
+    """确认目标库已由 GetMedia 服务端建好且版本匹配。
+
+    ``plan`` 不检查（只读旧库）；``apply`` / ``verify`` 必须检查，否则会在
+    缺表或旧版表结构上写一半再报错，排查成本远高于提前拒绝。
+    """
+    if not has_table(conn, "schema_version"):
+        raise MigrationError(
+            "目标库没有 schema_version 表：先用 getmedia 服务端启动一次完成初始化，再迁移")
+    version = int(conn.execute("SELECT COALESCE(MAX(version),0) FROM schema_version").fetchone()[0])
+    if version != TARGET_SCHEMA:
+        raise MigrationError(
+            f"目标库 schema v{version}，本工具要求 v{TARGET_SCHEMA}"
+            f"（server/getmedia/db.py 里 MIGRATIONS 的最新版本）；"
+            f"先把目标库升级到 v{TARGET_SCHEMA} 再迁移")
+    return version
 
 
 def columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -457,6 +480,7 @@ def cmd_apply(args: argparse.Namespace, sources: list[Source]) -> int:
         log_lines.append(text)
 
     conn = open_rw(target)
+    check_target_schema(conn)
     ensure_target_users(conn, mapping)
 
     if args.snapshot:
@@ -787,6 +811,7 @@ def _apply_recreations(conn, src: Source, mapping: dict[str, str], stats, log) -
 
 def cmd_verify(args: argparse.Namespace, sources: list[Source]) -> int:
     conn = open_ro(args.target)
+    check_target_schema(conn)
     report = Report()
     problems: list[str] = []
     report.say("=" * 68)

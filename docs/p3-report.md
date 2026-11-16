@@ -17,7 +17,10 @@
 
 固定约束：旧库一律 `mode=ro` 打开；`apply` 不给 `--map` 直接退出；迁移阶段**不删除任何源文件**（`--files copy` 复制到新根，`--files skip` 只写库）。
 
-测试：`tools/tests/test_migrate_legacy.py`，**7 项通过**，覆盖跨库重复、已删除标记、孤儿文件、凭据重加密、解不开降级、测试残留丢弃、幂等、回滚、无 map 拒绝、未知目标用户拒绝、日志不含 Cookie。
+**目标 schema 版本**：`TARGET_SCHEMA = 10`（= `server/getmedia/db.py` 的 `MIGRATIONS` 最新版本，含 P2 的 v5–v10）。
+`apply` / `verify` 打开目标库后先校验 `schema_version` 最大值，不等于 10 直接报错退出（码 2），避免在旧表结构上写一半。
+
+测试：`tools/tests/test_migrate_legacy.py`，**8 项通过**，覆盖跨库重复、已删除标记、孤儿文件、凭据重加密、解不开降级、测试残留丢弃、幂等、回滚、无 map 拒绝、未知目标用户拒绝、目标 schema 版本不匹配拒绝、日志不含 Cookie。
 
 ---
 
@@ -42,6 +45,44 @@
 3. `account_platform_bindings` 实际列是 `id,user_id,platform,subject,nickname,created_at`，**没有 `status`**；新表有。工具按列存在性读，缺列用默认值。
 
 **另外发现**：`extract_jobs.user_id` 里有 8 条是早期 UUID（`05c1da45-…`、`0a2bd188-…`），`app_users` 里没有对应账号；另有 2 条 `user_id` 为 `NULL`。这 10 条无法归属到任何人。
+
+### 2.1 账号对照表（脱敏，供你定映射）
+
+账号 id 一律截断成「前 6 + 后 4」，不含手机号、密码哈希、Cookie 内容。真实 id 在服务器上跑
+`migrate_legacy.py plan` 直接看（输出只在终端，不贴聊天）。
+
+| 旧库 | 账号（脱敏） | 在 `app_users` | 注册日期 | tracks | 字节 | 凭据 | 任务 | 失败 | 绑定 |
+|---|---|---|---|---|---|---|---|---|---|
+| Audio | `acct_1…a01a` | 是 | 2026-10-07 | 1 | 367,577 | bilibili `active` | DONE 2 / FAILED 1 | 4 | 0 |
+| Audio | `acct_f…e8ea` | 是 | 2026-10-27 | 0 | 0 | bilibili `active` | — | 1 | 1 |
+| Audio | `legacy`（伪归属） | 不适用 | — | **5** | **9,839,437** | — | — | 0 | 0 |
+| Audio | `05c1da…1fef` | 否 | — | 0 | 0 | — | DONE 1 / FAILED 1 | 0 | 0 |
+| Audio | `0a2bd1…1730` | 否 | — | 0 | 0 | — | DONE 4 / FAILED 2 | 0 | 0 |
+| Audio | （空 `user_id`） | — | — | 0 | 0 | — | DONE 1 / FAILED 1 | 0 | 0 |
+| Audio | `test_u` | 否（测试残留） | — | 0 | 0 | bilibili `active` | — | 0 | 0 |
+| Video | `acct_1…0603` | 是 | 2026-10-17 | 0 | 0 | bilibili `active` | — | 0 | 1 |
+| Video | `acct_4…26e0` | 是 | 2026-10-28 | 0 | 0 | bilibili `active` | — | 0 | 0 |
+| Video | `legacy`（伪归属） | 不适用 | — | 0 | 0 | — | — | 0 | 0 |
+
+**`owner_scope` 与 `user_id` 的区别（关键）**
+
+- `tracks` 表**没有 `user_id`**，归属写在 `owner_scope`：
+  - `acct_…` = 具体账号的真实 id（Audio 只有 1 条作品属于 `acct_1…a01a`）；
+  - `legacy` = 单用户时代写死的**保底归属值**，不是账号。Audio 的 5 条作品（9.8 MB）全在这里，
+    所以 `map.json` 的 audio 段必须显式给出 `legacy` 指向谁，否则这 5 条会全部跳过。
+- 任务 / 失败 / 凭据 / 绑定用的是真实 `user_id`，没有 `legacy` 写法。
+
+**因此 `map.json` 至少要覆盖这 5 个键**（值由你定，`*` 可作兜底但本库不需要）：
+
+| 段 | 必须给的键 | 对应数据 |
+|---|---|---|
+| `audio` | `legacy` | 5 条 tracks / 9,839,437 字节 |
+| `audio` | `acct_1…a01a` | 1 条 track、1 条凭据、3 条任务、4 条失败 |
+| `audio` | `acct_f…e8ea` | 1 条凭据、1 条失败、1 条绑定 |
+| `video` | `legacy` | 0 条（写上无害，避免将来补数据时漏） |
+| `video` | `acct_1…0603`、`acct_4…26e0` | 各 1 条凭据；前者另有 1 条绑定 |
+
+不参与映射的：`05c1da…`、`0a2bd1…`、空 `user_id`（共 10 条任务，按你的决定跳过）、`test_u`（工具内置丢弃）。
 
 ---
 
@@ -121,12 +162,24 @@ accounts/f4bc…/bilibili/BV1KG411w7r2-p3-… - P3 气荡山河.m4a             
 
 ---
 
-## 6. 真实执行需要你确认的四件事
+## 6. 执行口径（2026-11-16 你已确认）
 
-1. **账号**：先建 2 个 owner（`getmedia create-account <登录名> --owner`），把新旧 id 写进 `map.json`；
-2. **窗口**：`apply` 期间停旧服务、新服务不对外，避免旧库还在写；
-3. **文件搬移**：默认 `--files copy`（复制 10 MB，旧目录保留）；确认后再考虑 `mv` 还是保留；
-4. **凭据密钥**：新 `GETMEDIA_CRED_KEY` 要在服务端 `.env` 配好，`apply` 时通过环境变量传入，不落盘、不进日志。
+| 项 | 决定 |
+|---|---|
+| 无法归属的 10 条 `extract_jobs` | **跳过**，不写 `*` 兜底 |
+| 媒体文件 | **`--files copy`**，旧目录原样保留（10 MB，不 `mv`、不删源） |
+| 迁移窗口 | `apply` 期间**停旧服务**，新服务不对外 |
+| 真实执行的时点 | **等 P2 完成并部署之后**再做（不是现在） |
+
+剩下需要你给的东西只有一样：**映射**（§2.1 的 5 个键 → 新建的 owner 账号 id）。
+执行前还需要两个空 owner 账号：`getmedia-admin create-account <登录名> --owner`（P2 的服务端已支持 `tier=owner`）。
+
+### 6.1 `GETMEDIA_CRED_KEY`
+
+- 格式：base64url 编码的 **32 字节**，共 **44 字符**（含末尾 `=`）；
+- 生成在服务器上、直接写 `/etc/getmedia/credentials.env`（`root:root 600`），**不经过聊天、不进 Git、不进日志**；
+- 完整步骤、校验命令、离线备份与「密钥丢失 = 已迁凭据需重新授权」的后果：**`docs/credential-key.md`**；
+- `apply` 需要同一把密钥把旧 Cookie 重加密；未配置时整个凭据段会被跳过（账本有记录），不会写半条。
 
 回滚路径：`--snapshot` 生成的目标库快照 + 旧库完全没动，最坏情况删掉新库重来。
 

@@ -332,3 +332,30 @@ def test_snapshot_only_when_asked(env, capsys, monkeypatch):
     assert len(files) == 1
     text = files[0].read_text()
     assert "SESSDATA" not in text
+
+
+def test_apply_rejects_wrong_target_schema(env, capsys):
+    """目标库必须是当前 schema（v10）；旧版本库要提前拒绝，不能写一半再报错。"""
+    # 直接在夹具目标库上退版本（每个用例独立 tmp_path）；注意库是 WAL，
+    # 不能用 shutil.copy2 复制主文件——未 checkpoint 的内容在 -wal 里。
+    old = env["target"]
+    c = sqlite3.connect(old)
+    c.execute("DELETE FROM schema_version WHERE version=10")
+    c.commit()
+    c.close()
+
+    mapping = env["root"] / "map.json"
+    mapping.write_text(json.dumps({"audio": {"legacy": "u_owner", "acct_audio_1": "u_owner"}}))
+    code = mig.main([str(a) for a in [
+        "apply", "--audio-db", env["audio_db"], "--audio-media", env["audio_media"],
+        "--video-db", env["video_db"], "--video-media", env["video_media"],
+        "--target", str(old), "--map", str(mapping), "--log-dir", str(env["root"])]])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "schema v9" in err and "v10" in err
+
+    # verify 同样要拦
+    assert mig.main([str(a) for a in [
+        "verify", "--audio-db", env["audio_db"], "--audio-media", env["audio_media"],
+        "--video-db", env["video_db"], "--video-media", env["video_media"],
+        "--target", str(old)]]) == 2

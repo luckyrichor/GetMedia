@@ -26,10 +26,14 @@ val releaseSigning: Properties? = sequenceOf(
 // （CI 上按设计没有密钥）也会被一起打断。IDE 同步时 taskNames 为空，同样放行。
 val releaseTaskRequested: Boolean = gradle.startParameter.taskNames.any { task ->
     val name = task.substringAfterLast(':')
-    name.contains("assembleRelease", ignoreCase = true) ||
-        name.contains("bundleRelease", ignoreCase = true) ||
-        name.equals("build", ignoreCase = true) ||
-        name.equals("assemble", ignoreCase = true)
+    // 注意要覆盖风味任务：assembleFreeRelease / bundleFullRelease 里并没有
+    // 连续的 "assembleRelease" 子串，早先按子串匹配会漏掉它们。
+    when {
+        name.equals("build", ignoreCase = true) || name.equals("assemble", ignoreCase = true) -> true
+        listOf("assemble", "bundle", "package", "install").any { name.startsWith(it, ignoreCase = true) } ->
+            name.contains("release", ignoreCase = true)
+        else -> false
+    }
 }
 
 if (releaseSigning == null && releaseTaskRequested && providers.gradleProperty("allowDebugSignRelease").orNull != "true") {
@@ -71,8 +75,24 @@ require(serverBase.startsWith("https://") && !serverBase.endsWith("/")) {
     "serverBase 必须以 https:// 开头且不以 / 结尾：当前值不合法"
 }
 if (serverBase == placeholderServerBase) {
+    // debug 可以带着占位值跑（本机没配地址也要能编译、能跑单测），只警告。
+    // release 不行：占位包会把请求发到 example.invalid，装到手机上就是个废包，
+    // 而且这种问题在签完名、传完包之后很难发现，所以在配置阶段直接失败。
+    if (releaseTaskRequested) {
+        throw GradleException(
+            """
+            release 构建不允许使用占位 serverBase（$placeholderServerBase）。
+
+            请先设置真实地址，二选一：
+                -PgetmediaServerBase=https://<域名>/getmedia/api
+                在 android/app-config.properties 写 serverBase=https://<域名>/getmedia/api（该文件不入库）
+
+            确实只想本机验证打包流程时，才加 -PallowDebugSignRelease=true 配合显式地址。
+            """.trimIndent()
+        )
+    }
     logger.warn(
-        "getmedia: serverBase 仍是占位值 $placeholderServerBase，构建产物连不上任何服务器。" +
+        "getmedia: serverBase 仍是占位值 $placeholderServerBase，debug 产物连不上任何服务器。" +
             "请在 android/app-config.properties 填真实地址，或加 -PgetmediaServerBase=<地址>。"
     )
 }
