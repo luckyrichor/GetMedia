@@ -1,63 +1,12 @@
-/** owner 认证壳的三态与失败分支。只测"门"，不测功能页（5c 起再补）。 */
-import { render } from 'preact';
-import { act } from 'preact/test-utils';
+/** owner 认证壳的三态与失败分支。只测"门"，功能页在 feedback/library 两个用例里。 */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { App } from '../src/app';
-
-interface Reply { status?: number; json?: unknown }
-interface Call { method: string; path: string }
-
-const CONFIG = {
-  cache_ttl_seconds: 86400,
-  cache_quota_bytes: 5 * 1024 ** 3,
-  archive_quota_bytes: 20 * 1024 ** 3,
-  creator: { max_items: 200, max_start: 60 },
-  credential_vault: true,
-};
-const ME = { id: 'acct_1', login_name: 'owner1', tier: 'owner', tier_expires_at: null, consent_required: false, recovery_confirmed: true, status: 'active' };
-
-let container: HTMLElement | null = null;
-const calls: Call[] = [];
-
-function server(routes: Record<string, Reply | (() => Reply)>) {
-  const fn = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-    const url = new URL(String(input), 'https://gm.test');
-    const path = url.pathname.replace(/^\/api/, '');
-    const method = (init.method ?? 'GET').toUpperCase();
-    calls.push({ method, path });
-    const h = routes[`${method} ${path}`];
-    if (!h) throw new Error(`未登记的请求：${method} ${path}`);
-    const r = typeof h === 'function' ? h() : h;
-    const status = r.status ?? (r.json === undefined ? 204 : 200);
-    return new Response(r.json === undefined ? null : JSON.stringify(r.json), { status, headers: { 'Content-Type': 'application/json' } });
-  });
-  vi.stubGlobal('fetch', fn);
-}
-
-function mount(path = '/') {
-  history.replaceState(null, '', path);
-  container = document.createElement('div');
-  document.body.appendChild(container);
-  render(<App />, container);
-}
-
-async function until(fn: () => boolean, ms = 2000) {
-  const t0 = Date.now();
-  for (;;) {
-    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
-    if (fn()) return;
-    if (Date.now() - t0 > ms) throw new Error(`超时：${document.body.textContent?.slice(0, 400)}`);
-  }
-}
-
-const text = () => document.body.textContent ?? '';
+import { callKeys, cleanup, click, CONFIG, ME, mount, server, text, until } from './harness';
 
 beforeEach(() => {
-  calls.length = 0;
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
 });
 afterEach(() => {
-  if (container) { render(null, container); container.remove(); container = null; }
+  cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -67,7 +16,7 @@ describe('owner 认证壳', () => {
     server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ME } });
     mount();
     await until(() => text().includes('概览'));
-    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /v2/config/owner', 'GET /account/me']);
+    expect(callKeys()).toEqual(['GET /v2/config/owner', 'GET /account/me']);
     expect(text()).toContain('owner1');
     expect(text()).toContain('5 GB');
     expect(text()).toContain('1 天');
@@ -89,7 +38,7 @@ describe('owner 认证壳', () => {
     expect(text()).not.toContain('正在跳到登录页');
     const link = Array.from(document.querySelectorAll('a')).find((a) => a.textContent?.includes('去登录'))!;
     expect(link.getAttribute('href')).toContain('login?next=');
-    expect(calls).toEqual([{ method: 'GET', path: '/v2/config/owner' }]);
+    expect(callKeys()).toEqual(['GET /v2/config/owner']);
   });
 
   test('匿名/非 owner（边缘 404）：回中性"页面不存在"，不透露管理台存在', async () => {
@@ -99,7 +48,7 @@ describe('owner 认证壳', () => {
     expect(text()).toContain('这个地址下没有内容');
     // 不能出现任何暗示"这是权限问题"的字样，也不能出现 owner 相关内容
     for (const w of ['owner', '管理台', '登录', '权限']) expect(text()).not.toContain(w);
-    expect(calls).toEqual([{ method: 'GET', path: '/v2/config/owner' }]);
+    expect(callKeys()).toEqual(['GET /v2/config/owner']);
   });
 
   test('非 owner（403）：说明原因，不把人绕回登录页', async () => {
@@ -119,7 +68,7 @@ describe('owner 认证壳', () => {
     mount();
     await until(() => text().includes('管理台暂时打不开'));
     expect(text()).toContain('服务维护中');
-    await act(() => (Array.from(document.querySelectorAll('button')).find((b) => b.textContent === '重试') as HTMLButtonElement).click());
+    await click(Array.from(document.querySelectorAll('button')).find((b) => b.textContent === '重试')!);
     await until(() => text().includes('概览'));
   });
 
@@ -137,5 +86,22 @@ describe('owner 认证壳', () => {
     expect(text()).toContain('这一栏还没实现');
     expect(text()).toContain('/v2/creators/preview');
     expect(text()).toContain('items:import');
+  });
+
+  test('5c 已接入的两栏不再是占位页', async () => {
+    server({
+      'GET /v2/config/owner': { json: CONFIG },
+      'GET /account/me': { json: ME },
+      'GET /v2/feedback?status=all&limit=20&offset=0': { json: { items: [], total: 0, limit: 20, offset: 0, has_more: false, counts: { new: 0, handled: 0, ignored: 0, all: 0 } } },
+      'GET /v2/tracks?since_seq=0&limit=500': { json: { items: [], count: 0 } },
+    });
+    mount('/feedback');
+    await until(() => text().includes('这个筛选下没有反馈'));
+    expect(text()).not.toContain('这一栏还没实现');
+    cleanup();
+
+    mount('/library');
+    await until(() => text().includes('媒体库里还没有内容'));
+    expect(text()).not.toContain('这一栏还没实现');
   });
 });

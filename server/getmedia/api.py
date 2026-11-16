@@ -318,6 +318,10 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     from .media_api import register as register_media_routes
     media_store = register_media_routes(app, require_tier("owner"), engine, clock, resolver=media_resolver)
 
+    # 反馈收件箱（P5c）：唯一一条"跨账号读"的通道，仍然只在 owner 级
+    from .feedback_admin import register as register_feedback_admin
+    register_feedback_admin(app, require_tier("owner"), engine, clock, audit=svc.audit)
+
     # 定时抓取（P2c）：每次触发只是建一个批量任务
     from .schedules_api import register as register_schedule_routes
     schedules = register_schedule_routes(app, require_tier("owner"), engine, clock, jobs=creator_jobs)

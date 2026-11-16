@@ -8,11 +8,20 @@
  * 边缘（nginx auth_request）与应用（require_tier）各自还有一层校验，这里只是第三层"体验"。
  */
 import type { ComponentChildren } from 'preact';
+import type { JSX } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { isApiError, messageFor } from '@shared/errors';
 import { LOGIN_URL, PUBLIC_BASE, ownerApi, type Me, type OwnerConfig } from './api';
 import { Link, navigate, useRoute } from './router';
 import { Overview, Placeholder, SECTIONS, sectionFor } from './sections';
+import { FeedbackPage } from './pages/feedback';
+import { LibraryPage } from './pages/library';
+
+/** 已经接了真实页面的栏目；其余栏走占位页（列出接口与"还差什么"）。 */
+const PAGES: Record<string, () => JSX.Element> = {
+  '/feedback': FeedbackPage,
+  '/library': LibraryPage,
+};
 
 type Gate =
   | { k: 'loading' }
@@ -169,8 +178,9 @@ function Nav({ path }: { path: string }) {
 function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
   const path = useRoute();
   const section = sectionFor(path);
+  const Page = PAGES[path];
   const body =
-    path === '/' ? <Overview cfg={cfg} me={me} /> : section ? <Placeholder section={section} /> : <Missing />;
+    path === '/' ? <Overview cfg={cfg} me={me} /> : Page ? <Page /> : section ? <Placeholder section={section} /> : <Missing />;
   return (
     <>
       <Header me={me} />

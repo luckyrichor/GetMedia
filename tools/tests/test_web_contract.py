@@ -20,14 +20,19 @@ from getmedia.config import testing_settings as _testing_settings
 
 ROOT = Path(__file__).resolve().parents[2]
 API_TS = ROOT / "web" / "shared" / "api.ts"
+OWNER_API_TS = ROOT / "web" / "owner-app" / "src" / "api.ts"
 
 # request<X>('GET', '/path') / request<X>('DELETE', `/account/devices/${id}`)
 _CALL = re.compile(r"request<[^>]*>\(\s*['\"]([A-Z]+)['\"],\s*['\"`]([^'\"`]+)['\"`]")
 
 
 def _norm(path: str) -> str:
-    """把 `${...}`（前端模板）与 `{param}`（FastAPI）都归一成 `{}`。"""
+    """把 `${...}`（前端模板）与 `{param}`（FastAPI）都归一成 `{}`。
+
+    查询串先去掉：这里校验的是"路由存在"，`?status=...` 这类筛选参数由各自的接口测试负责。
+    """
     path = re.sub(r"\$\{[^}]*\}", "{}", path)
+    path = path.split("?")[0]
     path = re.sub(r"\{[^}]*\}", "{}", path)
     return path.rstrip("/") or "/"
 
@@ -35,6 +40,11 @@ def _norm(path: str) -> str:
 def _web_routes() -> set[tuple[str, str]]:
     assert API_TS.is_file(), "web/shared/api.ts 不存在"
     return {(m, _norm(p)) for m, p in _CALL.findall(API_TS.read_text(encoding="utf-8"))}
+
+
+def _owner_routes() -> set[tuple[str, str]]:
+    assert OWNER_API_TS.is_file(), "web/owner-app/src/api.ts 不存在"
+    return {(m, _norm(p)) for m, p in _CALL.findall(OWNER_API_TS.read_text(encoding="utf-8"))}
 
 
 @pytest.fixture(scope="module")
@@ -68,6 +78,28 @@ def test_api_ts_is_parseable():
 def test_every_web_call_exists_on_server(server_routes):
     missing = sorted(_web_routes() - server_routes)
     assert not missing, f"网页调用了服务端不存在的接口：{missing}"
+
+
+def test_every_owner_call_exists_on_server(server_routes):
+    """管理台接口层（5c 起逐条加）同样不能调不存在的路径。"""
+    routes = _owner_routes()
+    assert len(routes) >= 8, routes          # 防"正则失效导致空集通过"
+    assert ("GET", "/v2/config/owner") in routes
+    assert ("GET", "/v2/feedback") in routes
+    assert ("POST", "/v2/feedback/{}/status") in routes
+    assert ("GET", "/v2/tracks") in routes
+    assert ("DELETE", "/v2/tracks/{}/file") in routes
+    missing = sorted(routes - server_routes)
+    assert not missing, f"管理台调用了服务端不存在的接口：{missing}"
+
+
+def test_owner_media_urls_are_real_routes(server_routes):
+    """`<audio>/<video>/<img>` 的地址不经过 fetch，单独核对拼出来的路径。"""
+    text = OWNER_API_TS.read_text(encoding="utf-8")
+    assert "`${BASE}/api/v2/media/${trackId}`" in text
+    assert ("GET", "/v2/media/{}") in server_routes
+    assert "`${BASE}/api/v2/feedback/${encodeURIComponent(id)}/images/${index}`" in text
+    assert ("GET", "/v2/feedback/{}/images/{}") in server_routes
 
 
 def test_web_client_does_not_persist_tokens():

@@ -2,7 +2,7 @@
 
 最后更新：2026-11-16
 
-## 2026-11-16 阶段进度（P1–P5b + P2h）
+## 2026-11-16 阶段进度（P1–P5c + P2h）
 
 | 阶段 | 状态 | 证据 |
 |---|---|---|
@@ -12,7 +12,8 @@
 | P3 旧库迁移工具 | 工具与演练完成；**真实迁移等 P2 部署后、用户确认窗口** | `docs/p3-report.md` |
 | P4a UI 方案 | 完成，等用户确认 5 个决策后才写 UI | `docs/ui-plan.md` |
 | P5a web-public 接新服务 | 完成 | `docs/p5-web-report.md` |
-| P5b owner 认证壳 | 完成（功能页 5c–5f 未做） | `docs/p5-web-report.md` |
+| P5b owner 认证壳 | 完成 | `docs/p5-web-report.md` |
+| P5c 反馈收件箱 + 媒体库与播放 | 完成（含收件箱读接口 4 条） | `docs/p5c-report.md` |
 | P6 部署材料 | 材料完成，**未部署**；等用户说"部署" | 本地 `docs/p6-deploy-plan.md`（不入公开仓库） |
 
 > 说明：含真实服务器路径、旧账号片段、nginx 细节的文档只留本地，见 `.gitignore` 末段。

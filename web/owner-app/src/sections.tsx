@@ -1,7 +1,7 @@
 /** owner 管理台的栏目表与占位页。
  *
- * P5b 只交付"认证壳"：能判断 401/403/200、能显示 owner 身份、能退出、有完整导航。
- * 各栏目的功能在 5c–5f 接入，这里把每个栏目的**后端接口**先列清楚，避免"页面有了但不知道接什么"。
+ * 5c 的「反馈收件箱」「媒体库与播放」已经接了真实页面（下方 `done: true`），其余栏目仍是占位页：
+ * 每个占位页都把**后端接口**和**还差什么**写清楚，避免"页面有了但不知道接什么"。
  */
 import type { Me } from '@shared/api';
 import type { OwnerConfig } from './api';
@@ -12,6 +12,8 @@ export interface Section {
   label: string;
   /** 交付阶段：5c 反馈与媒体库 / 5d 提取、批量、定时、Agent / 5e 授权与维护 / 5f AI */
   phase: '5c' | '5d' | '5e' | '5f';
+  /** 这一栏已经有真实页面（否则渲染占位页） */
+  done?: boolean;
   blurb: string;
   /** 已有的后端接口；标 `待建` 的是这一阶段要新增的 */
   endpoints: { method: string; path: string; note: string }[];
@@ -24,25 +26,30 @@ export const SECTIONS: Section[] = [
     path: '/feedback',
     label: '反馈收件箱',
     phase: '5c',
+    done: true,
     blurb: '查看用户提交的问题与图片，标记处理状态。',
     endpoints: [
-      { method: 'GET', path: '/v2/feedback', note: '待建：目前只有提交接口，没有列表/详情' },
-      { method: 'POST', path: '/v2/feedback/{id}/status', note: '待建：标记已处理/忽略' },
+      { method: 'GET', path: '/v2/feedback', note: '分页 + 状态筛选 + 各状态计数' },
+      { method: 'GET', path: '/v2/feedback/{id}', note: '正文、诊断、图片清单' },
+      { method: 'GET', path: '/v2/feedback/{id}/images/{n}', note: '按序号取图，不接受文件名' },
+      { method: 'POST', path: '/v2/feedback/{id}/status', note: 'new / handled / ignored，同值幂等' },
     ],
-    missing: '收件箱的读接口与状态机还没做；当前只有 `POST /v2/feedback`。',
+    missing: '不能回复用户（反馈没有回信通道）、不能搜索正文、不能批量处理；保留期清理仍由后台任务按 90/180 天执行。',
   },
   {
     path: '/library',
     label: '媒体库与播放',
     phase: '5c',
-    blurb: '浏览服务器上的曲目/视频，直接播放，改标题与分类，删文件。',
+    done: true,
+    blurb: '浏览服务器上的曲目/视频，直接播放，改标题，删文件或记录。',
     endpoints: [
-      { method: 'GET', path: '/v2/tracks', note: '分页列表，支持 q/平台/分类筛选' },
+      { method: 'GET', path: '/v2/tracks', note: '游标翻页（since_seq），按当前账号' },
       { method: 'GET', path: '/v2/media/{id}', note: '媒体流，支持 Range（拖动进度条）' },
-      { method: 'PATCH', path: '/v2/tracks/{id}', note: '改标题、分类' },
-      { method: 'DELETE', path: '/v2/tracks/{id}/file', note: '只删文件，保留记录' },
+      { method: 'PATCH', path: '/v2/tracks/{id}', note: '改标题/UP 主/置顶' },
+      { method: 'DELETE', path: '/v2/tracks/{id}/file', note: '只删文件，记录退回"仅元数据"' },
+      { method: 'DELETE', path: '/v2/tracks/{id}', note: '逻辑删除，会同步到手机端' },
     ],
-    missing: '播放器（`<audio>`/`<video>` + Range）与列表虚拟滚动；Range 已由服务端支持，前端未接。',
+    missing: '不能上传或替换文件、不能新建播放列表；条目没有"分类"字段（旧版的分类没有迁过来）。',
   },
   {
     path: '/extract',
@@ -191,14 +198,15 @@ export function Overview({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
 
       <h2>接下来</h2>
       <p class="muted small">
-        本页是 P5b 的认证壳。左侧栏目都已就位，功能在 5c–5f 逐项接入；每一栏都写了"还差什么"，
-        不会出现"点进去空白但看起来已完成"的情况。
+        管理台按 5c–5f 分批接入：标「可用」的是已经接了真实接口的页面，其余仍是占位页，
+        每页都写了"还差什么"，不会出现"点进去空白但看起来已完成"的情况。
       </p>
       <ul class="plain">
         {SECTIONS.map((s) => (
           <li>
             <Link to={s.path}>{s.label}</Link>
             <span class="tag">{s.phase}</span>
+            {s.done ? <span class="tag ok">可用</span> : null}
             <span class="muted small">　{s.blurb}</span>
           </li>
         ))}
