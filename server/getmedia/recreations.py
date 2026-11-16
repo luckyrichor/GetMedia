@@ -1,6 +1,6 @@
 """AI 视频重建（P2g）：资源、队列与产物路径。
 
-分工与旧 GetVideo 一致：
+分工与旧视频项目一致：
 - API 只做「创建资源 + 入队 + 查询」，**不 import 模型客户端**；
 - ``getmedia-ai-worker``（``ai_worker.py``）领取 ``recreation_runs`` 执行；
 - 没有配置模型时 ``capabilities.available=false``，相关接口 503，不假装能跑。

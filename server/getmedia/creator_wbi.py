@@ -1,6 +1,6 @@
 """B 站 WBI 签名与浏览器指纹参数。
 
-从 GetAudio 的 ``extractors/bilibili.py`` 移植。GetMedia 服务端不做下载，
+从旧音频项目的 B 站提取器移植。GetMedia 服务端不做下载，
 只保留列表/详情接口要用的签名部分，不引入 yt-dlp 与转封装依赖。
 """
 from __future__ import annotations

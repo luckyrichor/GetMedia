@@ -83,7 +83,7 @@ _BASE_PARAMS = {
 _BROWSER_INSTALL_HINT = (
     "请先导入抖音登录 Cookie，并在服务端安装浏览器桥接："
     "pip install playwright && python -m playwright install chromium；"
-    "必要时把 GETAUDIO_DOUYIN_BROWSER_HEADLESS 设为 false 完成一次人工验证。"
+    "必要时把 GETMEDIA_DOUYIN_BROWSER_HEADLESS 设为 false 完成一次人工验证。"
 )
 
 

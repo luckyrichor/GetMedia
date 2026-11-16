@@ -26,63 +26,47 @@
 
 ## 2. 生产旧库只读核对（2026-11-16）
 
-用 `sqlite3` 的 `mode=ro` 读 `sqlite_master` 与 `PRAGMA table_info`，不读 `cookie_blob`。
+用 `sqlite3` 的 `mode=ro` 读 `sqlite_master` 与 `PRAGMA table_info`，只统计行数与结构，**不读 `cookie_blob`**。
+结论只写到"量级"，具体数字与逐账号分布留在服务器终端的 `plan` 输出里（不贴聊天、不进报告）。
 
-| 项 | GetAudio | GetVideo |
-|---|---|---|
-| `tracks` | 6 条 / 10,207,014 字节 | 0 条 |
-| `extract_jobs` | 13 条（`DONE` 8 / `FAILED` 5） | 0 条 |
-| `extraction_failures` | 5 条 | 0 条 |
-| `platform_credentials` | 3 条（含 1 条 `test_u` 测试残留） | 2 条 |
-| `account_platform_bindings` | 1 条 | 1 条 |
-| `agent_*` / `crawl_state` / `creator_*` | 全 0 | 全 0 |
-| `recreation_projects` / `recreation_runs` | 不存在 | 0 条 |
+| 库 | 结论 |
+|---|---|
+| 音频旧库 | 有真实历史数据：作品个位数、任务十余条、失败数条、凭据数条（其中 1 条是测试残留）、绑定 1 条 |
+| 视频旧库 | 基本为空：作品 0 条、任务 0 条，只有数条凭据与 1 条绑定 |
+| 两库其余表（`agent_*`、`crawl_state`、`creator_*`、`recreation_*`） | 全 0 或表不存在 |
 
 **与计划（§9.2）不符、必须按实际实现的三处**
 
-1. `tracks` 没有 `user_id`，归属在 `owner_scope`：Audio 是 **5 条 `legacy` + 1 条真实 `acct_…`**，不是"全是 legacy"。所以 map 必须同时包含 `legacy` 和那个真实 id。
+1. `tracks` 没有 `user_id`，归属在 `owner_scope`：既有具体账号 id，也有单用户时代写死的保底值 `legacy`（不是账号）。所以 map 必须同时覆盖 `legacy` 与真实 id。
 2. `extract_jobs.status` 存的是**大写枚举** `DONE` / `FAILED`，不是小写。工具已统一 `lower()` 后映射。
 3. `account_platform_bindings` 实际列是 `id,user_id,platform,subject,nickname,created_at`，**没有 `status`**；新表有。工具按列存在性读，缺列用默认值。
 
-**另外发现**：`extract_jobs.user_id` 里有 8 条是早期 UUID（`05c1da45-…`、`0a2bd188-…`），`app_users` 里没有对应账号；另有 2 条 `user_id` 为 `NULL`。这 10 条无法归属到任何人。
+**另外**：`extract_jobs.user_id` 里有少量早期 UUID（`app_users` 里没有对应账号）和少量 `NULL`，
+合计 10 条无法归属到任何人 —— 这正是"10 条无主任务跳过"这条口径的由来。
 
-### 2.1 账号对照表（脱敏，供你定映射）
+### 2.1 账号与归属的形态（不含任何个人数据）
 
-账号 id 一律截断成「前 6 + 后 4」，不含手机号、密码哈希、Cookie 内容。真实 id 在服务器上跑
-`migrate_legacy.py plan` 直接看（输出只在终端，不贴聊天）。
-
-| 旧库 | 账号（脱敏） | 在 `app_users` | 注册日期 | tracks | 字节 | 凭据 | 任务 | 失败 | 绑定 |
-|---|---|---|---|---|---|---|---|---|---|
-| Audio | `acct_1…a01a` | 是 | 2026-10-07 | 1 | 367,577 | bilibili `active` | DONE 2 / FAILED 1 | 4 | 0 |
-| Audio | `acct_f…e8ea` | 是 | 2026-10-27 | 0 | 0 | bilibili `active` | — | 1 | 1 |
-| Audio | `legacy`（伪归属） | 不适用 | — | **5** | **9,839,437** | — | — | 0 | 0 |
-| Audio | `05c1da…1fef` | 否 | — | 0 | 0 | — | DONE 1 / FAILED 1 | 0 | 0 |
-| Audio | `0a2bd1…1730` | 否 | — | 0 | 0 | — | DONE 4 / FAILED 2 | 0 | 0 |
-| Audio | （空 `user_id`） | — | — | 0 | 0 | — | DONE 1 / FAILED 1 | 0 | 0 |
-| Audio | `test_u` | 否（测试残留） | — | 0 | 0 | bilibili `active` | — | 0 | 0 |
-| Video | `acct_1…0603` | 是 | 2026-10-17 | 0 | 0 | bilibili `active` | — | 0 | 1 |
-| Video | `acct_4…26e0` | 是 | 2026-10-28 | 0 | 0 | bilibili `active` | — | 0 | 0 |
-| Video | `legacy`（伪归属） | 不适用 | — | 0 | 0 | — | — | 0 | 0 |
+四个真实账号（音频 2 个、视频 2 个）+ 两库各一个保底值 `legacy`。逐账号的条数、日期与 id 片段
+留存在服务器的 `plan` 输出与你我确认过的本地文档里，本报告不重复。
 
 **`owner_scope` 与 `user_id` 的区别（关键）**
 
-- `tracks` 表**没有 `user_id`**，归属写在 `owner_scope`：
-  - `acct_…` = 具体账号的真实 id（Audio 只有 1 条作品属于 `acct_1…a01a`）；
-  - `legacy` = 单用户时代写死的**保底归属值**，不是账号。Audio 的 5 条作品（9.8 MB）全在这里，
-    所以 `map.json` 的 audio 段必须显式给出 `legacy` 指向谁，否则这 5 条会全部跳过。
+- `tracks` 表**没有 `user_id`**，归属写在 `owner_scope`：`acct_…` 是具体账号的真实 id；`legacy` 是单用户时代
+  写死的保底归属值，不是账号。音频库的作品绝大多数落在 `legacy`，所以 `map.json` 的 audio 段必须显式给出
+  `legacy` 指向谁，否则这些作品会被整批跳过。
 - 任务 / 失败 / 凭据 / 绑定用的是真实 `user_id`，没有 `legacy` 写法。
 
 **因此 `map.json` 至少要覆盖这 5 个键**（值由你定，`*` 可作兜底但本库不需要）：
 
-| 段 | 必须给的键 | 对应数据 |
+| 段 | 必须给的键 | 覆盖的数据 |
 |---|---|---|
-| `audio` | `legacy` | 5 条 tracks / 9,839,437 字节 |
-| `audio` | `acct_1…a01a` | 1 条 track、1 条凭据、3 条任务、4 条失败 |
-| `audio` | `acct_f…e8ea` | 1 条凭据、1 条失败、1 条绑定 |
+| `audio` | `legacy` | 单用户时代的全部作品 |
+| `audio` | 音频账号 1 | 该账号的作品、凭据、任务、失败 |
+| `audio` | 音频账号 2 | 该账号的凭据、失败、绑定 |
 | `video` | `legacy` | 0 条（写上无害，避免将来补数据时漏） |
-| `video` | `acct_1…0603`、`acct_4…26e0` | 各 1 条凭据；前者另有 1 条绑定 |
+| `video` | 视频账号 1、视频账号 2 | 各 1 条凭据；前者另有 1 条绑定 |
 
-不参与映射的：`05c1da…`、`0a2bd1…`、空 `user_id`（共 10 条任务，按你的决定跳过）、`test_u`（工具内置丢弃）。
+不参与映射的：无主 `user_id`（共 10 条任务，按你的决定跳过）、测试残留账号（工具内置丢弃）。
 
 ---
 
@@ -93,49 +77,39 @@
 ### 3.1 plan
 
 - 识别出两组用户，提示需要 2 个目标账号；
-- 报告 8 + 2 条对不上 `app_users` 的 `user_id`。
+- 报告了一批对不上 `app_users` 的 `user_id`（其中 2 条为 `NULL`），合计 10 条无主任务。
 
 ### 3.2 apply
 
-```json
-{
-  "tracks":              { "inserted": 6,  "duplicate": 0, "orphan": 0 },
-  "extract_jobs":        { "inserted": 3,  "skipped": 10 },
-  "extraction_failures": { "inserted": 5 },
-  "credentials":         { "inserted": 4,  "needs_reauth": 0, "skipped": 1 },
-  "bindings":            2,
-  "agent":               { "conversations": 0, "messages": 0, "memories": 0 },
-  "recreations":         { "projects": 0, "runs": 0 }
-}
-```
+一条命令跑完；具体条数与字节只出现在服务器终端的账本里，下表只记结论：
 
-- `credentials` 4 条全部重加密成功（Audio 2 条用 `data/.secret_key`，Video 2 条用 `GETVIDEO_SECRET_KEY`），`test_u` 那条按 §9.4 丢弃；
-- `extract_jobs` 跳过 10 条 = 8 条 UUID 用户 + 2 条 `user_id` 为 NULL；
-- `tracks` 6 条全部 `storage='archive'`，`media_path` 带原始子目录（`bilibili/`、`douyin/`、`accounts/<hash>/bilibili/`）。
+| 段 | 结果 |
+|---|---|
+| `tracks` | 源记录全量写入，重复 0、孤儿 0 |
+| `extract_jobs` | 可归属部分全部写入；10 条无主跳过（与口径一致） |
+| `extraction_failures` | 源记录全量写入 |
+| `credentials` | 源记录全部重加密成功（音频用库内 `.secret_key`，视频用 `GETVIDEO_SECRET_KEY`），测试残留 1 条丢弃 |
+| `bindings` | 全量写入 |
+| `agent` / `recreations` | 两库均无数据，0 写入 |
+
+- `tracks` 全部 `storage='archive'`，`media_path` 保留原始子目录（`bilibili/`、`douyin/`、`accounts/<hash>/bilibili/`）。
 
 ### 3.3 媒体
 
-复制到 `media/audio/...` 的 6 个文件，文件名含中文、emoji、空格：
-
-```
-bilibili/BV1GJ411x7h7-【官方 MV】Never Gonna Give You Up - Rick Astley.m4a   5,402,460
-douyin/7392957955471199525-@力白不吃土豆创作的原声.m4a                        1,982,756
-douyin/7537664997619535155-@音之乐🎙️创作的原声.mp3                          1,854,724
-douyin/7691313513319261050-@你的小遇创作的原声.mp3                             297,711
-douyin/7692331471981692388-@你的小遇创作的原声.mp3                             301,786
-accounts/f4bc…/bilibili/BV1KG411w7r2-p3-… - P3 气荡山河.m4a                   367,577
-```
+`--files copy` 复制到 `media/audio/...`，覆盖了全部作品文件（个位数）。文件名含中文、emoji、空格，
+子目录含平台名与账号哈希前缀 —— 这三类边界正好把"非 ASCII / emoji / 空格路径"全踩了一遍，复制与哈希都通过。
+**具体文件名不入库**：本文档在公开仓库里，作品标题与作者昵称属于个人信息。
 
 ### 3.4 verify
 
 ```
-[audio] 源 6 条，目标命中 6 条（跨库重复 0，字节 10207014 → 10207014）
-  抽样：6 个比对通过，0 个不一致，0 个文件缺失
+[audio] 源 N 条，目标命中 N 条（跨库重复 0，字节 N → N，一致）
+  抽样：全部比对通过，0 个不一致，0 个文件缺失
 [video] 源 0 条，目标命中 0 条
 未发现条数/字节/抽样哈希问题。
 ```
 
-抽样比例取 `1.0`（全量），sha256 全部一致。
+抽样比例取 `1.0`（全量），sha256 全部一致 —— 这就是"字节级一致"的结论，具体字节数不入库。
 
 ---
 
@@ -146,7 +120,7 @@ accounts/f4bc…/bilibili/BV1KG411w7r2-p3-… - P3 气荡山河.m4a             
 | `extraction_failures` 是复合主键 | `rows()` 按 `id` 排序直接报 `no such column: id` | 按 `PRAGMA table_info` 判断，无 `id` 时退回 `rowid` |
 | 状态大小写 | 全部 `DONE/FAILED` 落到 `failed` | 先 `lower()` 再查映射表 |
 | 绑定表缺 `status` | `INSERT` 报列不存在 | 按实际列读，缺列填 `active` |
-| 跨库重复被 verify 误判为"未命中" | Video 库的 `BV1` 在目标里是 `audio` 类型 | verify 回退按 `(platform, video_id)` 找，记"跨库重复" |
+| 跨库重复被 verify 误判为"未命中" | 同一个视频 id 在视频库里是作品、在目标库里已按音频入库 | verify 回退按 `(platform, video_id)` 找，记"跨库重复" |
 | `apply` 少给参数时抛 `SystemExit` | 报错信息不友好 | 改为 `MigrationError`，打印"apply 必须给 --map" |
 | 报告 JSON 含 `Path` | `TypeError: not JSON serializable` | 统一 `str()` + `default=str` |
 
@@ -154,7 +128,7 @@ accounts/f4bc…/bilibili/BV1KG411w7r2-p3-… - P3 气荡山河.m4a             
 
 ## 5. 与计划的偏差（需要你知道）
 
-1. **`config/keywords.yaml` 不自动导入**。旧定时组是"关键词搜索"，新 `schedules.input` 的语义是"博主/链接"，且新契约没有关键词搜索任务。强行导入会生成一批必然失败的任务。做法：`plan` 列出 6 组 / 24 个关键词，由你在 App 里用新的方式重建。若你要强行导入，我可以加 `--import-keywords`，但不建议。
+1. **`config/keywords.yaml` 不自动导入**。旧定时组是"关键词搜索"，新 `schedules.input` 的语义是"博主/链接"，且新契约没有关键词搜索任务。强行导入会生成一批必然失败的任务。做法：`plan` 列出旧定时组的全部关键词，由你在 App 里用新的方式重建。若你要强行导入，我可以加 `--import-keywords`，但不建议。
 2. **`creator_jobs` / `creator_items` 不迁移**（两库都是 0 条）。新表结构与旧表差异大（旧表有 `owner_scope`、按条存 `prefetched_json`），0 条时迁移没有收益。
 3. **10 条无主 `extract_jobs` 不迁移**。如果要保留，可以给 map 加 `"*": "<new_user>"` 显式兜底。
 4. **`recreations` 只做最小映射**（旧 `recreation_projects/runs` → 新 `recreations/recreation_runs`），字段有损；两库都是 0 条，实际不会触发。
@@ -167,7 +141,7 @@ accounts/f4bc…/bilibili/BV1KG411w7r2-p3-… - P3 气荡山河.m4a             
 | 项 | 决定 |
 |---|---|
 | 无法归属的 10 条 `extract_jobs` | **跳过**，不写 `*` 兜底 |
-| 媒体文件 | **`--files copy`**，旧目录原样保留（10 MB，不 `mv`、不删源） |
+| 媒体文件 | **`--files copy`**，旧目录原样保留（只读复制，不 `mv`、不删源） |
 | 迁移窗口 | `apply` 期间**停旧服务**，新服务不对外 |
 | 真实执行的时点 | **等 P2 完成并部署之后**再做（不是现在） |
 
@@ -188,6 +162,6 @@ accounts/f4bc…/bilibili/BV1KG411w7r2-p3-… - P3 气荡山河.m4a             
 ## 7. 本次没有做的事
 
 - 没有写 `/opt/getmedia`、`/var/lib/getmedia`、生产 `getmedia.db`；
-- 没有动 `/opt/getaudio`、`/opt/getvideo` 与两个旧库；
+- 没有动两个旧服务的安装目录与两个旧库；
 - 没有停任何服务、没有改 nginx；
-- 演练目录 `/tmp/gm-drill` 已删除（只留下本报告里的数字）。
+- 演练目录 `/tmp/gm-drill` 已删除（本报告只留方法与结论，不留条数、字节与文件名）。

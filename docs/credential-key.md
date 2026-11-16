@@ -71,7 +71,9 @@ sudo systemctl restart getmedia-api
 sudo systemctl is-active getmedia-api
 ```
 
-> 注意：`systemctl show getmedia-api -p Environment` 会把密钥明文打出来，**不要用**它核对。
+> 注意两种都不行：`systemctl show getmedia-api -p Environment` **看不到** `EnvironmentFile` 里的变量
+> （它只反映单元里 `Environment=` 写的内容，容易误判成"没加载"）；而 `cat /proc/<pid>/environ`
+> 会把密钥明文打到终端、进 shell 历史、进录屏。核对方式见 §4：只数键名，不取值。
 
 ---
 
@@ -98,6 +100,19 @@ sudo sh -c 'set -a; . /etc/getmedia/getmedia.env; . /etc/getmedia/credentials.en
 ```
 
 期望输出 `credential_key bytes: 32`。
+
+服务进程里是否真的拿到了（**只数键名，不取值**）：
+
+```sh
+for k in GETMEDIA_CRED_KEY GETMEDIA_SECRET_KEY; do
+  printf '%s=' "$k"
+  sudo tr '\0' '\n' < /proc/$(systemctl show -p MainPID --value getmedia-api)/environ \
+    | grep -c "^$k="
+done
+```
+
+各输出 `1` 即已注入；`0` 说明 `EnvironmentFile` 没被读到，或 `MainPID` 还是旧进程（重启后再查）。
+`grep -c` 只匹配键名，密钥值不会出现在输出里，也不会进 shell 历史（命令本身不含值）。
 
 写入后的端到端验证（需要 owner 会话，且已有导入过的 Cookie）：
 `GET /account/platform-bindings` 返回的 `credentials[].decryptable` 为 `true`，说明当前密钥能解开已存密文；

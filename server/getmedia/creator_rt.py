@@ -1,7 +1,7 @@
 """博主批量模块的运行时配置。
 
 GetMedia 的 ``Settings`` 是启动时构建的 frozen dataclass，不在模块之间传递；
-平台适配器从 GetAudio 移植过来时按 ``settings.xxx`` 取值，所以这里提供一个
+平台适配器从旧音频项目移植过来时按 ``settings.xxx`` 取值，所以这里提供一个
 轻量代理：启动时 ``configure(settings)`` 注入一次，其余模块照旧读属性。
 """
 from __future__ import annotations

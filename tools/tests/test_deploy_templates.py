@@ -89,15 +89,21 @@ def test_snippet_locations_cover_expected_paths():
     assert set(locations()) == {
         "= /getmedia", "= /getmedia/api/v2/feedback", "^~ /getmedia/api/", "^~ /getmedia/download/",
         "^~ /getmedia/assets/", "^~ /getmedia/",
+        # P6 新增：owner 通道 + 内部探测 + 统一 404 + owner 静态页（P5b）
+        "^~ /getmedia/owner/api/", "= /_getmedia_owner_check",
+        "^~ /getmedia/owner/", "@gm_owner_hidden",
     }
-    # 所有非精确的前缀 location 都用 ^~，避免被同一 server 块里其他项目的正则 location 抢走
+    # 所有非精确的前缀 location 都用 ^~，避免被同一 server 块里其他项目的正则 location 抢走；
+    # 具名 location（@…）是 error_page 目标，不参与 URI 匹配，单独放行。
     for k in locations():
-        assert k.startswith("=") or k.startswith("^~"), k
+        assert k.startswith("=") or k.startswith("^~") or k.startswith("@"), k
 
 
 def test_every_content_location_has_security_headers_and_log():
     for name, body in locations().items():
-        if name == "= /getmedia":
+        # = /getmedia 只是 308 跳转；@ 具名 location 只在内部跳转时使用；
+        # = /_getmedia_owner_check 是 auth_request 的内部子请求，不对外、不记日志。
+        if name == "= /getmedia" or name.startswith("@") or name == "= /_getmedia_owner_check":
             continue
         for h in ("Content-Security-Policy", "X-Content-Type-Options", "Referrer-Policy", "X-Robots-Tag"):
             assert re.search(rf'add_header {h} ".+" always;', body), (name, h)
@@ -383,3 +389,91 @@ def test_renew_refuses_concurrent_instance(renew_factory, tmp_path):
     finally:
         holder.kill()
         holder.wait()
+
+
+# ---------------------------------------------------------------- P6：owner 通道与 AI worker
+def test_owner_entry_uses_auth_request_and_probes_owner_only_route():
+    """owner 入口必须靠 auth_request 判断，且探测的是一个 owner 级接口。"""
+    conf = read("nginx/getmedia-prefix.conf")
+    block = re.search(r"location \^~ /getmedia/owner/api/ \{(.*?)\n\}", conf, re.S).group(1)
+    assert "auth_request /_getmedia_owner_check;" in block
+    # 剥前缀转发
+    assert "proxy_pass http://127.0.0.1:8700/;" in block
+    # 匿名（401）与 free（403）一律 404：对外不可区分，也不暴露 owner 通道存在
+    assert "error_page 401 403 = @gm_owner_hidden;" in block
+    assert "401" not in re.sub(r"#.*", "", block).replace("error_page 401 403", "")   # 不单独回 401
+    assert "return 302" not in block and "login?next=" not in block
+
+    probe = re.search(r"location = /_getmedia_owner_check \{(.*?)\n\}", conf, re.S).group(1)
+    assert "internal;" in probe
+    assert "proxy_pass http://127.0.0.1:8700/v2/config/owner;" in probe
+    assert "proxy_pass_request_body off;" in probe
+    assert "access_log off;" in probe
+
+
+def test_owner_entry_is_inside_same_snippet_as_free_prefix():
+    """owner 通道与免费通道在同一个 snippet：退役/回退只动一行 include。"""
+    conf = read("nginx/getmedia-prefix.conf")
+    assert "location ^~ /getmedia/api/" in conf
+    assert "location ^~ /getmedia/owner/api/" in conf
+    # 顺序无关，但 owner 通道必须比 /getmedia/ 更具体（^~ 最长前缀优先）
+    assert conf.index("/getmedia/owner/api/") < conf.index("location ^~ /getmedia/ {")
+
+
+def test_http_conf_has_owner_rate_limit_zone():
+    conf = http_conf()
+    assert "zone=gm_owner:" in conf
+    assert "zone=gm_api:" in conf          # 免费通道的限流不能被 owner 改动影响
+
+
+def test_ai_worker_unit_is_independent_and_hardened():
+    unit = read("systemd/getmedia-ai-worker.service")
+    assert "ExecStart=/opt/getmedia/venv/bin/python -m getmedia.ai_worker" in unit
+    assert "EnvironmentFile=/etc/getmedia/getmedia.env" in unit
+    # 可选密钥文件用 - 前缀，缺省不影响启动
+    assert "EnvironmentFile=-/etc/getmedia/llm.env" in unit
+    # 不能被 API 的 stop 连带停掉（生成任务不该被发版打断）
+    assert "PartOf=" not in unit
+    for opt in ("NoNewPrivileges=true", "ProtectSystem=strict", "PrivateTmp=true"):
+        assert opt in unit
+
+
+def test_api_unit_loads_optional_llm_env():
+    unit = read("systemd/getmedia-api.service")
+    assert "EnvironmentFile=-/etc/getmedia/llm.env" in unit
+
+
+def test_llm_env_example_has_no_real_secret():
+    text = read("env/llm.env.example")
+    for line in text.splitlines():
+        if line.startswith("GETMEDIA_LLM_API_KEY="):  # leakscan:allow 只比较键名
+            assert line.strip().endswith("CHANGE_ME")
+            break
+    else:
+        raise AssertionError("缺少 GETMEDIA_LLM_API_KEY 占位")
+
+
+# ---------------------------------------------------------------- P5b：owner 管理台静态页
+def test_owner_page_is_gated_and_separate_from_public_root():
+    owner = locations()["^~ /getmedia/owner/"]
+    # 必须由 auth_request 守门，且与公开页不是一个目录
+    assert "auth_request /_getmedia_owner_check;" in owner
+    assert "alias /var/www/getmedia/owner/;" in owner
+    assert "/var/www/getmedia/public/" not in owner
+    # 匿名与非 owner 都回 404，且不跳登录（跳转等于承认"这里需要登录"）
+    assert "error_page 401 403 = @gm_owner_hidden;" in owner
+    assert "auth_request_set $gm_owner_status $upstream_status;" not in owner
+    assert "login" not in re.sub(r"#.*", "", owner)
+    hidden = locations()["@gm_owner_hidden"]
+    assert "return 404;" in hidden
+    # 隐藏页不能自带状态码/内容提示
+    assert "X-GM-Owner" not in hidden and "application/json" not in hidden
+    # 前端路由回退，且回退目标仍在本 location 内（会再次过 auth_request）
+    assert "try_files $uri $uri/ /getmedia/owner/index.html;" in owner
+
+
+def test_owner_api_prefix_wins_over_owner_page_prefix():
+    """/getmedia/owner/api/ 比 /getmedia/owner/ 长，nginx 的最长前缀匹配才能先命中接口通道。"""
+    keys = list(locations())
+    assert keys.index("^~ /getmedia/owner/api/") < keys.index("^~ /getmedia/owner/")
+    assert len("/getmedia/owner/api/") > len("/getmedia/owner/")

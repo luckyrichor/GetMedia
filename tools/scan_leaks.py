@@ -119,11 +119,17 @@ def tracked_files() -> list[tuple[str, bytes]]:
     return out
 
 
+# 目录扫描时跳过的构建/依赖目录：它们不是本项目要提交的内容，逐文件扫也会把第三方测试数据当成泄露
+SKIP_DIRS = {".git", "node_modules", "dist", ".venv", "__pycache__", "build", ".gradle", ".pytest_cache"}
+
+
 def path_files(paths: list[str]) -> list[tuple[str, bytes]]:
     out = []
     for raw in paths:
         p = Path(raw)
-        for f in ([p] if p.is_file() else sorted(x for x in p.rglob("*") if x.is_file() and ".git" not in x.parts)):
+        files = [p] if p.is_file() else sorted(
+            x for x in p.rglob("*") if x.is_file() and not (SKIP_DIRS & set(x.parts)))
+        for f in files:
             out.append((f.as_posix(), f.read_bytes()))
     return out
 

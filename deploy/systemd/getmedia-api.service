@@ -16,10 +16,12 @@ Group=getmedia
 WorkingDirectory=/opt/getmedia/server
 # getmedia.env：服务配置与 GETMEDIA_SECRET_KEY；feedback.env：七个 FEEDBACK_*（可缺省，缺省则只入库不发信）。
 # credentials.env：只放 GETMEDIA_CRED_KEY（平台 Cookie 的加密密钥，root:root 600；缺省则授权功能不可用）。
-# EnvironmentFile 由 systemd 以 root 读取，所以后两个可以是 root:root 600。
+# llm.env：模型服务密钥（可选；缺省时 Agent 走确定性规则，不产生任何外部调用）。
+# EnvironmentFile 由 systemd 以 root 读取，所以后三个可以是 root:root 600。
 EnvironmentFile=/etc/getmedia/getmedia.env
 EnvironmentFile=-/etc/getmedia/feedback.env
 EnvironmentFile=-/etc/getmedia/credentials.env
+EnvironmentFile=-/etc/getmedia/llm.env
 ExecStart=/opt/getmedia/venv/bin/python -m uvicorn getmedia.main:create --factory --host 127.0.0.1 --port 8700 --workers 1 --no-access-log --no-server-header
 Restart=on-failure
 RestartSec=5

@@ -29,7 +29,11 @@ def free_port() -> int:
 
 
 class Upstream:
-    """记录收到的请求；读完整个请求体，返回 200 JSON。"""
+    """记录收到的请求；读完整个请求体，返回 200 JSON。
+
+    `/v2/config/owner` 例外：它是 owner 通道的认证探针，按 Cookie 回 401/403/200，
+    用来验证边缘（auth_request）的判定，不需要真跑应用。
+    """
 
     def __init__(self):
         self.seen: list[dict] = []
@@ -42,6 +46,20 @@ class Upstream:
                 while got < n:
                     got += len(self.rfile.read(min(65536, n - got)))
                 outer.seen.append({"method": self.command, "path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": got})
+                if self.path.split("?")[0] == "/v2/config/owner":
+                    cookie = self.headers.get("Cookie") or ""
+                    if "gm_tier=owner" in cookie:
+                        code, body = 200, b'{"cache_ttl_seconds":86400}'
+                    elif "gm_tier=free" in cookie:
+                        code, body = 403, b'{"detail":"forbidden"}'
+                    else:
+                        code, body = 401, b'{"detail":"unauthenticated"}'
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 body = b'{"ok":true}'
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -67,11 +85,13 @@ class Site:
     def __init__(self, tmp: Path, upstream: Upstream):
         self.tmp, self.up = tmp, upstream
         self.www, self.logs = tmp / "www", tmp / "logs"
-        for d in ("public/assets", "download"):
+        for d in ("public/assets", "download", "owner/assets"):
             (self.www / d).mkdir(parents=True)
         self.logs.mkdir()
         (self.www / "public/index.html").write_text("<!doctype html><title>GM-INDEX</title>")
         (self.www / "public/assets/app.abc123.js").write_text("console.log(1)")
+        (self.www / "owner/index.html").write_text("<!doctype html><title>GM-OWNER</title>")
+        (self.www / "owner/assets/owner.js").write_text("console.log('owner')")
         (self.www / "download/getmedia-0.1.0.apk").write_bytes(b"PK\x03\x04apk")
         (self.www / "download/notes.html").write_text("<script>alert(1)</script>")
         deploy = ROOT / "deploy/nginx"
@@ -285,3 +305,55 @@ def test_other_projects_in_the_same_server_block_are_unaffected(site):
     # （注意：夹具里必须真的代理；return 在 rewrite 阶段就结束请求，根本走不到 limit_req）
     codes = {site.req("GET", "/getaudio/x")[0] for _ in range(6)}
     assert 503 in codes and 429 not in codes
+
+
+# ---------------------------------------------------------------- owner 通道：一律 404
+OWNER_PATHS = [
+    "/getmedia/owner/",                       # 管理台首页
+    "/getmedia/owner/index.html",
+    "/getmedia/owner/creators",               # 前端路由的深链接
+    "/getmedia/owner/api/v2/config/owner",    # 接口通道
+    "/getmedia/owner/api/v2/tracks",
+]
+
+
+@pytest.mark.parametrize("path", OWNER_PATHS)
+def test_anonymous_owner_paths_are_404_and_never_reach_the_app(site, path):
+    """匿名访问 /getmedia/owner/ 与 /getmedia/owner/api/* 都是 404（不区分"要登录"）。"""
+    st, h, body = site.req("GET", path)
+    assert st == 404
+    assert "x-gm-owner" not in h
+    assert b"GM-OWNER" not in body and b'{"ok":true}' not in body
+    # 只有认证子请求打到上游；目标路径没有被转发（匿名根本走不到应用）
+    assert site.hits() and all(hit["path"].startswith("/v2/config/owner") for hit in site.hits())
+
+
+@pytest.mark.parametrize("path", OWNER_PATHS)
+def test_free_user_owner_paths_are_404_too(site, path):
+    """已登录但不是 owner：与匿名完全一样的 404。"""
+    st, h, body = site.req("GET", path, headers={"Cookie": "gm_tier=free"})
+    assert st == 404
+    assert "x-gm-owner" not in h
+    assert b"GM-OWNER" not in body and b'{"ok":true}' not in body
+    assert all(hit["path"].startswith("/v2/config/owner") for hit in site.hits())
+
+
+def test_owner_404_is_indistinguishable_from_a_missing_file(site):
+    """隐藏用的 404 与"文件本来就不存在"的 404 完全一致：状态码、响应体、没有额外响应头。"""
+    _, ref_h, ref = site.req("GET", "/getmedia/download/absent.apk")
+    st, h, body = site.req("GET", "/getmedia/owner/api/v2/tracks")
+    assert st == 404 and body == ref
+    assert h["content-type"] == ref_h["content-type"]
+    assert "x-gm-owner" not in h
+
+
+def test_owner_sees_the_console_and_api_with_prefix_stripped(site):
+    st, _, body = site.req("GET", "/getmedia/owner/", headers={"Cookie": "gm_tier=owner"})
+    assert st == 200 and b"GM-OWNER" in body
+    st, _, body = site.req("GET", "/getmedia/owner/creators", headers={"Cookie": "gm_tier=owner"})
+    assert st == 200 and b"GM-OWNER" in body                                  # 深链接回退到 index.html
+    st, _, body = site.req("GET", "/getmedia/owner/api/v2/config/owner?x=1", headers={"Cookie": "gm_tier=owner"})
+    assert st == 200 and b"cache_ttl_seconds" in body                          # 探针路由本身也可直连（owner 才通）
+    st, _, body = site.req("GET", "/getmedia/owner/api/v2/tracks?x=1", headers={"Cookie": "gm_tier=owner"})
+    assert st == 200 and body == b'{"ok":true}'
+    assert site.hits()[-1]["path"] == "/v2/tracks?x=1"                          # 前缀被剥掉，查询串保留

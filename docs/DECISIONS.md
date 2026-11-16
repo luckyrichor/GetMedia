@@ -19,3 +19,5 @@
   - 证书续期脚本按 certbot 编写，**这是假设**（开发环境看不到服务器上现有续期任务）；交接手册第 0–1 步要求先只读确认，若是别的 ACME 客户端只改 `run_acme` 一个函数。
 - 2026-11-01（用户决定）：先带入 GetAudio 的 14 张静态 + 3 动图 + 3 视频内置壁纸（`assets/backgrounds`，18 MB），之后由用户安排其他 Agent 替换为有版权的素材；**公开发布前必须完成替换**（版权不明）。
 - 2026-11-01（WP5a，按 PLAN §12 执行）：Android 本地库 Room schema 从 1 起，不迁移 GetAudio / GetVideo 旧数据；`TrackEntity.mediaType`（`MediaKind`）5a 只写 `AUDIO`；删除失败上报与全部服务器调用代码；依赖去掉 Retrofit / kotlinx-serialization / WorkManager / DataStore / logging-interceptor（源码零引用）。
+- 2026-11-16（用户决定）：公开仓库的去弱点化从 PLAN 扩展到**全部入库文档** —— 接口对照表的"丢弃"理由只写中性说法（旧版历史接口 / 新客户端不调用 / 功能已被新路由覆盖），不描述现网越权与弱点；迁移报告不写真实文件名、可识别的条数与字节，只留方法与结论（数字留在服务器终端）。
+- 2026-11-16（用户决定）：owner 入口对**匿名与非 owner 一律 404**，边缘不做任何 `302` 登录跳转；登录统一走公开站 `/getmedia/login`，登录成功后由前端按 `tier` 决定是否进 `/owner/`。

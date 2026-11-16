@@ -51,3 +51,8 @@ __pycache__/
 
 # Agent 工作目录（含运维记录与会话记忆）
 .workbuddy/
+
+# 含真实服务器路径 / 旧账号 ID 片段 / nginx 与 systemd 细节：只留本地，不入公开仓库
+/docs/p6-deploy-plan.md
+/docs/platform-matrix-server-*.md
+/docs/credential-merge.md

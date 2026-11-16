@@ -495,7 +495,8 @@ def cmd_apply(args: argparse.Namespace, sources: list[Source]) -> int:
     stats: dict[str, Any] = {"tracks": {"inserted": 0, "duplicate": 0, "orphan": 0},
                              "extract_jobs": {"inserted": 0, "skipped": 0},
                              "extraction_failures": {"inserted": 0},
-                             "credentials": {"inserted": 0, "needs_reauth": 0, "skipped": 0},
+                             "credentials": {"inserted": 0, "needs_reauth": 0, "skipped": 0,
+                                             "conflict": 0, "conflicts": []},
                              "bindings": 0,
                              "agent": {"conversations": 0, "messages": 0, "memories": 0},
                              "recreations": {"projects": 0, "runs": 0}}
@@ -511,7 +512,6 @@ def cmd_apply(args: argparse.Namespace, sources: list[Source]) -> int:
             seq = _apply_tracks(conn, src, mapping[src.kind], stats, seq, args, media_root, log)
             _apply_jobs(conn, src, mapping[src.kind], stats, log)
             _apply_failures(conn, src, mapping[src.kind], stats, log)
-            _apply_credentials(conn, src, mapping[src.kind], stats, vault, log)
             _apply_bindings(conn, src, mapping[src.kind], stats, log)
             _apply_agent(conn, src, mapping[src.kind], stats, log)
             _apply_recreations(conn, src, mapping[src.kind], stats, log)
@@ -519,6 +519,17 @@ def cmd_apply(args: argparse.Namespace, sources: list[Source]) -> int:
         except Exception:
             conn.rollback()
             raise
+
+    # 凭据必须在所有库都读完之后再统一落库：同一新账号同一平台只保留一份，
+    # 逐库写入会让"先处理的那个库"默认胜出，与"保留最近更新"的规则冲突。
+    conn.execute("BEGIN")
+    try:
+        candidates = collect_credentials(sources, mapping, vault, log)
+        apply_credentials(conn, candidates, stats, vault=vault, log=log)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     conn.close()
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -655,48 +666,114 @@ def _apply_failures(conn, src: Source, mapping: dict[str, str], stats, log) -> N
         stats["extraction_failures"]["inserted"] += 1
 
 
-def _apply_credentials(conn, src: Source, mapping: dict[str, str], stats,
-                       vault: CredentialVault | None, log) -> None:
-    key = src.resolve_key()
-    for row in rows(src.connect(), "platform_credentials"):
-        old_uid = str(rget(row, "user_id") or "")
-        if old_uid in DROP_USER_IDS:
-            stats["credentials"]["skipped"] += 1
-            log(f"凭据 {old_uid}/{row['platform']} 是测试残留，丢弃")
+def mask_uid(value: str) -> str:
+    """冲突清单只留后 6 位，报告可以外发。"""
+    value = str(value or "")
+    return f"…{value[-6:]}" if len(value) > 6 else value
+
+
+def collect_credentials(sources: list[Source], mapping: dict[str, dict[str, str]],
+                        vault: CredentialVault | None, log) -> list[dict[str, Any]]:
+    """把各旧库的凭据读成候选（明文只在内存里，不落盘、不进日志）。
+
+    这里只收集不写库，是因为"同一新账号同一平台只留一份"的判断必须跨库看，
+    逐库写入会让"先到先得"变成事实规则。
+    """
+    out: list[dict[str, Any]] = []
+    for src in sources:
+        if not mapping.get(src.kind):
             continue
-        new_user = mapping.get(old_uid)
-        if not new_user:
-            stats["credentials"]["skipped"] += 1
-            continue
-        if vault is None:
-            log("未配置 GETMEDIA_CRED_KEY，凭据段跳过")
-            stats["credentials"]["skipped"] += 1
-            continue
-        status = str(rget(row, "status") or "active")
-        blob = None
-        blob_in = rget(row, "cookie_blob")
-        if key and blob_in:
-            try:
-                plain = legacy_decrypt(bytes(blob_in), key, f"{old_uid}:{row['platform']}")
-                blob = vault.seal(plain)
-            except Exception as exc:  # noqa: BLE001
-                log(f"凭据 {old_uid}/{row['platform']} 解密失败：{type(exc).__name__}")
-                status = "needs_reauth"
-        else:
-            status = "needs_reauth"
-        if blob is None:
-            blob = b""  # NOT NULL 列；空 blob 明确表示"待重新授权"
+        key = src.resolve_key()
+        for row in rows(src.connect(), "platform_credentials"):
+            old_uid = str(rget(row, "user_id") or "")
+            platform = str(rget(row, "platform") or "")
+            if old_uid in DROP_USER_IDS:
+                log(f"凭据 {mask_uid(old_uid)}/{platform} 是测试残留，丢弃")
+                continue
+            new_user = mapping[src.kind].get(old_uid)
+            if not new_user:
+                log(f"凭据 {mask_uid(old_uid)}/{platform} 没有映射，跳过")
+                continue
+            updated = to_epoch(rget(row, "updated_at"), 0) or 0
+            plain = None
+            blob_in = rget(row, "cookie_blob")
+            if key and blob_in and len(bytes(blob_in)) > 12:
+                try:
+                    plain = legacy_decrypt(bytes(blob_in), key, f"{old_uid}:{platform}")
+                except Exception as exc:  # noqa: BLE001
+                    log(f"凭据 {mask_uid(old_uid)}/{platform} 解密失败：{type(exc).__name__}")
+            out.append({
+                "source": src.kind, "old_uid": old_uid, "new_user": new_user,
+                "platform": platform, "updated_at": updated,
+                "plain": plain, "status": str(rget(row, "status") or "active"),
+                "created_at": to_epoch(rget(row, "created_at"), updated) or updated,
+            })
+    return out
+
+
+def apply_credentials(conn, candidates: list[dict[str, Any]], stats, *,
+                      vault: CredentialVault | None, log) -> None:
+    """同一 (新账号, 平台) 只保留一份凭据。
+
+    规则（与 `docs/credential-merge.md` 一致）：
+    R1 候选先按 ``updated_at`` 倒序，**第一份能解密的**胜出；
+    R2 全部解不开时保留最新一份，``status=needs_reauth``、密文置空；
+    R3 落选者记进冲突清单并标"需重新授权"，不写第二行（表上有 UNIQUE）。
+    同一时间戳按旧 user_id 倒序决胜，结果与库的处理顺序无关。
+    """
+    if vault is None:
+        if candidates:
+            log("未配置 GETMEDIA_CRED_KEY，凭据段整体跳过")
+            stats["credentials"]["skipped"] += len(candidates)
+        return
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for cand in candidates:
+        groups.setdefault((cand["new_user"], cand["platform"]), []).append(cand)
+
+    for (new_user, platform), rows_ in groups.items():
+        rows_.sort(key=lambda c: (c["updated_at"], c["old_uid"]), reverse=True)
+        winner = next((c for c in rows_ if c["plain"] is not None), None)
+        degraded = winner is None
+        if degraded:
+            winner = rows_[0]
+        blob = vault.seal(winner["plain"]) if winner["plain"] is not None else b""
+        status = winner["status"] if not degraded else "needs_reauth"
+        if degraded:
+            log(f"凭据 {new_user}/{platform}：{len(rows_)} 份候选全部解不开，保留最新一份并标 needs_reauth")
             stats["credentials"]["needs_reauth"] += 1
-        now = to_epoch(rget(row, "updated_at"), int(time.time()))
-        cur = conn.execute(
-            """INSERT OR IGNORE INTO platform_credentials
-               (user_id,platform,cookie_blob,status,label,created_at,updated_at,last_verified_at)
-               VALUES(?,?,?,?,?,?,?,?)""",
-            (new_user, str(rget(row, "platform") or ""), blob, status, "legacy",
-             to_epoch(rget(row, "created_at"), now), now, None),
-        )
-        if cur.rowcount:
+
+        existing = conn.execute(
+            "SELECT id, updated_at FROM platform_credentials WHERE user_id=? AND platform=?",
+            (new_user, platform)).fetchone()
+        if existing is None:
+            conn.execute(
+                """INSERT INTO platform_credentials
+                   (user_id,platform,cookie_blob,status,label,created_at,updated_at,last_verified_at)
+                   VALUES(?,?,?,?,?,?,?,NULL)""",
+                (new_user, platform, blob, status, f"legacy:{mask_uid(winner['old_uid'])}",
+                 winner["created_at"], winner["updated_at"]))
             stats["credentials"]["inserted"] += 1
+        elif winner["updated_at"] >= int(existing["updated_at"]) and not degraded:
+            conn.execute(
+                """UPDATE platform_credentials SET cookie_blob=?, status=?, label=?,
+                   updated_at=?, last_verified_at=NULL WHERE id=?""",
+                (blob, status, f"legacy:{mask_uid(winner['old_uid'])}",
+                 winner["updated_at"], existing["id"]))
+            stats["credentials"]["inserted"] += 1
+            log(f"凭据 {new_user}/{platform}：旧库中更新的那份覆盖了先写入的一份")
+
+        losers = [c for c in rows_ if c is not winner]
+        for c in losers:
+            stats["credentials"]["conflict"] += 1
+            stats["credentials"]["conflicts"].append({
+                "user": new_user, "platform": platform,
+                "old_uid": mask_uid(c["old_uid"]), "source": c["source"],
+                "updated_at": c["updated_at"],
+                "reason": "older_than_kept" if c["plain"] is not None else "undecryptable",
+                "marked": "needs_reauth",
+            })
+            log(f"凭据冲突 {new_user}/{platform}：{mask_uid(c['old_uid'])}（{c['source']}，"
+                f"updated_at={c['updated_at']}）未保留，已标需重新授权")
 
 
 def _apply_bindings(conn, src: Source, mapping: dict[str, str], stats, log) -> None:

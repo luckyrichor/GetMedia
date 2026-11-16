@@ -238,13 +238,16 @@ def test_apply_then_verify(env, capsys, monkeypatch):
     assert stats["extraction_failures"]["inserted"] == 1
     assert stats["credentials"]["inserted"] == 2     # 测试残留被丢弃
     assert stats["credentials"]["needs_reauth"] == 1
+    # 两个库的 bilibili 凭据 updated_at 相同（夹具都是同一个时间戳），
+    # 按"时间戳相同则旧 user_id 倒序"决胜 → acct_video_9 胜出，另一份进冲突清单。
+    assert stats["credentials"]["conflict"] == 1
     assert snapshot.is_file()
 
     c = sqlite3.connect(env["target"])
     v = c.execute("SELECT status, cookie_blob FROM platform_credentials WHERE platform='bilibili'"
                   ).fetchall()
     assert len(v) == 1 and v[0][0] == "active"
-    assert CredentialVault(NEW_KEY).open(bytes(v[0][1])) == "SESSDATA=abc"
+    assert CredentialVault(NEW_KEY).open(bytes(v[0][1])) == "SESSDATA=xyz"
     dy = c.execute("SELECT status, length(cookie_blob) FROM platform_credentials WHERE platform='douyin'"
                    ).fetchone()
     assert dy[0] == "needs_reauth" and dy[1] == 0

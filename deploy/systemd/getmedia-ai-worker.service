@@ -1,0 +1,62 @@
+# 安装位置：/etc/systemd/system/getmedia-ai-worker.service
+#
+# 为什么单独一个进程：一次 AI 重建要跑几分钟到几十分钟，放在 API 进程里会拖死 uvicorn 的
+# 单 worker（服务端约定只跑 1 个 worker），滚动重启还会丢掉半个产物。
+#
+# 这个单元**不内置任何模型客户端**：执行函数由 GETMEDIA_AI_PLUGIN（形如 包.模块:函数）注入。
+# 没配置时的行为是"把队列里的任务标成 failed(ai_unconfigured)"——这是刻意的：
+#   不假装成功、不无限重试、也不让任务永远挂在 pending 让人以为在跑。
+#
+# 与 API 共用同一个数据库和同一个数据目录，所以 User/Group/StateDirectory 必须一致。
+# 不要开多个实例：领取任务用的是 SQLite 的原子 UPDATE，多实例能跑但会放大磁盘占用，
+# 且默认 ai_concurrency=1 的设计意图就是串行。
+[Unit]
+Description=GetMedia AI recreation worker
+After=network-online.target getmedia-api.service
+Wants=network-online.target
+# 刻意不写 PartOf：API 重启（发版）时不该打断一个已经跑了一半的生成任务。
+# 停机脚本里显式 stop 两个单元即可（见 docs/p6-deploy-plan.md）。
+# 生成失败常常是"模型超时"，不是崩溃；连续失败 5 次就停下，等人看，避免空转烧配额。
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=getmedia
+Group=getmedia
+WorkingDirectory=/opt/getmedia/server
+EnvironmentFile=/etc/getmedia/getmedia.env
+EnvironmentFile=-/etc/getmedia/feedback.env
+EnvironmentFile=-/etc/getmedia/credentials.env
+EnvironmentFile=-/etc/getmedia/llm.env
+# --status 打印队列深度后退出，用于排查；常驻模式不带参数。
+ExecStart=/opt/getmedia/venv/bin/python -m getmedia.ai_worker
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+StateDirectory=getmedia getmedia-ledger
+StateDirectoryMode=0700
+
+# 与 API 相同的加固项；另外允许读写 /var/lib/getmedia（产物落盘）。
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadOnlyPaths=/etc/getmedia
+
+# 磁盘水位检查在应用里做（ai_min_free_mb），这里只兜底限制写放大。
+MemoryMax=2G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

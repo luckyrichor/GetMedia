@@ -1,6 +1,6 @@
 """博主输入 → 规范化主页标识。
 
-从 GetAudio 的 ``sharelink`` 里挑出「解析博主主页」需要的部分移植过来：
+从旧音频项目的 ``sharelink`` 里挑出「解析博主主页」需要的部分移植过来：
 只要 Platform / CreatorRef / LinkError / find_urls / expand / resolve_creator /
 parse_creator_input。视频单条解析（ResolvedLink）不在这里——GetMedia 的
 下载仍在手机上做，服务端只负责列表。
