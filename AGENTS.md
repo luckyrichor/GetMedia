@@ -24,6 +24,12 @@ GetMedia 是新的 Android 音视频提取、管理和播放项目，配套账�
 cd /Users/lc/Project/GetMedia
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home
 export ANDROID_HOME=/Users/lc/Library/Android/sdk
+
+# 首次构建前：准备编译期服务器地址（该文件不入库，仓库只有 .example）
+cp android/app-config.properties.example android/app-config.properties
+# 然后编辑 serverBase=https://<地址>/getmedia/api
+# 缺这一步也能编译，但产物连不上服务器，构建日志会警告
+
 sh android/gradlew -p android testDebugUnitTest lintDebug assembleDebug --console=plain
 
 # 后端开发命令；不是本轮已执行验证

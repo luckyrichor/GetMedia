@@ -55,12 +55,26 @@ val appIds: Properties = Properties().apply {
     rootProject.file("app-ids.properties").inputStream().use { load(it) }
 }
 
+// 编译期服务器地址，优先级：-PgetmediaServerBase > 本地 app-config.properties（不入库）> 占位默认值。
+// 仓库只提交 app-config.properties.example；复制成 app-config.properties 后填真实地址即可。
+val placeholderServerBase = "https://example.invalid/getmedia/api"
 val appConfig: Properties = Properties().apply {
-    rootProject.file("app-config.properties").inputStream().use { load(it) }
+    val local = rootProject.file("app-config.properties")
+    if (local.isFile) local.inputStream().use { load(it) }
 }
-val serverBase: String = (providers.gradleProperty("getmediaServerBase").orNull ?: appConfig.getProperty("serverBase")).trim()
+val serverBase: String = (
+    providers.gradleProperty("getmediaServerBase").orNull
+        ?: appConfig.getProperty("serverBase")
+        ?: placeholderServerBase
+    ).trim()
 require(serverBase.startsWith("https://") && !serverBase.endsWith("/")) {
     "serverBase 必须以 https:// 开头且不以 / 结尾：当前值不合法"
+}
+if (serverBase == placeholderServerBase) {
+    logger.warn(
+        "getmedia: serverBase 仍是占位值 $placeholderServerBase，构建产物连不上任何服务器。" +
+            "请在 android/app-config.properties 填真实地址，或加 -PgetmediaServerBase=<地址>。"
+    )
 }
 
 android {

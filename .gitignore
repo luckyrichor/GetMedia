@@ -28,6 +28,8 @@ feedback-images/
 build/
 .gradle/
 local.properties
+# 编译期服务器地址：真实值只放本地，仓库只留 app-config.properties.example
+/android/app-config.properties
 node_modules/
 dist/
 .venv/
