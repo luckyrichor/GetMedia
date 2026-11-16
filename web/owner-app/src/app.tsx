@@ -16,11 +16,19 @@ import { Link, navigate, useRoute } from './router';
 import { Overview, Placeholder, SECTIONS, sectionFor } from './sections';
 import { FeedbackPage } from './pages/feedback';
 import { LibraryPage } from './pages/library';
+import { ExtractPage } from './pages/extract';
+import { CreatorsPage } from './pages/creators';
+import { SchedulesPage } from './pages/schedules';
+import { AgentPage } from './pages/agent';
 
 /** 已经接了真实页面的栏目；其余栏走占位页（列出接口与"还差什么"）。 */
 const PAGES: Record<string, () => JSX.Element> = {
   '/feedback': FeedbackPage,
   '/library': LibraryPage,
+  '/extract': ExtractPage,
+  '/creators': CreatorsPage,
+  '/schedules': SchedulesPage,
+  '/agent': AgentPage,
 };
 
 type Gate =

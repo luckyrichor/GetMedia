@@ -112,6 +112,212 @@ export interface Track {
   has_file: boolean;
 }
 
+// ---------------- 提取（5d） ----------------
+export type Storage = 'metadata' | 'archive' | 'cache';
+/** 批量/定时允许的存储口径：phone 表示"手机上自己下载，服务器只记账"。 */
+export type JobStorage = 'phone' | Storage;
+
+export interface ResolvedMedia {
+  platform: string;
+  video_id: string;
+  title: string;
+  duration_sec: number | null;
+  uploader: string | null;
+  cover_url: string | null;
+  source_url: string | null;
+  estimated_bytes: number;
+}
+
+export type JobState = 'queued' | 'running' | 'done' | 'failed';
+
+export interface ExtractionJob {
+  id: number;
+  status: JobState;
+  media_type: MediaType;
+  storage: string;
+  input: string;
+  platform?: string | null;
+  video_id?: string | null;
+  track_id?: number | null;
+  error_code?: string | null;
+  error_detail?: string | null;
+  created_at: number;
+  started_at?: number | null;
+  finished_at?: number | null;
+}
+
+// ---------------- 博主批量（5d） ----------------
+export type SelectionMode = 'latest_n' | 'date_range' | 'all';
+
+export interface CreatorProfile {
+  platform: string;
+  creator_id: string;
+  name: string;
+  avatar_url: string | null;
+  url: string;
+  total_videos: number | null;
+  follower_count: number | null;
+  signature: string | null;
+}
+
+export interface CreatorVideo {
+  position: number;
+  video_id: string;
+  title: string;
+  source_url: string;
+  cover_url: string | null;
+  duration_sec: number | null;
+  published_at: string | null;
+  is_pinned: boolean;
+  estimated_bytes: number;
+}
+
+export interface CreatorPreview {
+  profile: CreatorProfile;
+  items: CreatorVideo[];
+  total: number | null;
+  has_more: boolean;
+  fetched_at: string;
+  cookie_source: string;
+  mode: string;
+  estimated_bytes: number;
+}
+
+export interface CreatorJob {
+  id: number;
+  platform: string;
+  creator_id: string;
+  creator_name: string;
+  source_url: string;
+  mode: SelectionMode;
+  since_ts: number | null;
+  until_ts: number | null;
+  limit_n: number | null;
+  include_pinned: boolean;
+  storage: string;
+  media_type: MediaType;
+  status: 'pending' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled';
+  pause_reason: string | null;
+  total: number;
+  done: number;
+  failed: number;
+  estimated_bytes: number;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export type ItemState = 'pending' | 'downloading' | 'done' | 'failed' | 'skipped';
+
+export interface CreatorItem {
+  id: number;
+  video_id: string;
+  platform: string;
+  page: number;
+  title: string;
+  duration_sec: number | null;
+  published_at: number | null;
+  is_pinned: boolean;
+  cover_url: string | null;
+  source_url: string;
+  download_state: ItemState;
+  track_id: number | null;
+  error: string | null;
+}
+
+// ---------------- 定时（5d） ----------------
+export interface Schedule {
+  id: number;
+  name: string;
+  platform: string;
+  input: string;
+  mode: SelectionMode;
+  since_ts: number | null;
+  until_ts: number | null;
+  limit_n: number | null;
+  interval_minutes: number;
+  include_pinned: boolean;
+  storage: string;
+  media_type: MediaType;
+  enabled: boolean;
+  next_run: number | null;
+  last_run: number | null;
+  last_status: string | null;
+  last_job_id: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ScheduleRun {
+  id?: number;
+  job_id?: number;
+  status?: string;
+  started_at?: number | null;
+  finished_at?: number | null;
+  [k: string]: unknown;
+}
+
+// ---------------- Agent（5d） ----------------
+export interface AgentStatus {
+  engine: 'model' | 'rules';
+  models: string[];
+  calls_today: number;
+  daily_cap: number;
+  vault_ready: boolean;
+}
+
+export interface Conversation {
+  id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ActionOut {
+  id: string;
+  conversation_id: string;
+  kind: string;
+  platform: string;
+  input_url: string;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  mode: string | null;
+  result: Record<string, unknown> | null;
+  created_at: number;
+  claimed_at: number | null;
+  finished_at: number | null;
+}
+
+export interface AgentMessage {
+  id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  meta: { engine?: string; model?: string; reason?: string; action_id?: string };
+  created_at: number;
+}
+
+export interface ConversationDetail extends Conversation {
+  messages: AgentMessage[];
+  actions: ActionOut[];
+}
+
+export interface Memory {
+  key: string;
+  value: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ChatReply {
+  conversation_id: string;
+  reply: string;
+  created_at: number;
+  engine: string;
+  model: string | null;
+  reason: string | null;
+  action: ActionOut | null;
+}
+
 export const ownerApi = {
   /** 认证探针：匿名与非 owner 在边缘都被回成 404，只有 owner 能拿到 200。 */
   config: () => api.request<OwnerConfig>('GET', '/v2/config/owner'),
@@ -152,6 +358,71 @@ export const ownerApi = {
   dropFile: (id: number) => api.request<Track>('DELETE', `/v2/tracks/${id}/file`),
   deleteTrack: (id: number) =>
     api.request<{ ok: boolean; id: number; deleted: boolean }>('DELETE', `/v2/tracks/${id}`),
+
+  // ---------- 提取（5d） ----------
+  resolve: (text: string, media_type: MediaType) =>
+    api.request<ResolvedMedia>('POST', '/v2/resolve', { text, media_type }),
+  extract: (input: string, media_type: MediaType, storage: Storage) =>
+    api.request<{ id: number; status: JobState }>('POST', '/v2/extract', { input, media_type, storage }),
+  extractionJobs: async (limit = 50): Promise<ExtractionJob[]> =>
+    (await api.request<{ jobs: ExtractionJob[] }>('GET', `/v2/extraction-jobs?limit=${limit}`)).jobs,
+
+  // ---------- 博主批量（5d） ----------
+  creatorLimits: () => api.request<{ max_items: number; max_start: number }>('GET', '/v2/creators/limits'),
+  creatorPreview: (body: {
+    url: string; platform?: string | null; mode: SelectionMode;
+    n?: number | null; since?: string | null; until?: string | null; include_pinned?: boolean;
+  }) => api.request<CreatorPreview>('POST', '/v2/creators/preview', body),
+  createCreatorJob: (body: {
+    url: string; platform?: string | null; mode: SelectionMode; n?: number | null;
+    since?: string | null; until?: string | null; include_pinned?: boolean;
+    storage: JobStorage; media_type: MediaType;
+  }) => api.request<CreatorJob>('POST', '/v2/creators/jobs', body),
+  creatorJobs: async (): Promise<CreatorJob[]> =>
+    (await api.request<{ jobs: CreatorJob[] }>('GET', '/v2/creators/jobs?limit=50')).jobs,
+  creatorJob: (id: number) => api.request<CreatorJob>('GET', `/v2/creators/jobs/${id}`),
+  creatorItems: (id: number, offset = 0, state?: ItemState) => {
+    const st = state ? `&state=${state}` : '';
+    return api.request<{ items: CreatorItem[]; total: number; limit: number; offset: number }>(
+      'GET', `/v2/creators/jobs/${id}/items?limit=100&offset=${offset}${st}`);
+  },
+  pauseJob: (id: number) => api.request<CreatorJob>('POST', `/v2/creators/jobs/${id}/pause`),
+  resumeJob: (id: number) => api.request<CreatorJob>('POST', `/v2/creators/jobs/${id}/resume`),
+  cancelJob: (id: number) => api.request<CreatorJob>('POST', `/v2/creators/jobs/${id}/cancel`),
+  retryJob: (id: number) => api.request<{ job: CreatorJob }>('POST', `/v2/creators/jobs/${id}/retry`),
+
+  // ---------- 定时（5d） ----------
+  schedules: async (): Promise<Schedule[]> =>
+    (await api.request<{ schedules: Schedule[] }>('GET', '/v2/schedules')).schedules,
+  createSchedule: (body: {
+    name: string; platform: string; input: string; mode: SelectionMode; interval_minutes: number;
+    n?: number | null; since?: string | null; until?: string | null;
+    include_pinned?: boolean; storage: JobStorage; media_type: MediaType;
+  }) => api.request<Schedule>('POST', '/v2/schedules', body),
+  patchSchedule: (id: number, body: { enabled?: boolean; interval_minutes?: number; name?: string }) =>
+    api.request<Schedule>('PATCH', `/v2/schedules/${id}`, body),
+  deleteSchedule: (id: number) => api.request<void>('DELETE', `/v2/schedules/${id}`),
+  scheduleRuns: async (id: number): Promise<ScheduleRun[]> =>
+    (await api.request<{ runs: ScheduleRun[] }>('GET', `/v2/schedules/${id}/runs`)).runs,
+  runSchedule: (id: number) => api.request<{ scheduled: boolean }>('POST', `/v2/schedules/${id}/run-once`),
+
+  // ---------- Agent（5d） ----------
+  agentStatus: () => api.request<AgentStatus>('GET', '/v2/agent/status'),
+  conversations: async (): Promise<Conversation[]> =>
+    (await api.request<{ conversations: Conversation[] }>('GET', '/v2/agent/conversations')).conversations,
+  conversation: (id: string) =>
+    api.request<ConversationDetail>('GET', `/v2/agent/conversations/${encodeURIComponent(id)}`),
+  newConversation: (title: string) =>
+    api.request<Conversation>('POST', '/v2/agent/conversations', { title }),
+  dropConversation: (id: string) =>
+    api.request<void>('DELETE', `/v2/agent/conversations/${encodeURIComponent(id)}`),
+  chat: (message: string, conversation_id?: string | null) =>
+    api.request<ChatReply>('POST', '/v2/agent/chat', conversation_id ? { message, conversation_id } : { message }),
+  memories: async (): Promise<Memory[]> =>
+    (await api.request<{ memories: Memory[] }>('GET', '/v2/memories')).memories,
+  putMemory: (key: string, value: string) =>
+    api.request<Memory>('PUT', `/v2/memories/${encodeURIComponent(key)}`, { value }),
+  dropMemory: (key: string) => api.request<void>('DELETE', `/v2/memories/${encodeURIComponent(key)}`),
 };
 
 export type { Me };

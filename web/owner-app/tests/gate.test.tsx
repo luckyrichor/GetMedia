@@ -81,11 +81,11 @@ describe('owner 认证壳', () => {
 
   test('栏目占位页写明"还差什么"与将用的接口', async () => {
     server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ME } });
-    mount('/creators');
-    await until(() => text().includes('博主批量'));
-    expect(text()).toContain('这一栏还没实现');
-    expect(text()).toContain('/v2/creators/preview');
-    expect(text()).toContain('items:import');
+    mount('/platforms');
+    await until(() => text().includes('这一栏还没实现'));
+    expect(text()).toContain('平台授权');
+    expect(text()).toContain('/account/platforms');
+    expect(text()).toContain('扫码');
   });
 
   test('5c 已接入的两栏不再是占位页', async () => {
@@ -103,5 +103,30 @@ describe('owner 认证壳', () => {
     mount('/library');
     await until(() => text().includes('媒体库里还没有内容'));
     expect(text()).not.toContain('这一栏还没实现');
+  });
+
+  test('5d 四栏也都接上了真实页面（只剩 5e/5f 还是占位）', async () => {
+    server({
+      'GET /v2/config/owner': { json: CONFIG },
+      'GET /account/me': { json: ME },
+      'GET /v2/extraction-jobs?limit=50': { json: { jobs: [] } },
+      'GET /v2/creators/jobs?limit=50': { json: { jobs: [] } },
+      'GET /v2/schedules': { json: { schedules: [] } },
+      'GET /v2/agent/status': { json: { engine: 'rules', models: [], calls_today: 0, daily_cap: 200, vault_ready: true } },
+      'GET /v2/agent/conversations': { json: { conversations: [] } },
+      'GET /v2/memories': { json: { memories: [] } },
+    });
+    const expects: [string, string][] = [
+      ['/extract', '还没有提取任务'],
+      ['/creators', '还没有批量任务'],
+      ['/schedules', '还没有定时任务'],
+      ['/agent', '还没有会话'],
+    ];
+    for (const [path, marker] of expects) {
+      cleanup();
+      mount(path);
+      await until(() => text().includes(marker));
+      expect(text()).not.toContain('这一栏还没实现');
+    }
   });
 });
