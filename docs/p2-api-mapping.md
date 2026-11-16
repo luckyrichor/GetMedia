@@ -102,8 +102,8 @@
 | `GET /agent/v2/conversations/{cid}` | 改名 | `GET /v2/agent/conversations/{id}` | |
 | `DELETE /agent/v2/conversations/{cid}` | 改名 | `DELETE /v2/agent/conversations/{id}` | |
 | `POST /agent/v2/chat` | 改名 | `POST /v2/agent/chat` | |
-| `POST /agent/v2/actions/{aid}/claim` | 未实现 | — | 动作闭环，见 `docs/agent-model-plan.md` 方案 B |
-| `POST /agent/v2/actions/{aid}/result` | 未实现 | — | 同上 |
+| `POST /agent/v2/actions/{aid}/claim` | 改名 | `POST /v2/agent/actions/{id}/claim` | 动作闭环（schema v11）；同一会话内由服务端建动作，手机领取 |
+| `POST /agent/v2/actions/{aid}/result` | 改名 | `POST /v2/agent/actions/{id}/result` | 幂等回报：同结果重复提交返回 200，换结果 409 |
 | `GET /v2/memories/{user_id}` | 改名 | `GET /v2/memories` | **去掉 URL 里的 user_id**，统一从会话取（新接口不接收调用方传入的用户标识） |
 | `POST /v2/memories` | 改名 | `PUT /v2/memories/{key}` | 幂等 upsert |
 | `PUT /v2/memories/{user_id}/{memory_id}` | 改名 | `PUT /v2/memories/{key}` | 改按 key 定位 |
@@ -172,26 +172,26 @@
 若你希望旧包装上新服务后还能用 Agent 页，可加 3 条别名（`/agent/v2/conversations`、`/agent/v2/chat`、
 `/v2/memories/{user_id}` → 内部转 `/v2/agent/*` 并从会话取 user_id）。这是 1 个 include 的事，等你一句话。
 
-### 9.1 三条"未实现"逐条说明（2026-11-16 用户问）
+### 9.1 原先三条"未实现"的处理结果
 
-| 旧路由 | 为什么当时没做 | 现在要不要补 | 补的话落到哪 |
-|---|---|---|---|
-| `POST /agent/v2/actions/{aid}/claim` | P2 的 Agent 只有确定性规则应答，**没有任何"动作"可领**；先做一条只能返回 404/空的接口是假实现 | **要补** | Agent 方案 B（已定）：新路径 `POST /v2/agent/actions/{id}/claim`，配 `agent_actions` 表（schema v11）。旧路径不改名兼容，P4 客户端直接调新路径 |
-| `POST /agent/v2/actions/{aid}/result` | 同上：没有 claim 就没有 result 的状态机（`claimed → done/failed`、重复 claim 409） | **要补** | 同上，`POST /v2/agent/actions/{id}/result`；前端只能回传 `source=device_reported` |
-| `GET /v2/maintenance/duplicates` | 旧的"查重复"是给旧音频库做历史脏数据清理用的；新库在写入时就靠 `(user_id, platform, video_id, page)` 唯一键挡住重复，**正常路径下不会产生重复**，这个查询接口没有消费者 | **不补** | —（若真出现重复，先用 `GET /v2/maintenance/storage` + 唯一键冲突日志定位，不为此加一个只读接口） |
+| 旧路由 | 当时的理由 | 现在 |
+|---|---|---|
+| `POST /agent/v2/actions/{aid}/claim` | 当时 Agent 只有规则应答，没有"动作"可领 | **已实现**：`POST /v2/agent/actions/{id}/claim` + `agent_actions` 表（schema v11） |
+| `POST /agent/v2/actions/{aid}/result` | 没有 claim 就没有 `claimed → done/failed` 的状态机 | **已实现**：`POST /v2/agent/actions/{id}/result`，同结果幂等、换结果 409 |
+| `GET /v2/maintenance/duplicates` | 旧的"查重复"是给旧音频库做历史脏数据清理用的；新库写入时就靠 `(user_id, platform, video_id, page)` 唯一键挡住重复，没有消费者 | **不做**（若真出现重复，用 `GET /v2/maintenance/storage` + 唯一键冲突日志定位） |
 
-结论：3 条里 **2 条跟着 Agent B 一起补**（不是"遗留欠账"，是方案 B 的一部分），1 条确认不做。
-补完后本表"未实现"应只剩 0 条，届时在 P4/P5 的验收里更新这张表。
+结论：2 条随 Agent 方案 B 补齐，1 条确认不做；本表"未实现"只剩 1 条。
+动作由**服务端**按消息里的作品链接生成（不由模型自由发挥），模型挂了也不影响这条链路。
 
 ## 10. 汇总
 
 | 处置 | 条数 | 明细 |
 |---|---|---|
 | 保留（路径与语义不变） | **41** | 账号 4、媒体库 9（含 `/v2/resolve`）、批量 7、授权 9、上报 3、AI 重建 12、`/health` 1 |
-| 改名 / 合并 | **24** | 媒体流统一 2（audio/video→media）、定时 2、Agent 会话与聊天 4、偏好记忆 4、`/v2/platforms/*` 6、`/login/*` 5、`POST /account/platform-auth/image` 1 |
+| 改名 / 合并 | **26** | 媒体流统一 2（audio/video→media）、定时 2、Agent 会话与聊天 4、Agent 动作 2、偏好记忆 4、`/v2/platforms/*` 6、`/login/*` 5、`POST /account/platform-auth/image` 1 |
 | 丢弃 | **17** | 旧扁平 `/extract`、`/tracks`、`/sync`、`/audio/{id}`、`/video/{id}`（5）；旧扁平 `/agent/*` 5；`/credentials/*` 2；`/migration/claim` 1；音频维护 3；`/v2/platforms/qr/{sid}/image` 1 |
-| 未实现 | **3 → 1** | `claim`、`result` 两条随 Agent 方案 B 补（§9.1）；`GET /v2/maintenance/duplicates` 确认不做 |
-| **旧合计** | **85** | 41 + 24 + 17 + 3 = 85，与并集一致 |
+| 未实现 | **1** | `claim`、`result` 已随 Agent 方案 B 实现（§9.1）；`GET /v2/maintenance/duplicates` 确认不做 |
+| **旧合计** | **85** | 41 + 26 + 17 + 1 = 85，与并集一致 |
 
 新增（旧版完全没有）：
 
@@ -207,5 +207,5 @@
 | 配置 | 1 | `GET /v2/config/owner` |
 
 **新服务合计：67 条 owner 路由 + 18 条免费路由 = 85 条**（与旧并集的数量巧合一致，但不是一一对应——
-旧侧 41 条保留、24 条换路径、17 条被丢弃、3 条未实现，新侧有 32 条是旧版没有的）。
+旧侧 41 条保留、26 条换路径、17 条被丢弃、1 条未实现，新侧另有若干条是旧版没有的）。
 

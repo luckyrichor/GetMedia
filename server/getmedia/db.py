@@ -404,6 +404,32 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
             finished_at INTEGER)""",
         "CREATE INDEX IF NOT EXISTS idx_recreation_runs_queue ON recreation_runs(status, id)",
     ]),
+    # v11 提取 Agent 的动作闭环（P2h）：模型负责"说"，动作由服务端生成、手机领取并回报。
+    # 单独建表而不是塞进 messages：动作有状态机（pending→running→done/failed）和一次性语义，
+    # 与消息的"追加不改"不同；放在 agent_actions 里可以用唯一约束挡住重复领取。
+    (11, [
+        """CREATE TABLE IF NOT EXISTS agent_actions(
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            conversation_id TEXT NOT NULL REFERENCES agent_conversations(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL DEFAULT 'extract',
+            platform TEXT NOT NULL DEFAULT '',
+            input_url TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            mode TEXT,
+            result_json TEXT,
+            created_at INTEGER NOT NULL,
+            claimed_at INTEGER,
+            finished_at INTEGER)""",
+        "CREATE INDEX IF NOT EXISTS idx_agent_actions_conv ON agent_actions(conversation_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_agent_actions_user ON agent_actions(user_id, status)",
+        # 每日调用计数：按 (用户, 日期) 自增，用来实现"每账号每日 N 次"的上限，不需要扫消息表
+        """CREATE TABLE IF NOT EXISTS agent_usage(
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            day TEXT NOT NULL,
+            calls INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY(user_id, day))""",
+    ]),
 ]
 
 

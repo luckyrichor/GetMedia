@@ -78,10 +78,16 @@
 ## 5. P2d Agent
 
 会话 / 消息 / 偏好记忆三张表；`/v2/agent/chat` 落库后再生成回复。
-**当前没有接模型**：默认用确定性规则应答（批量、定时、库统计、授权、失败上报五类意图 + 兜底说明），响应里标 `meta.engine="rules"`，不假装是模型。
-`brain` 是可注入的 callable，接模型时只替换这一处。
+**模型是可选件**：配了 `GETMEDIA_LLM_API_KEY` + `GETMEDIA_LLM_MODELS` 才走模型（Ark，OpenAI 兼容，
+多模型 fallback、每日 200 次上限、超限回落规则），否则用确定性规则应答（批量、定时、库统计、授权、
+失败上报五类意图 + 兜底说明）。两种情况响应里都如实标 `engine`（`model` / `rules`）与原因，不假装。
+`brain` 仍是可注入的 callable，替换这一处就能换模型。
 
-**测试**：`tests/test_agent.py` 5 项。
+**动作闭环（P2h，schema v11）**：消息里出现可解析的作品链接 → 服务端建一条 `pending` 动作；
+手机 `POST /v2/agent/actions/{id}/claim` 领取，`/result` 回报（同结果幂等、换结果 409、未领取回报 409）。
+动作由服务端按链接生成，**不依赖模型**——模型挂了这条链路照常走。
+
+**测试**：`tests/test_agent.py` 5 项 + `tests/test_agent_actions.py` 19 项（含假上游的多模型降级、配额、凭据护栏）。
 
 ## 6. P2e 平台授权
 
@@ -139,20 +145,21 @@
 | P2e 平台授权 | 9 | `platform_credentials`、`platform_auth_sessions`、`account_platform_bindings` | v9 | `test_platform_auth.py` 6 项 | 完成 |
 | P2f 失败上报 | 4 | 复用 `extraction_failures` | — | `test_diagnostics.py` 3 项 | 完成 |
 | P2g AI 重建 | 12 | `recreations`、`recreation_runs` | v10 | `test_recreations.py` 9 项 | 完成，默认关闭 |
+| P2h Agent 模型 + 动作 | 5 | `agent_actions`、`agent_usage` | v11 | `test_agent_actions.py` 18 项 | 完成；无密钥时纯规则 |
 
-合计 **67 条 owner 路由**、P2 测试 **49 项**；加上 P1 与工具测试，当前 **261 passed / 38 skipped**（skip 是需要 nginx、
-真实网络或模型密钥的原有用例）。启动自检未防护路由 **0**，权限矩阵违反 **0**。
+合计 **71 条 owner 路由**、P2 测试 **68 项**；全仓当前 **302 passed / 50 skipped**（skip 是需要 nginx 的原有用例，
+其中 41 项已在服务器上跑过）。启动自检未防护路由 **0**，权限矩阵违反 **0**。
 
-### 11.2 目标 schema 版本 = v10
+### 11.2 目标 schema 版本 = v11
 
-- 目标库由服务端 `server/getmedia/db.py` 的 `MIGRATIONS` 建到 **v10**；版本号记在 `schema_version` 表的最大值。
-- `tools/migrate_legacy.py` 顶部有 `TARGET_SCHEMA = 10`，`apply` / `verify` 打开目标库后先校验：
-  版本不等于 10 直接 `错误：目标库 schema v9，本工具要求 v10…`（退出码 2），**不会写一半**。
+- 目标库由服务端 `server/getmedia/db.py` 的 `MIGRATIONS` 建到 **v11**；版本号记在 `schema_version` 表的最大值。
+- `tools/migrate_legacy.py` 顶部有 `TARGET_SCHEMA = 11`，`apply` / `verify` 打开目标库后先校验：
+  版本不等于 11 直接 `错误：目标库 schema v10，本工具要求 v11…`（退出码 2），**不会写一半**。
 - `plan` 不校验（它只读旧库），所以可以在目标库还没建好时先盘点。
-- **P2 之后没有新的表结构变动**：v5–v10 是 P2 期间一次做齐的，迁移工具的字段映射（`tracks.media_type/storage/bytes/sha256`、
-  `extract_jobs` 状态、`platform_credentials.cookie_blob`、`account_platform_bindings`、`recreations`）都是按 v10 写的，
-  没有需要补迁的 P2 增量。
-- 以后若再加迁移（v11…），**必须同时改 `TARGET_SCHEMA`**，否则 `apply` 会拒绝在 v11 库上写入——这是故意的。
+- v11 只加了两张 Agent 动作表（`agent_actions`、`agent_usage`），**旧数据没有任何字段变动**，迁移工具的字段映射
+  （`tracks.media_type/storage/bytes/sha256`、`extract_jobs` 状态、`platform_credentials.cookie_blob`、
+  `account_platform_bindings`、`recreations`）不受影响，不需要补迁。
+- 以后若再加迁移（v12…），**必须同时改 `TARGET_SCHEMA`**，否则 `apply` 会拒绝在新库上写入——这是故意的。
 
 ### 11.3 尚未完成、但不属于 P2 的
 

@@ -324,8 +324,14 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
 
     # Agent（P2d）：没有模型时用确定性规则应答
     from .agent_api import register as register_agent_routes
+    # 模型是可选件：没有 GETMEDIA_LLM_API_KEY / GETMEDIA_LLM_MODELS 就完全不构造客户端，
+    # Agent 落回确定性规则，也不会发任何外网请求（status 会如实说 engine=rules）。
+    agent_model = None
+    if settings.llm_api_key and settings.llm_models:
+        from .agent_model import ModelBrain
+        agent_model = ModelBrain(settings, engine, clock)
     register_agent_routes(app, require_tier("owner"), engine, clock, media=media_store,
-                          creator_jobs=creator_jobs)
+                          creator_jobs=creator_jobs, brain=agent_model, model=agent_model)
 
     # 平台授权（P2e）：Cookie 加密入库 + Netscape 文件供平台适配器使用
     from .platform_auth_api import register as register_platform_auth

@@ -101,6 +101,13 @@ class Settings:
     douyin_browser_timeout: float = 30.0
     douyin_browser_max_scrolls: int = 6
     douyin_browser_channel: str = ""
+    # 提取 Agent 的模型（P2h，方案 B）：没有 api_key 时一律走确定性规则
+    llm_api_key: str = ""
+    llm_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    llm_models: tuple = ()
+    llm_timeout: float = 35.0
+    llm_max_tokens: int = 700
+    llm_daily_cap: int = 200
     # AI 视频重建（P2g）：默认关闭，避免没有模型密钥时误以为可用
     ai_enabled: bool = False
     ai_max_upload_bytes: int = 200 * 1024**2
@@ -200,6 +207,12 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         argon_memory_kib=argon_mem,
         argon_iterations=argon_iter,
         creator_max_items=_int_env(env, "GETMEDIA_CREATOR_MAX_ITEMS", 50, 1, 50),
+        llm_api_key=env.get("GETMEDIA_LLM_API_KEY", ""),
+        llm_base_url=env.get("GETMEDIA_LLM_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
+        llm_models=tuple(m.strip() for m in env.get("GETMEDIA_LLM_MODELS", "").split(",") if m.strip()),
+        llm_timeout=float(_int_env(env, "GETMEDIA_LLM_TIMEOUT", 35, 5, 300)),
+        llm_max_tokens=_int_env(env, "GETMEDIA_LLM_MAX_TOKENS", 700, 64, 8192),
+        llm_daily_cap=_int_env(env, "GETMEDIA_LLM_DAILY_CAP", 200, 0, 100000),
         douyin_browser=_bool_env(env, "GETMEDIA_DOUYIN_BROWSER", False),
         ai_enabled=_bool_env(env, "GETMEDIA_AI_ENABLED", False),
         douyin_browser_headless=_bool_env(env, "GETMEDIA_DOUYIN_BROWSER_HEADLESS", True),

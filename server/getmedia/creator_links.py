@@ -99,6 +99,14 @@ def _is_short(url: str) -> bool:
     return _host_of(url) in ("b23.tv", "bili2233.cn", "v.douyin.com", "v.iesdouyin.com")
 
 
+def platform_of(url: str) -> Platform | None:
+    """公开版：判断链接属于哪个平台，不认识返回 ``None``（不抛异常）。"""
+    try:
+        return _platform_of(url)
+    except Exception:  # noqa: BLE001 - 畸形 URL 不该让调用方 500
+        return None
+
+
 def expand(url: str, *, client: httpx.Client | None = None, timeout: float = 15.0, max_redirects: int = 5) -> str:
     """跟随 302 把短链展开。用 GET 而不是 HEAD：b23.tv 对 HEAD 有时不给 Location。"""
     owns = client is None

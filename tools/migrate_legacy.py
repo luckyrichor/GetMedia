@@ -42,7 +42,7 @@ BATCH = 500
 # P2 的表（v6 creator_jobs/creator_items、v7 schedules/schedule_runs、v8 agent_*、
 # v9 platform_credentials/account_platform_bindings、v10 recreations）都落在这套版本里，
 # 所以 P2 完成后目标库就是这个版本；表结构再变时必须同步改这里，否则 apply 会拒绝写库。
-TARGET_SCHEMA = 10
+TARGET_SCHEMA = 11
 STATUS_MAP = {"pending": "queued", "queued": "queued", "running": "running",
               "done": "done", "failed": "failed"}
 # 旧库里明确要丢弃的测试残留（plan.md §9.4-4）

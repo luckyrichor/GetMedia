@@ -2,12 +2,13 @@
 
 最后更新：2026-11-16
 
-## 2026-11-16 阶段进度（P1–P5b）
+## 2026-11-16 阶段进度（P1–P5b + P2h）
 
 | 阶段 | 状态 | 证据 |
 |---|---|---|
 | P1 双风味与 owner 模块拆分 | 完成（未提交本轮之外的改动） | `docs/p1-evidence-2026-11-16.md` |
 | P2 服务端功能合并（媒体/批量/定时/Agent/授权/上报/AI） | 完成 | `docs/p2-report.md`、`docs/p2-api-mapping.md`、`docs/p2-acceptance-evidence.md` |
+| P2h Agent 接模型（方案 B）+ 动作闭环 | 服务端完成（schema v11）；**未部署、未用真实密钥调用** | `docs/agent-model-plan.md` §0 |
 | P3 旧库迁移工具 | 工具与演练完成；**真实迁移等 P2 部署后、用户确认窗口** | `docs/p3-report.md` |
 | P4a UI 方案 | 完成，等用户确认 5 个决策后才写 UI | `docs/ui-plan.md` |
 | P5a web-public 接新服务 | 完成 | `docs/p5-web-report.md` |

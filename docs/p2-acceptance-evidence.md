@@ -10,7 +10,7 @@
 | Python | 3.13.12（`.venv`，`pip install -r server/requirements.txt`） |
 | FastAPI | 0.141.1 |
 | 仓库 | `wp6-free` @ `341e95f` + 本轮改动（未提交） |
-| 测试总数 | **283 passed / 50 skipped / 0 failed**（本机）；nginx 相关 41 项在服务器上 **41 passed** |
+| 测试总数 | **302 passed / 50 skipped / 0 failed**（本机）；nginx 相关 41 项在服务器上 **41 passed** |
 
 > `50 skipped` 全部是"本机没有 nginx 可执行文件"（`test_deploy_nginx` 41 项 + `test_deploy_templates` 9 项），
 > 不是功能未实现。这 41 项**已在服务器上真实跑过**（真实 nginx 1.24 + 桩上游）：`41 passed in 22.28s`，
@@ -21,7 +21,7 @@
 
 ```
 $ .venv/bin/python -m pytest -q --basetemp=.run-tmp/pt12
-283 passed, 50 skipped, 1 warning in 21.06s
+302 passed, 50 skipped, 1 warning in 39.78s
 ```
 
 按模块：
@@ -30,6 +30,7 @@ $ .venv/bin/python -m pytest -q --basetemp=.run-tmp/pt12
 |---|---|---|
 | `server.tests.test_accounts` | 40 | 0 |
 | `server.tests.test_agent` | 5 | 0 |
+| `server.tests.test_agent_actions` | **19** | 0 |
 | `server.tests.test_creator_api` | 11 | 0 |
 | `server.tests.test_creator_jobs` | 10 | 0 |
 | `server.tests.test_creator_links` | 27 | 0 |
@@ -52,9 +53,9 @@ $ .venv/bin/python -m pytest -q --basetemp=.run-tmp/pt12
 | `tools.tests.test_migrate_legacy` | 8 | 0 |
 | `tools.tests.test_scan_forbidden` | 7 | 0 |
 | `tools.tests.test_scan_leaks` | 12 | 0 |
-| **合计** | **283** | **50** |
+| **合计** | **302** | **50** |
 
-P2 新增模块合计 **49 项**（media 11 + creator_jobs 10 + schedules 5 + agent 5 + platform_auth 6 + diagnostics 3 + recreations 9）；
+P2 新增模块合计 **68 项**（media 11 + creator_jobs 10 + schedules 5 + agent 5 + agent_actions 19 + platform_auth 6 + diagnostics 3 + recreations 9）；
 P3 的迁移与凭据合并 **15 项**（`test_migrate_legacy` 8 + `test_credential_merge` 7）；
 P6 的部署模板与 owner 通道 **8 项**（`test_deploy_templates`，含 owner 静态页断言）；
 边缘行为 **41 项**（`test_deploy_nginx`，真实 nginx 跑，含本轮新增的匿名/free 一律 404 共 12 项）。
@@ -68,7 +69,7 @@ $ .venv/bin/python tools/permission_matrix.py
 
 ```
 权限矩阵（服务端内部路径；对外为 /getmedia/api 前缀）
-owner 路由 67 条；免费白名单 18 条；启动自检未防护路由 0 条
+owner 路由 71 条；免费白名单 18 条；启动自检未防护路由 0 条
 
 METHOD  PATH                                                     匿名   FREE  OWNER  判定
 --------------------------------------------------------------------------------------------
@@ -156,7 +157,7 @@ POST    /v2/tracks/{track_id}/restore                           401    403    40
 | 媒体库 | 四态存储；配额拒绝先于写盘；`/v2/media/{id}` 手写 Range → 206 + `Content-Range`，越界 416；缓存按 TTL 过期；`/v2/sync` 增量含墓碑（`test_media` 11 项） |
 | 博主批量 | `latest_n` 精确截断不多取一页；`date_range` 按北京时间、本页最旧早于 `since` 即停；分段续跑不重复（唯一键）；置顶只筛不插队；`items:import` 去重（`test_creator_jobs` 10 项） |
 | 定时 | `interval_minutes` 边界 15–10080；`run-once` 不打乱节奏；暂停后 `next_run` 不漂移（`test_schedules` 5 项） |
-| Agent | 会话归属校验（别人的会话 404）；空消息/超长拒绝；无模型时 `meta.engine="rules"`（`test_agent` 5 项） |
+| Agent | 会话归属校验（别人的会话 404）；空消息/超长拒绝；无模型时 `meta.engine="rules"`（`test_agent` 5 项）；动作生成/领取/幂等/隔离、状态口径、凭据护栏、模型降级与配额（`test_agent_actions` 19 项） |
 | 平台授权 | 授权会话 10 分钟过期；Cookie 只存密文、响应不回显；未配 `GETMEDIA_CRED_KEY` → 503 而非明文降级；抖音回调未配置 → 501（`test_platform_auth` 6 项） |
 | 失败上报 | 字段长度裁剪；不接受 Cookie/直链字段（`test_diagnostics` 3 项） |
 | AI 重建 | 能力开关；上传超限 413；未配置 plugin → `ai_unconfigured` 而非假成功；卡死 `running` 重置（`test_recreations` 9 项） |
@@ -172,7 +173,7 @@ python3.13 -m venv .venv && .venv/bin/pip install -r server/requirements.txt pyt
 # 全量测试（沙箱必须给 --basetemp）
 .venv/bin/python -m pytest -q --basetemp=.run-tmp/pt
 
-# 权限矩阵（67 × 3）
+# 权限矩阵（71 × 3）
 .venv/bin/python tools/permission_matrix.py
 
 # 泄露扫描（产物与日志里不得出现密钥/路径）

@@ -7,7 +7,25 @@
 > **已定（2026-11-16，用户决定）**：接 **方案 B（模型 + 动作闭环）**，供应商沿用**火山方舟 Ark**，
 > Agent 每账号每日上限 **200 次**（超限回落规则应答）。密钥由用户在服务器上自行拷贝进
 > `/etc/getmedia/llm.env`；**实施时不读取旧服务的 `.env`、`credentials.env` 或任何旧配置**。
-> 代码尚未实施，落地顺序见 §3，密钥变量名见 §5。
+
+## 0. 实施状态（2026-11-16 当晚完成）
+
+代码已落地，**未部署、未用真实密钥跑过任何一次调用**（测试全部用假上游）。
+
+| 步 | 落地位置 | 状态 |
+|---|---|---|
+| 1 模型客户端（多模型 fallback、超时、非 200 换下一个、全失败回落规则） | `server/getmedia/agent_model.py` | 完成 |
+| 2 凭据护栏：消息里出现 `Bearer`/`api_key=`/`Cookie:`/`SESSDATA=`/`bili_jct=` → 400，且不写库、不发外网 | `guard_secrets()`（同上） | 完成 |
+| 3 每日次数上限（先占额度再调用，失败也计数，防重试风暴） | `agent_usage` 表 + `_take_quota()` | 完成 |
+| 4 状态接口 `GET /v2/agent/status` → `{engine, models, calls_today, daily_cap, vault_ready}` | `agent_api.py` | 完成 |
+| 5 动作闭环：`agent_actions` 表（schema v11）、`GET /v2/agent/actions`、`POST /v2/agent/actions/{id}/claim|result` | `db.py` v11 + `agent.py` + `agent_api.py` | 完成 |
+| 6 动作由**服务端**按消息里的作品链接生成（模型不参与决定做什么） | `AgentService._maybe_action()` | 完成 |
+
+测试：`server/tests/test_agent_actions.py` **19 项**（动作生成/领取/幂等/隔离、状态口径、凭据护栏、
+假上游的多模型降级、全失败、配额耗尽）。日志只有模型名与异常类型，**不记 prompt 与响应原文**。
+
+接通方式：把 Key 与模型名写进 `/etc/getmedia/llm.env`（键名见 §5）→ `systemctl restart getmedia-api` →
+`GET /v2/agent/status` 里 `engine` 从 `rules` 变成 `model` 即生效。
 
 ---
 
@@ -170,7 +188,7 @@ def make_brain(cfg, stats_provider):
 |---|---|---|
 | `GETMEDIA_LLM_API_KEY` | 是 | Ark 的 API Key。留空/删掉 → 纯规则应答，不发外网请求 |
 | `GETMEDIA_LLM_BASE_URL` | 否 | 接口地址，默认火山方舟北京区。这是**地址不是密钥**；换供应商改这里，须保持 `/chat/completions` 形状 |
-| `GETMEDIA_LLM_MODELS` | 否 | 模型名/推理接入点 ID，逗号分隔，按顺序 fallback；留空用内置默认 |
+| `GETMEDIA_LLM_MODELS` | 是 | 模型名/推理接入点 ID，逗号分隔，按顺序 fallback。与 Key 同填；缺任一项都视为未配置 → 纯规则应答 |
 | `GETMEDIA_LLM_TIMEOUT` | 否 | 单次调用超时（秒），默认 35 |
 | `GETMEDIA_LLM_MAX_TOKENS` | 否 | 最大输出 token，默认 700 |
 | `GETMEDIA_LLM_DAILY_CAP` | 否 | 每账号每日调用上限，默认 200 |

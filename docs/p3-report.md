@@ -17,8 +17,8 @@
 
 固定约束：旧库一律 `mode=ro` 打开；`apply` 不给 `--map` 直接退出；迁移阶段**不删除任何源文件**（`--files copy` 复制到新根，`--files skip` 只写库）。
 
-**目标 schema 版本**：`TARGET_SCHEMA = 10`（= `server/getmedia/db.py` 的 `MIGRATIONS` 最新版本，含 P2 的 v5–v10）。
-`apply` / `verify` 打开目标库后先校验 `schema_version` 最大值，不等于 10 直接报错退出（码 2），避免在旧表结构上写一半。
+**目标 schema 版本**：`TARGET_SCHEMA = 11`（= `server/getmedia/db.py` 的 `MIGRATIONS` 最新版本，含 P2 的 v5–v11）。
+`apply` / `verify` 打开目标库后先校验 `schema_version` 最大值，不等于 11 直接报错退出（码 2），避免在旧表结构上写一半。
 
 测试：`tools/tests/test_migrate_legacy.py`，**8 项通过**，覆盖跨库重复、已删除标记、孤儿文件、凭据重加密、解不开降级、测试残留丢弃、幂等、回滚、无 map 拒绝、未知目标用户拒绝、目标 schema 版本不匹配拒绝、日志不含 Cookie。
 
