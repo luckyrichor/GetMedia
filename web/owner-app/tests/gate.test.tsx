@@ -81,11 +81,11 @@ describe('owner 认证壳', () => {
 
   test('栏目占位页写明"还差什么"与将用的接口', async () => {
     server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ME } });
-    mount('/platforms');
+    mount('/ai');
     await until(() => text().includes('这一栏还没实现'));
-    expect(text()).toContain('平台授权');
-    expect(text()).toContain('/account/platforms');
-    expect(text()).toContain('扫码');
+    expect(text()).toContain('AI 视频');
+    expect(text()).toContain('/v2/recreations');
+    expect(text()).toContain('GETMEDIA_AI_ENABLED');
   });
 
   test('5c 已接入的两栏不再是占位页', async () => {
@@ -105,7 +105,7 @@ describe('owner 认证壳', () => {
     expect(text()).not.toContain('这一栏还没实现');
   });
 
-  test('5d 四栏也都接上了真实页面（只剩 5e/5f 还是占位）', async () => {
+  test('5d/5e 六栏都接上了真实页面（只剩 5f 还是占位）', async () => {
     server({
       'GET /v2/config/owner': { json: CONFIG },
       'GET /account/me': { json: ME },
@@ -115,12 +115,18 @@ describe('owner 认证壳', () => {
       'GET /v2/agent/status': { json: { engine: 'rules', models: [], calls_today: 0, daily_cap: 200, vault_ready: true } },
       'GET /v2/agent/conversations': { json: { conversations: [] } },
       'GET /v2/memories': { json: { memories: [] } },
+      'GET /account/platforms': { json: { platforms: [{ platform: 'bilibili', name: '哔哩哔哩', methods: ['cookie'], hint: '', oauth: 'unconfigured' }], oauth_configured: false } },
+      'GET /account/platform-bindings': { json: { bindings: [], credentials: [] } },
+      'GET /v2/maintenance/storage': { json: { by_storage: {}, quota: { archive: 1, cache: 1 }, used: { archive: 0, cache: 0 } } },
+      'GET /v2/diagnostics/extractions?limit=50': { json: { reports: [] } },
     });
     const expects: [string, string][] = [
       ['/extract', '还没有提取任务'],
       ['/creators', '还没有批量任务'],
       ['/schedules', '还没有定时任务'],
       ['/agent', '还没有会话'],
+      ['/platforms', '哔哩哔哩'],
+      ['/maintenance', '提取失败上报'],
     ];
     for (const [path, marker] of expects) {
       cleanup();

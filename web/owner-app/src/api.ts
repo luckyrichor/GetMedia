@@ -318,6 +318,60 @@ export interface ChatReply {
   action: ActionOut | null;
 }
 
+// ---------------- 平台授权（5e） ----------------
+export interface PlatformInfo {
+  platform: string;
+  name: string;
+  methods: string[];
+  hint: string;
+  oauth: string;
+}
+
+export interface Binding {
+  platform: string;
+  bound_at: number;
+  source: string;
+  status: string;
+  label: string | null;
+  updated_at: number | null;
+}
+
+/** 只有状态与数量，没有 Cookie 内容——服务端本来就不返回。 */
+export interface CredentialState {
+  platform: string;
+  status: string;
+  label: string;
+  updated_at: number;
+  decryptable: boolean;
+}
+
+export interface AuthSession {
+  session_id: string;
+  platform: string;
+  method: string;
+  status: string;
+  expires_at: number;
+}
+
+// ---------------- 库维护（5e） ----------------
+export interface StorageReport {
+  by_storage: Record<string, { tracks: number; bytes: number }>;
+  quota: { archive: number; cache: number };
+  used: { archive: number; cache: number };
+}
+
+export interface DiagReport {
+  id: number;
+  platform: string;
+  video_id: string;
+  track_id: number | null;
+  stage: string;
+  error_code: string;
+  detail: string;
+  client_version: string;
+  created_at: number;
+}
+
 export const ownerApi = {
   /** 认证探针：匿名与非 owner 在边缘都被回成 404，只有 owner 能拿到 200。 */
   config: () => api.request<OwnerConfig>('GET', '/v2/config/owner'),
@@ -423,6 +477,31 @@ export const ownerApi = {
   putMemory: (key: string, value: string) =>
     api.request<Memory>('PUT', `/v2/memories/${encodeURIComponent(key)}`, { value }),
   dropMemory: (key: string) => api.request<void>('DELETE', `/v2/memories/${encodeURIComponent(key)}`),
+
+  // ---------- 平台授权（5e） ----------
+  // 这里经手的只有"状态"和"会话号"；Cookie 文本只在提交那一刻穿过内存，不落地、不回显。
+  platforms: () =>
+    api.request<{ platforms: PlatformInfo[]; oauth_configured: boolean }>('GET', '/account/platforms'),
+  bindings: () =>
+    api.request<{ bindings: Binding[]; credentials: CredentialState[] }>('GET', '/account/platform-bindings'),
+  startAuth: (platform: string, method: 'webview' | 'cookie') =>
+    api.request<AuthSession>('POST', '/account/platform-auth/start', { platform, method }),
+  authStatus: (session_id: string) =>
+    api.request<AuthSession>('POST', '/account/platform-auth/status', { session_id }),
+  submitCookie: (session_id: string, cookie: string) =>
+    api.request<{ platform: string; status: string }>('POST', '/account/platform-auth/cookie', { session_id, cookie }),
+  cancelAuth: (session_id: string) =>
+    api.request<{ session_id: string; status: string }>('POST', '/account/platform-auth/cancel', { session_id }),
+  unbind: (platform: string) =>
+    api.request<{ platform: string; unbound: boolean }>(
+      'POST', `/account/platform-bindings/${encodeURIComponent(platform)}/unbind`),
+
+  // ---------- 库维护（5e） ----------
+  storage: () => api.request<StorageReport>('GET', '/v2/maintenance/storage'),
+  pruneCache: () => api.request<{ rows: number; bytes: number }>('POST', '/v2/maintenance/prune-cache'),
+  purgeOrphans: () => api.request<{ removed: number }>('POST', '/v2/maintenance/orphans'),
+  diagnostics: async (limit = 50): Promise<DiagReport[]> =>
+    (await api.request<{ reports: DiagReport[] }>('GET', `/v2/diagnostics/extractions?limit=${limit}`)).reports,
 };
 
 export type { Me };

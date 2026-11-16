@@ -296,6 +296,13 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   .result-body .cover { width: 100%; height: auto; }
 }
 
+/* ---- 5e：占用条 ---- */
+.bar {
+  height: 6px; border-radius: 999px; background: var(--bg);
+  border: 1px solid var(--line); overflow: hidden; margin: 6px 0 2px;
+}
+.bar > i { display: block; height: 100%; background: var(--accent); }
+
 @media (max-width: 760px) {
   .layout { grid-template-columns: 1fr; }
   .side { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); position: sticky; top: 49px; z-index: 4; }

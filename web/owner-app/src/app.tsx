@@ -20,6 +20,8 @@ import { ExtractPage } from './pages/extract';
 import { CreatorsPage } from './pages/creators';
 import { SchedulesPage } from './pages/schedules';
 import { AgentPage } from './pages/agent';
+import { PlatformsPage } from './pages/platforms';
+import { MaintenancePage } from './pages/maintenance';
 
 /** 已经接了真实页面的栏目；其余栏走占位页（列出接口与"还差什么"）。 */
 const PAGES: Record<string, () => JSX.Element> = {
@@ -29,6 +31,8 @@ const PAGES: Record<string, () => JSX.Element> = {
   '/creators': CreatorsPage,
   '/schedules': SchedulesPage,
   '/agent': AgentPage,
+  '/platforms': PlatformsPage,
+  '/maintenance': MaintenancePage,
 };
 
 type Gate =
