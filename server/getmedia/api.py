@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .alerts import AlertSink, MailAlertSink
 from .ops import Ops
 from .config import Settings
+from .credentials import CredentialVault
 from .db import make_engine, migrate
 from .errors import ApiError
 from .feedback import FeedbackService, MAX_IMAGE_BYTES
@@ -110,7 +111,9 @@ def client_ip(request: Request, trusted: tuple[str, ...]) -> str:
     return peer
 
 
-def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None = None, start_workers: bool = False) -> FastAPI:
+def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None = None,
+               start_workers: bool = False, media_resolver=None, creator_lister=None,
+               creator_resolver=None, creator_cookies=None, creator_pinned=None) -> FastAPI:
     engine = make_engine(settings.database_path)
     alerts = alerts or MailAlertSink(engine, settings, clock)
     migrate(engine, settings.database_path, settings.backup_dir, clock())
@@ -120,12 +123,14 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     runtime = RuntimeStore(settings.runtime_file)
     release = ReleaseStore(settings.release_file)
     svc = AccountService(engine, settings, hasher, legal, runtime, clock)
+    vault = CredentialVault(settings.credential_key, clock=clock)
 
     fb = FeedbackService(engine, settings, alerts, svc.audit, clock)
     app = FastAPI(title="GetMedia", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.engine, app.state.svc = settings, engine, svc
     app.state.fb = fb
     app.state.legal, app.state.runtime, app.state.alerts, app.state.release = legal, runtime, alerts, release
+    app.state.vault = vault
 
     # ---------- 错误与通用头 ----------
     @app.exception_handler(ApiError)
@@ -196,9 +201,21 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     @app.get("/v2/config")
     def config():
         rt, rel = runtime.get(), release.get()
+        # cache_ttl/quota 对公众可见：隐私说明与网页都要"读配置"，不能写死文案
         return {"registration_open": rt.registration_open, "invite_required": rt.invite_required,
                 "maintenance": rt.maintenance, "min_version": rel["min_version"], "latest": rel["latest"],
-                "server_time": svc.now()}
+                "server_time": svc.now(),
+                "cache_ttl_seconds": settings.cache_ttl_seconds,
+                "cache_quota_bytes": settings.cache_quota_bytes}
+
+    @app.get("/v2/config/owner")
+    def config_owner(_ctx: AuthCtx = Depends(require_tier("owner"))):
+        """完整版/owner 网页专用：不放进公开 config，避免免费产物里出现这些字段。"""
+        return {"cache_ttl_seconds": settings.cache_ttl_seconds,
+                "cache_quota_bytes": settings.cache_quota_bytes,
+                "archive_quota_bytes": settings.archive_quota_bytes,
+                "creator": {"max_items": settings.creator_max_items, "max_start": settings.creator_max_start},
+                "credential_vault": vault.available}
 
     @app.post("/v2/heartbeat", status_code=204)
     def heartbeat(req: HeartbeatReq, ctx: AuthCtx = Depends(auth)):
@@ -285,6 +302,43 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     def recover(req: RecoverReq, request: Request):
         return svc.recover(req.login_name, req.recovery_code, req.new_password, ip_of(request))
 
+    # 博主批量：只取列表，媒体仍由手机端提取，因此不需要任务表
+    from . import creator_rt
+    from .creator_api import register as register_creator_routes
+
+    creator_rt.configure(settings)
+    from .creator_jobs_api import register as register_creator_jobs
+    # 批量任务先注册（预览要用它的扫描能力），再注册预览/上限
+    creator_jobs = register_creator_jobs(app, require_tier("owner"), engine, clock,
+                                        lister=creator_lister, resolver=creator_resolver,
+                                        cookies=creator_cookies, pinned=creator_pinned)
+    register_creator_routes(app, require_tier("owner"), engine, clock, jobs=creator_jobs)
+
+    # 媒体库 / 提取 / 媒体流（P2a）：全部 owner 级
+    from .media_api import register as register_media_routes
+    media_store = register_media_routes(app, require_tier("owner"), engine, clock, resolver=media_resolver)
+
+    # 定时抓取（P2c）：每次触发只是建一个批量任务
+    from .schedules_api import register as register_schedule_routes
+    schedules = register_schedule_routes(app, require_tier("owner"), engine, clock, jobs=creator_jobs)
+
+    # Agent（P2d）：没有模型时用确定性规则应答
+    from .agent_api import register as register_agent_routes
+    register_agent_routes(app, require_tier("owner"), engine, clock, media=media_store,
+                          creator_jobs=creator_jobs)
+
+    # 平台授权（P2e）：Cookie 加密入库 + Netscape 文件供平台适配器使用
+    from .platform_auth_api import register as register_platform_auth
+    register_platform_auth(app, require_tier("owner"), engine, clock, vault=vault)
+
+    # 失败上报（P2f）
+    from .diagnostics_api import register as register_diagnostics
+    register_diagnostics(app, require_tier("owner"), engine, clock)
+
+    # AI 重建（P2g）：只入队，执行在 getmedia-ai-worker
+    from .recreations_api import register as register_recreations
+    register_recreations(app, require_tier("owner"), engine, clock, media=media_store)
+
     ops = Ops(engine, settings, fb, alerts, clock)
     app.state.ops = ops
     if start_workers:
@@ -297,6 +351,10 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
                     ops.tick()
                 except Exception as e:  # noqa: BLE001
                     log.error("ops tick error: %s", type(e).__name__)
+                try:
+                    schedules.tick()
+                except Exception as e:  # noqa: BLE001
+                    log.error("schedules tick error: %s", type(e).__name__)
                 time.sleep(3600)
         threading.Thread(target=_ops_loop, name="ops", daemon=True).start()
 

@@ -3,6 +3,7 @@ package com.getmedia.app.ui.screen
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.SystemClock
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -17,8 +18,10 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -196,6 +199,13 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
     val context = LocalContext.current
     val vm: ExtractViewModel = viewModel(factory = ExtractViewModel.Factory(context))
     val snackbar = remember { SnackbarHostState() }
+    var showCreator by rememberSaveable { mutableStateOf(false) }
+
+    if (showCreator) {
+        BackHandler { showCreator = false }
+        com.getmedia.app.ui.ownerGate.BatchExtract(onBack = { showCreator = false })
+        return
+    }
 
     LaunchedEffect(prefill) {
         if (!prefill.isNullOrBlank()) {
@@ -220,6 +230,15 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(if (vm.kind == MediaKind.VIDEO) "提取视频" else "提取音频", style = MaterialTheme.typography.headlineSmall)
+            AreaAction(onClick = { showCreator = true }, tone = ActionTone.SYNC) {
+                Icon(Icons.Default.Person, null, Modifier.size(17.dp))
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("博主批量提取", style = MaterialTheme.typography.titleSmall)
+                    Text("传一个博主主页，先看作品列表再挑着提取", fontSize = 11.sp, color = uiMuted())
+                }
+                Text("进入", fontSize = 12.sp)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(vm.kind == MediaKind.AUDIO, { vm.kind = MediaKind.AUDIO }, { Text("音频") }, enabled = !vm.busy)
                 FilterChip(vm.kind == MediaKind.VIDEO, { vm.kind = MediaKind.VIDEO }, { Text("视频") }, enabled = !vm.busy)

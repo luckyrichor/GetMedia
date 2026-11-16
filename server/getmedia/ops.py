@@ -20,6 +20,14 @@ from .db import snapshot_file
 log = logging.getLogger("getmedia.ops")
 _SNAP = re.compile(r"^(daily|pre-migrate)-.*\.db$")
 
+# 保留期登记表：(表名, 时间列, Settings 里的天数属性)。
+# 表是常量、不是用户输入；表不存在时跳过，因此 P2 加表时只需在这里登记一行。
+# 用 finished_at 而不是 created_at：未结束的任务即使很老也不能被清掉。
+RETENTION_TARGETS: tuple[tuple[str, str, str], ...] = (
+    ("extract_jobs", "finished_at", "retention_days"),
+    ("extraction_failures", "created_at", "retention_days"),
+)
+
 
 class Ops:
     def __init__(self, engine: Engine, settings: Settings, fb, alerts, clock=time.time):
@@ -79,8 +87,26 @@ class Ops:
             h = c.execute(text("DELETE FROM heartbeats WHERE day<:d"), {"d": day}).rowcount
             sess = c.execute(text("DELETE FROM sessions WHERE (revoked_at IS NOT NULL AND revoked_at<:t) OR expires_at<:t"), {"t": cut}).rowcount
         out = {"audit": a, "rate_limits": r, "heartbeats": h, "sessions": sess}
+        with self.engine.begin() as c:
+            out["tables"] = self._cleanup_tables(c, now)
         out.update({f"feedback_{k}": v for k, v in self.fb.cleanup().items()})
         out["snapshots"] = self.prune_snapshots()
+        return out
+
+    def _cleanup_tables(self, c, now: int) -> dict:
+        """按 RETENTION_TARGETS 清理可选表；表不存在就跳过（P2 之前的库也安全）。"""
+        out: dict[str, int] = {}
+        for table, column, days_attr in RETENTION_TARGETS:
+            exists = c.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:n"), {"n": table}
+            ).scalar()
+            if not exists:
+                continue
+            days = getattr(self.s, days_attr, self.s.retention_days)
+            cut = now - days * 86400
+            out[table] = c.execute(
+                text(f"DELETE FROM {table} WHERE {column} IS NOT NULL AND {column}<:t"), {"t": cut}
+            ).rowcount
         return out
 
     # ---------- 快照 ----------

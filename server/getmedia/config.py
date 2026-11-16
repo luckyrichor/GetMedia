@@ -49,8 +49,18 @@ class Settings:
     backup_dir: Path
     ledger_path: Path
     feedback_image_dir: Path
+    creator_cookie_dir: Path
+    media_dir: Path
+    cache_dir: Path
     bind: str = "127.0.0.1:8700"
     cookie_path: str = "/getmedia/api/"
+    # 平台凭据（Cookie）加密：AES-256-GCM，密钥只从 GETMEDIA_CRED_KEY 读。
+    # 为空表示未配置，需要凭据的接口一律 503，不静默降级成明文。
+    credential_key: bytes = b""
+    # 服务端可选落盘的配额（0 = 禁用该模式）
+    cache_ttl_seconds: int = 86400          # web 临时缓存保留 1 天
+    cache_quota_bytes: int = 5 * 1024**3    # 网页缓存 5 GiB
+    archive_quota_bytes: int = 3 * 1024**3  # owner 服务器库 3 GiB
     # Argon2id（参数写入哈希串，可日后调整）
     argon_memory_kib: int = 65536
     argon_iterations: int = 3
@@ -75,6 +85,28 @@ class Settings:
     feedback_image_total_cap: int = 2 * 1024**3
     feedback_image_days: int = 90
     feedback_text_days: int = 180
+    # 博主批量：服务端只取列表，媒体仍在手机上提取
+    http_timeout: float = 15.0
+    max_redirects: int = 5
+    creator_max_items: int = 50        # 单次最多返回多少条
+    creator_max_start: int = 500       # 起点上限
+    creator_page_size: int = 20        # 批量任务扫描的每页条数
+    creator_max_pages_per_run: int = 200   # 单次运行最多翻多少页（防一次跑太久）
+    creator_audio_mb_per_min: float = 1.0  # 空间预估：音频
+    creator_video_mb_per_min: float = 30.0  # 空间预估：视频
+    creator_preview_limit: tuple = (30, 3600)   # 每账号每小时预览次数
+    creator_request_interval: float = 0.0   # 逐条补互动数据之间的间隔
+    douyin_browser: bool = False       # 抖音浏览器桥接（需 playwright）
+    douyin_browser_headless: bool = True
+    douyin_browser_timeout: float = 30.0
+    douyin_browser_max_scrolls: int = 6
+    douyin_browser_channel: str = ""
+    # AI 视频重建（P2g）：默认关闭，避免没有模型密钥时误以为可用
+    ai_enabled: bool = False
+    ai_max_upload_bytes: int = 200 * 1024**2
+    ai_timeout_sec: int = 1800
+    ai_min_free_mb: int = 2048
+    ai_concurrency: int = 1
     # 运维
     deletion_cooldown_days: int = 7
     retention_days: int = 30          # 审计 / 限流 / 活跃明细
@@ -108,6 +140,34 @@ def _int_env(env: Mapping[str, str], name: str, default: int, lo: int, hi: int) 
     return v
 
 
+def _bool_env(env: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = env.get(name)
+    if raw is None or raw == "":
+        return default
+    value = raw.strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    raise ConfigError(f"{name} 只能是 true/false")
+
+
+def decode_credential_key(raw: str) -> bytes:
+    """GETMEDIA_CRED_KEY：base64url 编码的 32 字节密钥；空值返回 b""（未配置）。"""
+    if not raw:
+        return b""
+    import base64
+    import binascii
+
+    try:
+        key = base64.urlsafe_b64decode(raw)
+    except (ValueError, binascii.Error):
+        raise ConfigError("GETMEDIA_CRED_KEY 不是合法的 base64url") from None
+    if len(key) != 32:
+        raise ConfigError("GETMEDIA_CRED_KEY 解码后必须是 32 字节（AES-256）")
+    return key
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
     data_dir = Path(env.get("GETMEDIA_DATA_DIR", "/var/lib/getmedia"))
@@ -129,9 +189,21 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         backup_dir=Path(env.get("GETMEDIA_BACKUP_DIR", str(data_dir / "snapshots"))),
         ledger_path=Path(env.get("GETMEDIA_LEDGER_PATH", str(data_dir.parent / "getmedia-ledger" / "deletion-ledger.log"))),
         feedback_image_dir=Path(env.get("GETMEDIA_FEEDBACK_IMAGE_DIR", str(data_dir / "feedback-images"))),
+        creator_cookie_dir=Path(env.get("GETMEDIA_CREATOR_COOKIE_DIR", str(data_dir / "creator-cookies"))),
+        media_dir=Path(env.get("GETMEDIA_MEDIA_DIR", str(data_dir / "media"))),
+        cache_dir=Path(env.get("GETMEDIA_CACHE_DIR", str(data_dir / "cache"))),
         bind=env.get("GETMEDIA_BIND", "127.0.0.1:8700"),
+        credential_key=decode_credential_key(env.get("GETMEDIA_CRED_KEY", "")),
+        cache_ttl_seconds=_int_env(env, "GETMEDIA_CACHE_TTL_SECONDS", 86400, 60, 30 * 86400),
+        cache_quota_bytes=_int_env(env, "GETMEDIA_CACHE_QUOTA_MB", 5120, 0, 51200) * 1024**2,
+        archive_quota_bytes=_int_env(env, "GETMEDIA_ARCHIVE_QUOTA_MB", 3072, 0, 51200) * 1024**2,
         argon_memory_kib=argon_mem,
         argon_iterations=argon_iter,
+        creator_max_items=_int_env(env, "GETMEDIA_CREATOR_MAX_ITEMS", 50, 1, 50),
+        douyin_browser=_bool_env(env, "GETMEDIA_DOUYIN_BROWSER", False),
+        ai_enabled=_bool_env(env, "GETMEDIA_AI_ENABLED", False),
+        douyin_browser_headless=_bool_env(env, "GETMEDIA_DOUYIN_BROWSER_HEADLESS", True),
+        douyin_browser_channel=env.get("GETMEDIA_DOUYIN_BROWSER_CHANNEL", ""),
         mail=load_mail(env),
         cert_path=Path(env["GETMEDIA_CERT_PATH"]) if env.get("GETMEDIA_CERT_PATH") else None,
         disk_path=Path(env.get("GETMEDIA_DISK_PATH", str(data_dir))),
@@ -150,6 +222,10 @@ def testing_settings(root: Path, legal_dir: Path | None = None) -> Settings:
         backup_dir=root / "snapshots",
         ledger_path=root / "ledger" / "deletion-ledger.log",
         feedback_image_dir=root / "feedback-images",
+        creator_cookie_dir=root / "creator-cookies",
+        media_dir=root / "media",
+        cache_dir=root / "cache",
+        credential_key=b"0123456789abcdef0123456789abcdef",
         argon_memory_kib=64,
         argon_iterations=1,
     )

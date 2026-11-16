@@ -67,3 +67,18 @@ def login(env, name="alice", password="correct horse 1", channel="android", **kw
 
 def hdr(token):
     return {"X-GetMedia-Session": token}
+
+
+def make_owner(env, name="boss", password="correct horse 1"):
+    """注册一个账号并把它升为 owner；返回会话令牌。
+
+    直接改库而不是走接口：目前没有"提权"接口，也不应该有。
+    """
+    from sqlalchemy import text
+
+    r = register(env, name=name, password=password)
+    token = r.json()["session"]["token"]
+    uid = env.client.get("/account/me", headers=hdr(token)).json()["id"]
+    with env.app.state.engine.begin() as c:
+        c.execute(text("UPDATE users SET tier='owner' WHERE id=:u"), {"u": uid})
+    return token

@@ -1,0 +1,72 @@
+# 博主批量提取 · 验收报告
+
+日期：2026-11-15　分支：`wp6-free`　范围：GetMedia（android + server）
+
+## 1. 构建与测试证据
+
+| 项目 | 命令 | 结果 |
+|---|---|---|
+| 服务端单测 | `/tmp/gm-venv/bin/python -m pytest -q`（`server/`） | **147 passed**，0 failed |
+| Android 单测 | `./gradlew :app:testFreeDebugUnitTest` | **139 tests**，0 failed |
+| Android lint | `./gradlew :app:lintFreeDebug` | **0 errors / 24 warnings** |
+| Android 构建 | `./gradlew :app:assembleFreeDebug` | BUILD SUCCESSFUL |
+
+说明：服务端测试用临时 venv（`/tmp/gm-venv`）安装 `server/requirements.txt` + `requirements-dev.txt`，
+未写入仓库；`pytest` 的临时目录指向仓库内 `.run-tmp/`，因为本机沙箱不允许在 `/var/folders` 下创建测试目录。
+
+新增测试：
+
+- 服务端 `tests/test_creator_links.py`（21 项）：B 站主页四种写法、抖音主页、分享文案抠链接、单条视频拒绝、空输入、
+  抖音号/UID/sec_uid/昵称解析、平台标签冲突、超长输入、`platform` 与链接冲突、裸数字必须选平台、范围上下限。
+- 服务端 `tests/test_creator_api.py`（17 项）：未登录 401、正常返回结构、`input` 别名、`count=51`/`start=501` 被拒、
+  未知字段被拒、404/428/503/400 错误映射、单条视频 400、`/limits`。
+- APK `data/creator/CreatorBatchTest`（9 项）：默认全选、勾选、领下一条跳过未选、成功/失败计数、取消保留运行项、
+  只重试失败项、全选忽略已完成、摘要文案、空批次。
+- APK `data/creator/CreatorJsonTest`（10 项）：完整响应解析、缺字段默认值、null 计数、无 `source_url` 行被跳过、
+  非 JSON/缺 profile/未知平台、错误码映射、无 JSON 错误体回退文案。
+
+## 2. 真实联网冒烟（手动执行一次，非单测）
+
+| 场景 | 结果 |
+|---|---|
+| `https://space.bilibili.com/2/video`，`start=1,count=3` | 「碧诗」，`total=43`，`cookie_source=guest`；前 3 条标题/时长（22s/299s/849s）/播放量（817855/1404832/1870148）正常 |
+| 裸 UID `2` + `platform=bilibili`，`start=2,count=2` | 返回第 2、3 条，序号与分页正确 |
+| `https://www.bilibili.com/video/BV1xx411c7mD` | 400，提示「这是单个视频链接；批量提取请传 UP 主空间主页」 |
+
+抖音未做联网验收：本机服务端未配置抖音 Cookie，也未安装 Playwright，预期返回 503 并给出提示。
+
+## 3. APK
+
+| 项 | 值 |
+|---|---|
+| 路径 | `android/app/build/outputs/apk/free/debug/app-free-debug.apk` |
+| 大小 | 37 MB（2026-11-15 22:22 构建） |
+| 包名 / 版本 | `com.getmedia.app` · 0.1.0 (versionCode 1) |
+| 摘要 | SHA-256 前 32 位 `a28d1b518b58ce401428a352ba7c0afb` |
+| 签名 | **debug 证书**（仓库没有发布密钥；正式分发前需用 `tools/make-release-key.sh` 重打 release） |
+| 说明 | 真机自测可直接装 debug 包；它与现有 release 包签名不同，需先卸载旧包 |
+
+## 4. 真机验收清单（未执行，留给你跑）
+
+前置：APK 已安装；已登录账号（博主批量需要登录）；手机能访问 `GETMEDIA` 服务器地址。
+
+- [ ] 「提取」页顶部出现「博主批量提取」入口，点进去能返回。
+- [ ] 未登录时：页面显示登录提示，预览按钮不可点。
+- [ ] B 站：输入 `space.bilibili.com/2/video` → 预览出「碧诗」+ 昵称/粉丝/作品数 + 封面列表 → 全选默认勾上。
+- [ ] 裸数字 `2` 且平台选「自动识别」→ 被拦下并提示需要先选平台。
+- [ ] 裸数字 `2` + 平台选「B 站」→ 正常预览。
+- [ ] 起点改成 11、数量 10 → 列表变成第 11–20 条；拉到底看「后面还有更多作品」提示。
+- [ ] 勾 3 条 → 提取 → 进度条与「正在提取 n/3」滚动，逐条出现在媒体库，可播放。
+- [ ] 提取中点「停止」→ 不再开始新条目；已完成的条目仍在库里。
+- [ ] 制造一条失败（例如取一条已删除的视频地址）→ 该条标红有原因，点「重试失败」只重跑失败项。
+- [ ] 抖音号 + 平台「抖音」→ 若服务端无 Cookie/Playwright，应显示平台不可用提示，而不是空列表。
+- [ ] 深色/浅色主题下页面文字与卡片可读；有背景图时卡片不透明。
+
+## 5. 已知限制
+
+1. 单次最多 50 条、起点最大 500；不支持按日期区间。
+2. 抖音昵称搜索需要服务端 Playwright + 登录 Cookie，默认关闭；直连可能被 Argus 风控拦截（503）。
+3. 抖音列表可能触发验证码；B 站空间接口也可能 412，服务端会自动换访客 cookie 重试一次，仍失败则报错。
+4. 批量下载串行执行，长视频多时耗时较长；退出页面后本轮进度不保留。
+5. 已入库的条目在窗口里不会标灰，重复提取依赖本地去重（同 `platform:video_id` 会跳过下载）。
+6. 服务端每账号每小时 30 次预览限流，超限返回 429。

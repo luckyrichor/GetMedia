@@ -27,6 +27,8 @@ FREE_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/account/devices/revoke-others"),
     ("POST", "/account/password"),
     ("POST", "/account/recover"),
+    # 抖音开放平台 OAuth 回调：浏览器跳转过来没有会话；未配置时返回 501
+    ("GET", "/account/platform-auth/douyin/callback"),
 })
 
 
