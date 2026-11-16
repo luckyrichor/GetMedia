@@ -33,6 +33,19 @@ dist/
 .venv/
 __pycache__/
 .pytest_cache/
+.run-tmp/
+.pytest_tmp/
 *.pyc
 .idea/
 .DS_Store
+
+# 本地工作文件：含真实服务器路径、旧接口越权面，不入公开仓库
+/plan.md
+/disk-audit.md
+/ops-check-*.md
+/GetAudio与GetVideo功能清单.md
+/wp6-build.log
+/wp6-release.log
+
+# Agent 工作目录（含运维记录与会话记忆）
+.workbuddy/

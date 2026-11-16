@@ -1,0 +1,97 @@
+Starting a Gradle Daemon (subsequent builds will be faster)
+Warning: SDK processing. This version only understands SDK XML versions up to 3 but an SDK XML file of version 4 was encountered. This can happen if you use versions of Android Studio and the command-line tools that were released at different times.
+> Task :app:checkKotlinGradlePluginConfigurationErrors
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preDebugBuild UP-TO-DATE
+> Task :app:generateDebugBuildConfig
+> Task :app:generateDebugResValues FROM-CACHE
+> Task :app:checkDebugAarMetadata
+> Task :app:mapDebugSourceSetPaths
+> Task :app:generateDebugResources
+> Task :app:packageDebugResources
+> Task :app:createDebugCompatibleScreenManifests
+> Task :app:extractDeepLinksDebug FROM-CACHE
+> Task :app:parseDebugLocalResources
+> Task :app:processDebugMainManifest
+> Task :app:mergeDebugResources
+> Task :app:processDebugManifest
+> Task :app:javaPreCompileDebug FROM-CACHE
+> Task :app:preDebugUnitTestBuild UP-TO-DATE
+> Task :app:javaPreCompileDebugUnitTest FROM-CACHE
+> Task :app:preDebugAndroidTestBuild SKIPPED
+> Task :app:generateDebugAndroidTestResValues FROM-CACHE
+> Task :app:extractProguardFiles
+> Task :app:mergeDebugNativeDebugMetadata NO-SOURCE
+> Task :app:mergeDebugShaders FROM-CACHE
+> Task :app:compileDebugShaders NO-SOURCE
+> Task :app:generateDebugAssets UP-TO-DATE
+> Task :app:mergeDebugAssets FROM-CACHE
+> Task :app:compressDebugAssets FROM-CACHE
+> Task :app:desugarDebugFileDependencies
+> Task :app:mergeDebugJniLibFolders FROM-CACHE
+> Task :app:mergeDebugNativeLibs NO-SOURCE
+> Task :app:stripDebugDebugSymbols NO-SOURCE
+> Task :app:validateSigningDebug
+> Task :app:writeDebugAppMetadata
+> Task :app:checkDebugDuplicateClasses
+> Task :app:writeDebugSigningConfigVersions
+> Task :app:processDebugManifestForPackage
+> Task :app:mergeLibDexDebug
+> Task :app:processDebugResources
+> Task :app:kspDebugKotlin
+> Task :app:mergeExtDexDebug
+
+> Task :app:compileDebugKotlin
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/data/localextract/LinkScanner.kt:78:44 Parameter 'text' is never used
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:8:25 'Movie' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:158:34 'Movie' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:158:40 'decodeStream(InputStream!): Movie!' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:164:48 'Movie' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:168:19 'width(): Int' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:168:41 'height(): Int' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:169:30 'duration(): Int' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:170:15 'setTime(Int): Boolean' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:172:46 'width(): Int' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:173:47 'height(): Int' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:177:51 'width(): Int' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:178:51 'height(): Int' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/MotionBackground.kt:181:15 'draw(Canvas!, Float, Float): Unit' is deprecated. Deprecated in Java
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/components/UiKit.kt:337:31 'ArrowBack: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.ArrowBack
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/screen/LibraryScreenV2.kt:615:31 Check for instance is always 'true'
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/screen/LibraryScreenV2.kt:810:35 'PlaylistAdd: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Filled.PlaylistAdd
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/screen/MusicSheet.kt:284:5 Parameter 'container' is never used
+w: file:///Users/lc/Project/GetMedia/android/app/src/main/java/com/getmedia/app/ui/screen/WallpaperFrameEditor.kt:146:58 'RotateRight: ImageVector' is deprecated. Use the AutoMirrored version at Icons.AutoMirrored.Rounded.RotateRight
+
+> Task :app:compileDebugJavaWithJavac
+> Task :app:processDebugJavaRes
+> Task :app:bundleDebugClassesToRuntimeJar
+> Task :app:bundleDebugClassesToCompileJar
+> Task :app:generateDebugLintReportModel
+> Task :app:generateDebugAndroidTestLintModel
+> Task :app:generateDebugUnitTestLintModel
+> Task :app:kspDebugUnitTestKotlin
+> Task :app:dexBuilderDebug
+> Task :app:mergeDebugGlobalSynthetics
+> Task :app:mergeProjectDexDebug
+> Task :app:mergeDebugJavaResource
+
+> Task :app:compileDebugUnitTestKotlin
+w: file:///Users/lc/Project/GetMedia/android/app/src/test/java/com/getmedia/app/data/localextract/BilibiliWarmupTest.kt:23:13 Unreachable code
+
+> Task :app:compileDebugUnitTestJavaWithJavac NO-SOURCE
+> Task :app:processDebugUnitTestJavaRes
+> Task :app:testDebugUnitTest
+> Task :app:packageDebug
+> Task :app:createDebugApkListingFileRedirect
+> Task :app:assembleDebug
+> Task :app:lintAnalyzeDebugAndroidTest
+> Task :app:lintAnalyzeDebugUnitTest
+> Task :app:lintAnalyzeDebug
+
+> Task :app:lintReportDebug
+Wrote HTML report to file:///Users/lc/Project/GetMedia/android/app/build/reports/lint-results-debug.html
+
+> Task :app:lintDebug
+
+BUILD SUCCESSFUL in 1m 40s
+54 actionable tasks: 45 executed, 9 from cache
