@@ -176,6 +176,13 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+    // Compose 的 JVM 测试（Robolectric）要读真实资源与合并后的 manifest；
+    // 不开这项，createComposeRule() 在单测里找不到宿主 Activity。
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -214,4 +221,12 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
+
+    // Compose UI 测试跑在 JVM（Robolectric）上，不依赖模拟器：
+    // 320dp 窄屏、字体 200%、横竖屏这些组合才能自动化，而且能把渲染结果存成 PNG 做前后对比。
+    testImplementation(platform("androidx.compose:compose-bom:2024.05.00"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("org.robolectric:robolectric:4.12.2")
+    testImplementation("androidx.test.ext:junit:1.1.5")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

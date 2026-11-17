@@ -1,6 +1,8 @@
 package com.getmedia.app.ui.screen
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
@@ -80,7 +82,11 @@ fun QueueBar() {
         onConfirm = { showQueue = false },
         header = if (timer != null) {
             {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 定时相关的两个 pill 单独一行；大字体/窄屏放不下时可以横向滑动，不会被裁掉。
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     SheetPill("查看定时", Icons.Default.Timer, { showQueue = false; showTimer = true })
                     SheetPill("取消定时", Icons.Default.TimerOff, { PlayerHolder.cancelTimer() })
                 }

@@ -36,6 +36,8 @@ import com.getmedia.app.ui.components.uiHairline
 import com.getmedia.app.ui.components.uiMuted
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -56,6 +58,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -89,7 +92,7 @@ private sealed interface LibraryTarget {
  * [defaultAsc] 是第一次选到这个字段时的默认方向：「时间/时长/文件」倒序（新的、长的、大的在前），
  * 「名称」正序（A→Z）。
  */
-private enum class SortField(val label: String, val defaultAsc: Boolean) {
+internal enum class SortField(val label: String, val defaultAsc: Boolean) {
     FILE("文件", false),
     MANUAL("手动", false),
     TIME("时间", false),
@@ -143,16 +146,16 @@ private fun SortChip(
     var menu by remember { mutableStateOf(false) }
     // 和旁边的「云端同步」「导入」保持同一套外观：透明底 + outline 描边 + 12dp 圆角 + 32dp 高。
     val shape = RoundedCornerShape(12.dp)
-    Box {
+    Box(Modifier.testTag(LibraryToolbarTags.SORT).heightIn(min = 48.dp)) {
+        // 视觉只有 32dp 高（和旁边 chip 齐平），但点击热区撑到 48dp：
+        // 上下各 8dp 的透明区域也能点，满足触控目标，不靠"看起来大"。
         Row(
-            Modifier.height(32.dp).clip(shape)
+            Modifier.align(Alignment.Center).height(32.dp).clip(shape)
                 .border(1.dp, MaterialTheme.colorScheme.outline, shape),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 左半段：点一下翻转正/倒序。
             Row(
-                Modifier.fillMaxHeight().clickable(onClick = onToggleDirection)
-                    .padding(start = 9.dp, end = 5.dp),
+                Modifier.fillMaxHeight().padding(start = 9.dp, end = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -171,20 +174,25 @@ private fun SortChip(
                     )
                 }
             }
-            // 右半段：点一下展开字段下拉。
-            Box(
-                Modifier.fillMaxHeight().width(24.dp).clickable { menu = true },
-                contentAlignment = Alignment.Center,
-            ) {
+            Box(Modifier.fillMaxHeight().width(24.dp), contentAlignment = Alignment.Center) {
                 Icon(
                     Icons.Default.ArrowDropDown, "选择排序字段", Modifier.size(20.dp),
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }
+        // 透明点击层：高度跟 48dp 的 Box 走，左段翻方向、右段开下拉。
+        Row(Modifier.matchParentSize()) {
+            Box(Modifier.weight(1f).fillMaxHeight().clickable(onClick = onToggleDirection))
+            Box(
+                Modifier.width(24.dp).fillMaxHeight()
+                    .testTag(LibraryToolbarTags.SORT_MENU).clickable { menu = true },
+            )
+        }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             SortField.entries.forEach { f ->
                 DropdownMenuItem(
+                    modifier = Modifier.testTag(LibraryToolbarTags.option(f)),
                     text = { Text(if (f == field) "${f.label}（当前）" else f.label) },
                     onClick = { onPickField(f); menu = false },
                     trailingIcon = {
@@ -199,6 +207,101 @@ private fun SortChip(
             }
         }
     }
+}
+
+/**
+ * 媒体库顶部的操作条：定时状态 + 排序 + 导入。
+ *
+ * 单独抽出来是为了能在 JVM 上做渲染回归（320dp 窄屏、字体 200%、横屏），
+ * 不必挂整个页面（整页依赖 Room 与播放器单例）。
+ *
+ * 布局约束（回归用例守住）：
+ * - 定时状态**不能**和排序挤在同一行抢宽度；
+ * - 排序控件在任何宽度与字体缩放下都要完整可见、可点击，触控区 ≥ 48dp。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun LibraryToolbar(
+    timer: String?,
+    sortField: SortField,
+    sortAsc: Boolean,
+    importing: Boolean,
+    onToggleDirection: () -> Unit,
+    onPickField: (SortField) -> Unit,
+    onImport: () -> Unit,
+    onCancelTimer: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        // 定时状态单独一行，绝不和排序抢宽度。
+        // 倒计时每秒只改文字、行高固定（maxLines=1），不会随秒数抖动。
+        // 文案只留「剩余 14:59」：字体 200% 时再多两个字就会把数字挤成省略号。
+        if (timer != null) {
+            FlowRow(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag(LibraryToolbarTags.TIMER),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // 和右边的取消按钮同高（48dp），FlowRow 行内按顶对齐也就自然对齐了。
+                Row(Modifier.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Timer, null, Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (timer.contains(":")) "剩余 $timer" else "定时：$timer",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                AreaButton(
+                    onClick = onCancelTimer,
+                    tone = ActionTone.TIMER,
+                    // 视觉上只写「取消」省宽度，读屏仍然说清楚取消的是什么。
+                    modifier = Modifier.semantics { contentDescription = "取消定时关闭" },
+                ) { Text("取消") }
+            }
+        }
+        // 排序 + 导入：FlowRow 而不是死挤在一行。
+        // 宽度不够（320dp 窄屏 / 字体 200%）时「导入」换到下一行，排序永远完整可见；
+        // 定时条的开关只影响上面那一行，这一行的可用宽度不变，所以不会跟着跳。
+        FlowRow(
+            Modifier.fillMaxWidth().testTag(LibraryToolbarTags.ROOT),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            // 排序：主体点一下翻转正/倒序，右侧小箭头点开字段下拉（手动才能长按拖动）。
+            SortChip(
+                field = sortField,
+                ascending = sortAsc,
+                onToggleDirection = onToggleDirection,
+                onPickField = onPickField,
+            )
+            // 导入本地音频：把系统文件选择器里选中的音频复制进库。
+            // 外面包一层 48dp 高的盒子，和排序控件同高、居中对齐（FlowRow 行内没有 itemVerticalAlignment）。
+            Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+                AssistChip(
+                    onClick = onImport,
+                    enabled = !importing,
+                    label = { Text(if (importing) "导入中…" else "导入", style = MaterialTheme.typography.labelLarge) },
+                    leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(16.dp)) },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.testTag(LibraryToolbarTags.IMPORT),
+                )
+            }
+        }
+    }
+}
+
+/** 渲染回归用例用来定位节点的标记；改文案不影响这些断言。 */
+internal object LibraryToolbarTags {
+    const val ROOT = "library-toolbar"
+    const val TIMER = "library-timer"
+    const val SORT = "library-sort"
+    const val SORT_MENU = "library-sort-menu"
+    const val IMPORT = "library-import"
+    fun option(field: SortField): String = "sort-option-${field.name}"
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -395,45 +498,27 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
                         )
                     }
                 }
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 0.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (timer != null) {
-                        Text(if (timer.contains(":")) "剩余 $timer" else timer,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary)
-                        AreaButton(onClick = { PlayerHolder.cancelTimer(); notice = "已取消定时播放" }, tone = ActionTone.TIMER) {
-                            Text("取消定时播放")
+                LibraryToolbar(
+                    timer = timer,
+                    sortField = sortField,
+                    sortAsc = sortAsc,
+                    importing = importing,
+                    onToggleDirection = {
+                        if (sortField == SortField.MANUAL) {
+                            notice = "手动顺序：长按条目上下拖动即可调整"
+                        } else {
+                            sortAsc = !sortAsc
+                            notice = "排序：" + sortField.describe(sortAsc)
                         }
-                    }
-                    Spacer(Modifier.weight(1f))
-                    // 排序：主体点一下翻转正/倒序，右侧小箭头点开字段下拉（手动才能长按拖动）。
-                    SortChip(
-                        field = sortField,
-                        ascending = sortAsc,
-                        onToggleDirection = {
-                            if (sortField == SortField.MANUAL) {
-                                notice = "手动顺序：长按条目上下拖动即可调整"
-                            } else {
-                                sortAsc = !sortAsc
-                                notice = "排序：" + sortField.describe(sortAsc)
-                            }
-                        },
-                        onPickField = { f ->
-                            sortField = f
-                            sortAsc = f.defaultAsc
-                            notice = "排序：" + f.describe(sortAsc)
-                        },
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    // 导入本地音频：把系统文件选择器里选中的音频复制进库，靠最右侧。
-                    AssistChip(
-                        onClick = { importLauncher.launch(arrayOf("audio/*")) },
-                        enabled = !importing,
-                        label = { Text(if (importing) "导入中…" else "导入", style = MaterialTheme.typography.labelLarge) },
-                        leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(16.dp)) },
-                        shape = RoundedCornerShape(12.dp),
-                    )
-                }
+                    },
+                    onPickField = { f ->
+                        sortField = f
+                        sortAsc = f.defaultAsc
+                        notice = "排序：" + f.describe(sortAsc)
+                    },
+                    onImport = { importLauncher.launch(arrayOf("audio/*")) },
+                    onCancelTimer = { PlayerHolder.cancelTimer(); notice = "已取消定时播放" },
+                )
                 if (startMs != null || endTimeMs != null) {
                     AreaButton(onClick = { startMs = null; endTimeMs = null }) { Text("${startMs?.let { displayDateTime(it) } ?: "不限"} ~ ${endTimeMs?.let { displayDateTime(it) } ?: "不限"} ×") }
                 }
