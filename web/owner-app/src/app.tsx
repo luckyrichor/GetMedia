@@ -22,8 +22,9 @@ import { SchedulesPage } from './pages/schedules';
 import { AgentPage } from './pages/agent';
 import { PlatformsPage } from './pages/platforms';
 import { MaintenancePage } from './pages/maintenance';
+import { AiPage } from './pages/ai';
 
-/** 已经接了真实页面的栏目；其余栏走占位页（列出接口与"还差什么"）。 */
+/** 栏目路径 → 真实页面。九栏在 5f 之后都已接完；漏注册的栏目会落到 `Placeholder`（列出接口与"还差什么"）。 */
 const PAGES: Record<string, () => JSX.Element> = {
   '/feedback': FeedbackPage,
   '/library': LibraryPage,
@@ -33,6 +34,7 @@ const PAGES: Record<string, () => JSX.Element> = {
   '/agent': AgentPage,
   '/platforms': PlatformsPage,
   '/maintenance': MaintenancePage,
+  '/ai': AiPage,
 };
 
 type Gate =

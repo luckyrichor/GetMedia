@@ -1,6 +1,7 @@
 /** owner 认证壳的三态与失败分支。只测"门"，功能页在 feedback/library 两个用例里。 */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { callKeys, cleanup, click, CONFIG, ME, mount, server, text, until } from './harness';
+import { SECTIONS } from '../src/sections';
 
 beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
@@ -79,36 +80,12 @@ describe('owner 认证壳', () => {
     expect(text()).toContain('GETMEDIA_CRED_KEY');
   });
 
-  test('栏目占位页写明"还差什么"与将用的接口', async () => {
-    server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ME } });
-    mount('/ai');
-    await until(() => text().includes('这一栏还没实现'));
-    expect(text()).toContain('AI 视频');
-    expect(text()).toContain('/v2/recreations');
-    expect(text()).toContain('GETMEDIA_AI_ENABLED');
-  });
-
-  test('5c 已接入的两栏不再是占位页', async () => {
+  test('九栏都是真实页面，没有一栏落到占位页', async () => {
     server({
       'GET /v2/config/owner': { json: CONFIG },
       'GET /account/me': { json: ME },
       'GET /v2/feedback?status=all&limit=20&offset=0': { json: { items: [], total: 0, limit: 20, offset: 0, has_more: false, counts: { new: 0, handled: 0, ignored: 0, all: 0 } } },
       'GET /v2/tracks?since_seq=0&limit=500': { json: { items: [], count: 0 } },
-    });
-    mount('/feedback');
-    await until(() => text().includes('这个筛选下没有反馈'));
-    expect(text()).not.toContain('这一栏还没实现');
-    cleanup();
-
-    mount('/library');
-    await until(() => text().includes('媒体库里还没有内容'));
-    expect(text()).not.toContain('这一栏还没实现');
-  });
-
-  test('5d/5e 六栏都接上了真实页面（只剩 5f 还是占位）', async () => {
-    server({
-      'GET /v2/config/owner': { json: CONFIG },
-      'GET /account/me': { json: ME },
       'GET /v2/extraction-jobs?limit=50': { json: { jobs: [] } },
       'GET /v2/creators/jobs?limit=50': { json: { jobs: [] } },
       'GET /v2/schedules': { json: { schedules: [] } },
@@ -119,20 +96,30 @@ describe('owner 认证壳', () => {
       'GET /account/platform-bindings': { json: { bindings: [], credentials: [] } },
       'GET /v2/maintenance/storage': { json: { by_storage: {}, quota: { archive: 1, cache: 1 }, used: { archive: 0, cache: 0 } } },
       'GET /v2/diagnostics/extractions?limit=50': { json: { reports: [] } },
+      'GET /v2/recreations/capabilities': { json: { available: false, reason: '未配置模型', max_upload_bytes: 209715200, modes: [] } },
+      'GET /v2/recreations': { json: { recreations: [] } },
     });
-    const expects: [string, string][] = [
-      ['/extract', '还没有提取任务'],
-      ['/creators', '还没有批量任务'],
-      ['/schedules', '还没有定时任务'],
-      ['/agent', '还没有会话'],
-      ['/platforms', '哔哩哔哩'],
-      ['/maintenance', '提取失败上报'],
-    ];
-    for (const [path, marker] of expects) {
+    // 每个栏目都注册了真实页面，所以"还没实现"这句话不该再出现在任何一栏
+    expect(SECTIONS.length).toBe(9);
+    const markers: Record<string, string> = {
+      '/feedback': '这个筛选下没有反馈',
+      '/library': '媒体库里还没有内容',
+      '/extract': '还没有提取任务',
+      '/creators': '还没有批量任务',
+      '/schedules': '还没有定时任务',
+      '/agent': '还没有会话',
+      '/platforms': '哔哩哔哩',
+      '/maintenance': '提取失败上报',
+      '/ai': '还没有重建项目',
+    };
+    for (const s of SECTIONS) {
       cleanup();
-      mount(path);
-      await until(() => text().includes(marker));
+      mount(s.path);
+      const marker = markers[s.path];
+      expect(marker, `${s.path} 没有空态标记`).toBeTruthy();
+      await until(() => text().includes(marker!));
       expect(text()).not.toContain('这一栏还没实现');
+      expect(s.done).toBe(true);
     }
   });
 });

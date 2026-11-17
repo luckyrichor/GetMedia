@@ -262,6 +262,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .jobs { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 8px; }
 .job { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 13px; }
 .job.off { opacity: 0.72; }
+.job.on { border-color: var(--accent); }
 .job-head { display: flex; gap: 8px; align-items: center; }
 .job .small + .small { margin-top: 2px; }
 .grow { flex: 1; min-width: 0; }

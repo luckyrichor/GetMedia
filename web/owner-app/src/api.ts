@@ -372,6 +372,40 @@ export interface DiagReport {
   created_at: number;
 }
 
+// ---------------- AI 视频重建（5f） ----------------
+export interface AiCapabilities {
+  available: boolean;
+  modes: string[];
+  max_upload_bytes: number;
+  reason: string | null;
+}
+
+export type RunKind = 'analyze' | 'generate';
+export type RunState = 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface RecreationRun {
+  id: number;
+  kind: RunKind;
+  status: RunState;
+  progress: number | null;
+  error_code: string | null;
+  created_at: number;
+  started_at: number | null;
+  finished_at: number | null;
+}
+
+export interface Recreation {
+  id: number;
+  title: string;
+  source_track_id: number | null;
+  source_path: string | null;
+  description: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+  runs?: RecreationRun[];
+}
+
 export const ownerApi = {
   /** 认证探针：匿名与非 owner 在边缘都被回成 404，只有 owner 能拿到 200。 */
   config: () => api.request<OwnerConfig>('GET', '/v2/config/owner'),
@@ -502,6 +536,35 @@ export const ownerApi = {
   purgeOrphans: () => api.request<{ removed: number }>('POST', '/v2/maintenance/orphans'),
   diagnostics: async (limit = 50): Promise<DiagReport[]> =>
     (await api.request<{ reports: DiagReport[] }>('GET', `/v2/diagnostics/extractions?limit=${limit}`)).reports,
+
+  // ---------- AI 视频重建（5f） ----------
+  aiCapabilities: () => api.request<AiCapabilities>('GET', '/v2/recreations/capabilities'),
+  recreations: async (): Promise<Recreation[]> =>
+    (await api.request<{ recreations: Recreation[] }>('GET', '/v2/recreations')).recreations,
+  recreation: (id: number) => api.request<Recreation>('GET', `/v2/recreations/${id}`),
+  uploadRecreation: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.request<Recreation>('POST', '/v2/recreations/upload', form);
+  },
+  recreationFromTrack: (trackId: number) =>
+    api.request<Recreation>('POST', `/v2/recreations/from-track/${trackId}`),
+  setDescription: (id: number, description: string) =>
+    api.request<Recreation>('PUT', `/v2/recreations/${id}/description`, { description }),
+  analyze: (id: number) =>
+    api.request<{ recreation_id: number; run_id: number; kind: RunKind; status: string }>(
+      'POST', `/v2/recreations/${id}/analyze`),
+  generate: (id: number) =>
+    api.request<{ recreation_id: number; run_id: number; kind: RunKind; status: string }>(
+      'POST', `/v2/recreations/${id}/generate`),
+  cancelRun: (id: number, rid: number) =>
+    api.request<{ run_id: number; status: string }>('POST', `/v2/recreations/${id}/runs/${rid}/cancel`),
+  saveOutput: (id: number, rid: number) =>
+    api.request<{ saved: boolean; bytes: number }>('POST', `/v2/recreations/${id}/runs/${rid}/save`),
 };
+
+/** AI 产物与源视频：直接交给 `<video>` 播，不经过 fetch。 */
+export const recreationVideoUrl = (id: number, rid: number) => `${BASE}/api/v2/recreations/${id}/runs/${rid}/video`;
+export const recreationSourceUrl = (id: number) => `${BASE}/api/v2/recreations/${id}/source`;
 
 export type { Me };

@@ -1,7 +1,8 @@
 /** owner 管理台的栏目表与占位页。
  *
- * 5c 的「反馈收件箱」「媒体库与播放」已经接了真实页面（下方 `done: true`），其余栏目仍是占位页：
- * 每个占位页都把**后端接口**和**还差什么**写清楚，避免"页面有了但不知道接什么"。
+ * 5f 之后九栏都有真实页面（`done: true`）。`Placeholder` 留作兜底：以后新增栏目却忘了在
+ * `app.tsx` 的 `PAGES` 里注册页面时，会落到占位页并把**后端接口**与**还差什么**写清楚，
+ * 而不是渲染一片空白。`endpoints` / `missing` 也只被占位页消费，真实页面上不显示。
  */
 import type { Me } from '@shared/api';
 import type { OwnerConfig } from './api';
@@ -140,14 +141,19 @@ export const SECTIONS: Section[] = [
     path: '/ai',
     label: 'AI 视频',
     phase: '5f',
-    blurb: '把曲目/上传素材做成 AI 视频，查看生成进度。',
+    done: true,
+    blurb: '把视频素材交给模型分析、按描述生成新视频，查看进度与产物。',
     endpoints: [
-      { method: 'GET', path: '/v2/recreations', note: '项目列表' },
-      { method: 'POST', path: '/v2/recreations/upload', note: '上传素材（≤200 MiB）' },
-      { method: 'POST', path: '/v2/recreations/{id}/generate', note: '入队生成' },
-      { method: 'GET', path: '/v2/recreations/{id}/runs/{rid}/video', note: '取产物' },
+      { method: 'GET', path: '/v2/recreations/capabilities', note: '是否开通、能做什么、上传上限' },
+      { method: 'GET', path: '/v2/recreations', note: '项目列表（含状态）' },
+      { method: 'POST', path: '/v2/recreations/upload', note: '上传素材（≤200 MiB，600 权限落盘）' },
+      { method: 'POST', path: '/v2/recreations/from-track/{id}', note: '用媒体库里"有文件"的视频建项目' },
+      { method: 'PUT', path: '/v2/recreations/{id}/description', note: '写/改描述（生成前必填）' },
+      { method: 'POST', path: '/v2/recreations/{id}/analyze', note: '入队分析画面' },
+      { method: 'POST', path: '/v2/recreations/{id}/generate', note: '入队生成（worker 执行）' },
+      { method: 'GET', path: '/v2/recreations/{id}/runs/{rid}/video', note: '取产物，支持 Range' },
     ],
-    missing: '默认关闭（`GETMEDIA_AI_ENABLED=false`）；开启前需要模型凭据与 worker，页面先只读。',
+    missing: '不能删除项目、不能下载产物（只给播放与"标记已保存"）；进度是 worker 自己写的百分比，没有分阶段说明；服务端默认关闭（`GETMEDIA_AI_ENABLED=false`），关闭时整页只读。',
   },
 ];
 
@@ -202,10 +208,10 @@ export function Overview({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
         </div>
       )}
 
-      <h2>接下来</h2>
+      <h2>栏目</h2>
       <p class="muted small">
-        管理台按 5c–5f 分批接入：标「可用」的是已经接了真实接口的页面，其余仍是占位页，
-        每页都写了"还差什么"，不会出现"点进去空白但看起来已完成"的情况。
+        管理台按 5c–5f 分批接入，九栏现在都是接了真实接口的页面。每栏都有明确的边界：
+        网页不做的事（例如代领手机端的动作、显示 Cookie 明文）在各页里直说，不会留下"看起来做完了"的空白。
       </p>
       <ul class="plain">
         {SECTIONS.map((s) => (
