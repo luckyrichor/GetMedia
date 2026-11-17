@@ -60,7 +60,7 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 - 补充任务（2026-11-17）：定时倒计时挤掉首页排序控件的缺陷已修复并提交（`15a1481`，`LibraryToolbar` 抽出、定时独立成行、排序+导入改 FlowRow、48 dp 热区），`LibraryToolbarLayoutTest` 10 项在 free/full 通过，真机验收由用户执行；批量导出按 A → B → C 交付，**节点 A 已交付**（`data/export/ExportTrack|ExportNaming|ExportPlan` + 13 个编号用例，free 145 / full 165 单测全过），B/C 未开始。
 - UI 方案 v3（`docs/ui-plan.md`）：v2 基础上加一条——free 的「我的」页账号卡片**不显示 tier**，只留设备数，tier 走 `OwnerGate.AccountTierBadge()`（free 空实现）。
-- P6 部署材料 v3（本地文件，不入公开仓库）：密钥只写 `键=值`（`GETMEDIA_SECRET_KEY` 不动、`GETMEDIA_CRED_KEY` 现场生成 44 字符）、`llm.env` 本次不建、`daemon-reload` 后 `restart` 并查 `schema_version=11`/health/journalctl、代码回退必须配库快照且 `/opt/getmedia/server` 保留、冒烟脚本传 `/tmp` 用完删、nginx 脚本插 include、只建 `owner1`/`owner2`、退役三条前置。
+- P6 部署材料 v4（本地文件，不入公开仓库）：v3 基础上修掉"会直接踩到"的几处——env 备份改 `sudo sh -c … "$B"` 在 root 下展开通配符并强制校验份数（0 份停手）；快照改 `ssh "sudo cat"` 落到本机并核 sha256（不用 `ssh -t`，PTY 会损坏库文件）；`rsync` 明确在本机执行、加 `--rsync-path="sudo rsync"` 与 `--chown`；**每个 release 独立 venv**（不装进线上共用 venv）；`awk` 长度校验改 `sub()`（base64 末尾 `=` 会让 `-F=` 少 1）；`sed` 只动 api/ai-worker/ai-gc 三单元并全局 grep 旧路径（snapshot 不动，改手动触发验证）；`python -m` 前先 `cd`；回退前先 disable timer/worker、`daemon-reload` 放最后；新增 §3.5 覆盖前 diff 线上 nginx 片段（防抹掉 register 精确 403 热修）；`create-account` 与写 Cookie 改为**你本人 `ssh -t` 执行**、Agent 只做只读核对；退役前置删掉"7 天观察期"。
 
 - 服务端 P1–P3 完成（迁移工具就绪，真实迁移等部署后）；Android 双风味（free/full）已就绪。
 - 网页：公开页接新服务 + owner 认证壳 + 功能页 5c–5f 全部完成，管理台九栏都接真实接口
@@ -97,6 +97,6 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 更新日志
 
-- 2026-11-17：定时倒计时遮挡排序控件的缺陷（三处同源）修复已提交并推送（`15a1481`），工具栏回归 10 项，free/full 单测当轮全过（当前基线 145/165，含导出节点 A 的 16 项）；导出方案按用户 6 点决定修订并确认，节点 A 已交付；`ui-plan.md` 出到 v3；P6 部署材料改到 v3（本地）。未部署、未安装、未退役。
+- 2026-11-17：定时倒计时遮挡排序控件的缺陷（三处同源）修复已提交并推送（`15a1481`），工具栏回归 10 项，free/full 单测当轮全过（当前基线 145/165，含导出节点 A 的 16 项）；导出方案按用户 6 点决定修订并确认，节点 A 已交付；`ui-plan.md` 出到 v3；P6 部署材料改到 v4（本地）。未部署、未安装、未退役。
 
 - 2026-11-01：Codex 同步 GitHub wp5a-android-base@0f4dfc3，完成首次本轮 Mac Debug 构建验证，补充 AGENTS/CLAUDE、构建报告和日志，更新 STATUS。没有改业务代码、提交、推送、安装或部署。
