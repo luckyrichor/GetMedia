@@ -58,7 +58,8 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 当前进度（2026-11-17）
 
-- 补充任务（2026-11-17）：定时倒计时挤掉首页排序控件的缺陷已修复（`LibraryToolbar` 抽出、定时独立成行、排序+导入改 FlowRow、48 dp 热区），`LibraryToolbarLayoutTest` 9 项在 free/full 通过；批量导出只交了方案 `docs/export-plan.md`，**等用户确认后才写代码**。详见 `docs/timer-bug-report.md`、`docs/STATUS.md`。
+- 补充任务（2026-11-17）：定时倒计时挤掉首页排序控件的缺陷已修复并提交（`15a1481`，`LibraryToolbar` 抽出、定时独立成行、排序+导入改 FlowRow、48 dp 热区），`LibraryToolbarLayoutTest` 10 项在 free/full 通过，真机验收由用户执行；批量导出方案已确认（6 点决定 + 「服务器库未下载」只经 `OwnerGate` 进 full），按 A → B → C 交付，**代码未开始**。
+- UI 方案 v2（`docs/ui-plan.md`）：free 占位入口、批量数量数字输入、北京时间日期区间、预览分页、博主批量入口移到提取页、写入导出入口。P6 部署材料 v2（本地文件）：快照最前、不覆盖 env、nginx 还原备份、页面发布与建账号、退役补 `getvideo-ai-worker`、A/B/C 三段等确认。
 
 - 服务端 P1–P3 完成（迁移工具就绪，真实迁移等部署后）；Android 双风味（free/full）已就绪。
 - 网页：公开页接新服务 + owner 认证壳 + 功能页 5c–5f 全部完成，管理台九栏都接真实接口
@@ -95,6 +96,6 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 更新日志
 
-- 2026-11-17：补充任务进场。定时倒计时遮挡排序控件的缺陷（GetMedia/GetAudio/GetVideo 三处同源）已修复并补 9 项渲染回归（free/full 单测 134/154 全过）；批量导出交方案 `docs/export-plan.md`，待确认。本轮未提交、未推送、未安装。
+- 2026-11-17：定时倒计时遮挡排序控件的缺陷（三处同源）修复已提交并推送（`15a1481`），工具栏回归 10 项，free/full 单测 135/155 全过；导出方案按用户 6 点决定修订并确认；`ui-plan.md` 出 v2；P6 部署材料改 A/B/C 三段（本地）。未部署、未安装、未退役。
 
 - 2026-11-01：Codex 同步 GitHub wp5a-android-base@0f4dfc3，完成首次本轮 Mac Debug 构建验证，补充 AGENTS/CLAUDE、构建报告和日志，更新 STATUS。没有改业务代码、提交、推送、安装或部署。

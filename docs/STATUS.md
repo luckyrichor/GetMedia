@@ -7,7 +7,9 @@
 | 事项 | 状态 | 证据 |
 |---|---|---|
 | 定时倒计时挤掉排序控件（缺陷） | **已修复并提交**；free/full 单测 135/155 项全过（工具栏回归 10 项）；真机验收由用户执行 | `docs/timer-bug-report.md`、`docs/reports/timer-bug-shots/` |
-| 批量导出（音频/视频，可新建文件夹） | **方案已交，等用户确认**（确认后才写代码） | `docs/export-plan.md` |
+| 批量导出（音频/视频，可新建文件夹） | **方案已确认**（2026-11-17，6 点决定 + OwnerGate 约束），按 A → B → C 交付，代码未开始 | `docs/export-plan.md` |
+| Android UI 方案 v2（P4a） | 已按用户清单修订：占位入口、数字输入、北京时间日期区间、预览分页、博主批量入口移到提取页、导出入口 | `docs/ui-plan.md` |
+| P6 部署材料 v2 | 已按用户清单修订：快照最前、不覆盖 env、nginx 还原备份、页面发布与建账号步骤、退役补 getvideo-ai-worker、A/B/C 三段 | 本地 `docs/p6-deploy-plan.md`（不入公开仓库） |
 
 ## 2026-11-17 阶段进度（P1–P5f + P2h + P2i）
 
