@@ -97,6 +97,6 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 更新日志
 
-- 2026-11-17：定时倒计时遮挡排序控件的缺陷（三处同源）修复已提交并推送（`15a1481`），工具栏回归 10 项，free/full 单测 135/155 全过；导出方案按用户 6 点决定修订并确认；`ui-plan.md` 出 v2；P6 部署材料改 A/B/C 三段（本地）。未部署、未安装、未退役。
+- 2026-11-17：定时倒计时遮挡排序控件的缺陷（三处同源）修复已提交并推送（`15a1481`），工具栏回归 10 项，free/full 单测当轮全过（当前基线 144/164，含导出节点 A 的 15 项）；导出方案按用户 6 点决定修订并确认，节点 A 已交付；`ui-plan.md` 出到 v3；P6 部署材料改到 v3（本地）。未部署、未安装、未退役。
 
 - 2026-11-01：Codex 同步 GitHub wp5a-android-base@0f4dfc3，完成首次本轮 Mac Debug 构建验证，补充 AGENTS/CLAUDE、构建报告和日志，更新 STATUS。没有改业务代码、提交、推送、安装或部署。
