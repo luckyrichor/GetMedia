@@ -107,11 +107,14 @@ def test_image_exif_stripped_and_reencoded(user):
     src = jpeg(exif=True)
     assert b"SecretCam" in src
     r = post(env, h, files=[img_file(src)])
-    assert r.status_code == 201
+    # 带上响应体：这个用例在沙箱里偶发失败过两次（单独跑与连续全量都通过），
+    # 下次出现时能直接看到是 429 还是 422，而不是只看到一个 201 断言。
+    assert r.status_code == 201, f"提交失败：HTTP {r.status_code} {r.text[:200]}"
     row = rows(env)[0]
     name = json.loads(row["image_paths"])[0]
     data = (env.settings.feedback_image_dir / name).read_bytes()
-    assert b"SecretCam" not in data and not Image.open(io.BytesIO(data)).getexif()
+    assert b"SecretCam" not in data, "落盘文件里仍有原始 EXIF 字符串"
+    assert not Image.open(io.BytesIO(data)).getexif(), "落盘文件仍带 EXIF 块"
     assert oct((env.settings.feedback_image_dir / name).stat().st_mode & 0o777) == "0o600"
     assert name.endswith(".jpg") and "a.jpg" not in name
 

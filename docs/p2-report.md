@@ -117,6 +117,62 @@
 
 **测试**：`tests/test_recreations.py` 8 项（能力开关、上传与 Range、超限 413、描述必填、领取/完成/产物播放、取消、卡死重置、worker 未配置与注入 runner）。
 
+### 8.1 存储归属、清理时机与超限提示
+
+**结论：AI 的源文件与产物计入「服务器库」（archive，默认 3 GiB），不计入网页缓存（5 GiB）。**
+
+理由：
+
+- **语义**：`cache` 是"随时可丢、到期即删"的中转；AI 源文件是用户自己传的素材，产物是花钱算出来的，
+  删了不能自动重建（要重新生成）。它和 `archive` 同构，不同 `cache`。
+- **生命周期**：`cache` 由 TTL + LRU 自动淘汰；`archive` 只由用户主动删或 owner 清理。AI 也应当如此。
+- **容量**：单文件上限 200 MiB，一次上传 + 一份产物就可能占掉 400 MiB。放进 5 GiB 的缓存会把网页缓存挤掉，
+  而网页缓存被挤掉的代价是"下次重新解析"，AI 被挤掉的代价是"素材和结果都没了"。
+
+#### 现状（部署前必读）：两个配额都还没计
+
+这不是"计入了但没显示"，而是**根本没参与计算**：
+
+| 事实 | 位置 |
+|---|---|
+| AI 文件落在 `media_dir/ai/{项目号}/`（源 `source.ext`，产物由 runner 写同目录） | `recreations.py::_dir`、`ai_worker.py::run_once` |
+| 配额只用 `tracks` 表求和，`storage` 列取 `archive`/`cache` | `media.py::storage_used`、`media.py::stats` |
+| `/v2/maintenance/storage` 的 `by_storage` 来自 `GROUP BY storage`，因此看不到 AI | `media_api.py:313` |
+| `purge_orphans()` 只遍历 `media_dir`/`cache_dir` 的**顶层文件**（`is_file()`），`ai/` 是目录 | `media.py::purge_orphans` |
+| 上传只查单文件 200 MiB（413），不查剩余配额 | `recreations.py::create_upload` |
+| worker 只在剩余磁盘 < `ai_min_free_mb`（默认 2048 MB）时判 `no_space` | `ai_worker.py::run_once` |
+
+两点后果要说清：**AI 上传目前可以无限占盘**（只受磁盘本身限制，不受 3 GiB 约束）；
+`ai/` 也**没有任何保留期或清理任务**，孤儿清理不会误删它（`is_file()` 挡住了），但也永远不会回收它。
+
+#### 目标行为（决定已定，代码待实施 = P2i）
+
+1. **上传前判配额**：`archive_used + ai_used + new_bytes <= archive_quota`，超了直接 409，
+   不写盘、不建项目（与媒体库 `ensure_room` 同口径：先拒绝，不留半成品）。
+2. **`ai_used` 用目录求和**：遍历 `media_dir/ai` 下的文件字节，不新增表字段；项目量级是个位到几十，成本可忽略。
+3. **维护接口加一项**：`/v2/maintenance/storage` 的 `by_storage` 增 `ai`（文件数 + 字节），
+   管理台「库维护」显示「AI 素材与产物」，归档配额条改为 `archive_used + ai_used` / 3 GiB。
+4. **保留期清理**：`GETMEDIA_AI_RETENTION_DAYS`，默认 **7 天**；
+   `python -m getmedia.cli ai-gc --days 7 [--dry-run]`，或每日 04:10 的 systemd timer。
+   只删「没有 queued/running 任务、且 `updated_at` 早于 N 天」的项目的**文件**，
+   **保留记录**并把 `status` 置 `expired`、`source_path` 置 NULL；页面显示「文件已过期清理，可重新上传或重新生成」。
+   注意产物是按 run 存的，清理时整个项目目录一起删，`recreation_runs.status` 保留 `done` 不动——
+   历史仍然可查，只是文件不在了。
+5. **手动入口**：库维护页加「清理 AI 文件」，与「清理缓存」「清理孤儿」并列，二次确认，返回释放字节数。
+
+#### 超限提示（服务端与客户端用同一句）
+
+- 服务端 409 `quota_exceeded`：
+  `服务器库空间不足（AI 素材与产物计入 3 GiB）：已用 2.7 GB / 3.0 GB，本次需要 180 MB。先清理缓存或旧项目。`
+- 管理台：上传区提示条 + 维护页配额条（≥90% 黄、≥100% 红）。
+- 手机端：显示服务端 `detail`，不自己编文案（`error_code` 用于分支，文案只透传）。
+
+#### 为什么这一期只写不做
+
+要动 `recreations.py`（配额）、`media.py`（统计与 gc 复用）、`media_api.py`（报告字段）、`cli.py`（`ai-gc`）
+四处，外加一个 timer，属于独立一期；测试至少 5 项（AI 字节计数、上传超限 409 且不落盘、
+gc 只删该删的、记录变 `expired` 且文件不在、`storage` 报告含 `ai`）。列为 P2i，等确认后再提交。
+
 ## 9. 与 `plan.md` 的偏差（请重点看这一节）
 
 | # | 计划写法 | 实际做法 | 原因 |
