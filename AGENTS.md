@@ -58,7 +58,7 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 当前进度（2026-11-17）
 
-- 补充任务（2026-11-17）：定时倒计时挤掉首页排序控件的缺陷已修复并提交（`15a1481`，`LibraryToolbar` 抽出、定时独立成行、排序+导入改 FlowRow、48 dp 热区），`LibraryToolbarLayoutTest` 10 项在 free/full 通过，真机验收由用户执行；批量导出按 A → B → C 交付，**节点 A 已交付**（`data/export/ExportTrack|ExportNaming|ExportPlan` + 12 个编号用例，free 144 / full 164 单测全过），B/C 未开始。
+- 补充任务（2026-11-17）：定时倒计时挤掉首页排序控件的缺陷已修复并提交（`15a1481`，`LibraryToolbar` 抽出、定时独立成行、排序+导入改 FlowRow、48 dp 热区），`LibraryToolbarLayoutTest` 10 项在 free/full 通过，真机验收由用户执行；批量导出按 A → B → C 交付，**节点 A 已交付**（`data/export/ExportTrack|ExportNaming|ExportPlan` + 13 个编号用例，free 145 / full 165 单测全过），B/C 未开始。
 - UI 方案 v3（`docs/ui-plan.md`）：v2 基础上加一条——free 的「我的」页账号卡片**不显示 tier**，只留设备数，tier 走 `OwnerGate.AccountTierBadge()`（free 空实现）。
 - P6 部署材料 v3（本地文件，不入公开仓库）：密钥只写 `键=值`（`GETMEDIA_SECRET_KEY` 不动、`GETMEDIA_CRED_KEY` 现场生成 44 字符）、`llm.env` 本次不建、`daemon-reload` 后 `restart` 并查 `schema_version=11`/health/journalctl、代码回退必须配库快照且 `/opt/getmedia/server` 保留、冒烟脚本传 `/tmp` 用完删、nginx 脚本插 include、只建 `owner1`/`owner2`、退役三条前置。
 
@@ -97,6 +97,6 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 更新日志
 
-- 2026-11-17：定时倒计时遮挡排序控件的缺陷（三处同源）修复已提交并推送（`15a1481`），工具栏回归 10 项，free/full 单测当轮全过（当前基线 144/164，含导出节点 A 的 15 项）；导出方案按用户 6 点决定修订并确认，节点 A 已交付；`ui-plan.md` 出到 v3；P6 部署材料改到 v3（本地）。未部署、未安装、未退役。
+- 2026-11-17：定时倒计时遮挡排序控件的缺陷（三处同源）修复已提交并推送（`15a1481`），工具栏回归 10 项，free/full 单测当轮全过（当前基线 145/165，含导出节点 A 的 16 项）；导出方案按用户 6 点决定修订并确认，节点 A 已交付；`ui-plan.md` 出到 v3；P6 部署材料改到 v3（本地）。未部署、未安装、未退役。
 
 - 2026-11-01：Codex 同步 GitHub wp5a-android-base@0f4dfc3，完成首次本轮 Mac Debug 构建验证，补充 AGENTS/CLAUDE、构建报告和日志，更新 STATUS。没有改业务代码、提交、推送、安装或部署。

@@ -24,6 +24,20 @@ object ExportNaming {
     /** 基础名上限：UTF-8 字节数，给扩展名、序号、博主名留余量。 */
     const val MAX_NAME_BYTES = 200
 
+    /**
+     * **整个文件名**的 UTF-8 字节上限（不含重名序号）。
+     *
+     * 各部分单独有上限，加起来却可能远超文件系统的名字上限：标题 200 + `" - "` 3 + 博主 120 +
+     * `" (yyyy-MM-dd)"` 13 + `".webm"` 9 ≈ 345 字节，而 ext4 / Android（FUSE、sdcardfs）都卡 255 字节，
+     * 写入会直接 ENAMETOOLONG。所以拼完还要按整体收一次，**只截标题**，博主/日期/扩展名保住。
+     *
+     * 取 240 是给重名序号留位：`" (999)"` 最多 6 字节，240 + 6 = 246 < 255。
+     */
+    const val MAX_FILE_NAME_BYTES = 240
+
+    /** 文件名整体上限里给序号预留的字节数（`" (999)"`）。 */
+    const val INDEX_RESERVE_BYTES = 6
+
     const val MAX_FOLDER_CHARS = 60
     const val MAX_FOLDER_BYTES = 180
     const val MAX_UPLOADER_CHARS = 30
@@ -119,6 +133,9 @@ object ExportNaming {
     /**
      * 组合文件名：`基础名 + 博主 + 入库日期 + 扩展名`（顺序固定，见方案 §4.2）。
      *
+     * 整名再收一次到 [MAX_FILE_NAME_BYTES]：固定部分（博主 + 日期 + 扩展名）先算好，
+     * 剩下的字节额度全给标题——**先截标题，不截博主/日期/扩展名**。
+     *
      * @param withUploader 文件名带博主名（默认关闭）
      * @param withDate 文件名带**入库日期**（默认关闭；界面文案也必须写"入库日期"）
      */
@@ -128,18 +145,28 @@ object ExportNaming {
         withDate: Boolean = false,
         zone: ZoneId = ZoneId.systemDefault(),
     ): String {
-        val sb = StringBuilder(sanitize(track.displayTitle))
-        if (withUploader) {
-            val uploader = track.uploader?.takeIf { it.isNotBlank() }
-            if (uploader != null) {
-                sb.append(" - ")
-                    .append(sanitize(uploader, MAX_UPLOADER_CHARS, MAX_UPLOADER_BYTES, UNKNOWN_UPLOADER))
-            }
+        val ext = extension(track.audioFormat)
+        val uploaderPart = if (withUploader) {
+            track.uploader?.takeIf { it.isNotBlank() }?.let {
+                " - " + sanitize(it, MAX_UPLOADER_CHARS, MAX_UPLOADER_BYTES, UNKNOWN_UPLOADER)
+            }.orEmpty()
+        } else {
+            ""
         }
-        if (withDate) {
-            dateSuffix(track.addedAtMs, zone)?.let { sb.append(" (").append(it).append(')') }
+        val datePart = if (withDate) {
+            dateSuffix(track.addedAtMs, zone)?.let { " ($it)" }.orEmpty()
+        } else {
+            ""
         }
-        return sb.append('.').append(extension(track.audioFormat)).toString()
+        // 扩展名只含字母数字（见 extension()），字符数即字节数
+        val fixedBytes = uploaderPart.toByteArray(Charsets.UTF_8).size +
+            datePart.toByteArray(Charsets.UTF_8).size + 1 + ext.length
+        // 固定部分本身有上限（3+120+13+1+8 = 145），这里的额度最小也有 95 字节
+        val titleBytes = (MAX_FILE_NAME_BYTES - fixedBytes).coerceAtLeast(1)
+        val title = sanitize(track.displayTitle, MAX_NAME_CHARS, minOf(MAX_NAME_BYTES, titleBytes))
+        return buildString(title.length + fixedBytes) {
+            append(title).append(uploaderPart).append(datePart).append('.').append(ext)
+        }
     }
 
     /**

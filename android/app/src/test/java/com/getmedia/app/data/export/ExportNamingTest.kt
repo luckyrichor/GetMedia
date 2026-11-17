@@ -2,6 +2,7 @@ package com.getmedia.app.data.export
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -157,6 +158,41 @@ class ExportNamingTest {
             byUploader = true,
         ).single()
         assertEquals("2026-11 导出/音频/碧诗/标题.m4a", item.relativePath)
+    }
+
+    /** 13. 整名上限：标题 + 博主 + 日期 + 扩展名，再加 ` (999)` 也不超过 255 字节。 */
+    @Test
+    fun wholeNameFitsFileSystemLimitEvenWithIndex() {
+        // 最坏情形：3 字节/字的中文标题与博主、带日期、扩展名取最长的 8 字符
+        val worst = track(
+            title = "长".repeat(300),
+            uploader = "博".repeat(300),
+            addedAtMs = 1_700_000_000_000L,
+            format = "matroska",   // 8 字符：extension() 允许的最长扩展名
+        )
+        val name = ExportNaming.fileName(worst, withUploader = true, withDate = true, zone = ZoneOffset.ofHours(8))
+        val bytes = name.toByteArray(Charsets.UTF_8).size
+        assertTrue("整名 $bytes 字节，超过 ${ExportNaming.MAX_FILE_NAME_BYTES}: $name",
+            bytes <= ExportNaming.MAX_FILE_NAME_BYTES)
+
+        // 被截的只有标题：博主（30 字上限）、入库日期、扩展名都在
+        assertTrue("博主被截掉了: $name", name.contains(" - " + "博".repeat(ExportNaming.MAX_UPLOADER_CHARS)))
+        assertTrue("日期丢了: $name", name.contains(" (2023-11-15)"))
+        assertTrue("扩展名丢了: $name", name.endsWith(".matroska"))
+
+        // 序号 999 是重名分支里最长的后缀：加上它仍要 ≤ 255（ext4 / Android 的硬上限）
+        val dot = name.lastIndexOf('.')
+        val stem = name.substring(0, dot)
+        val ext = name.substring(dot)
+        val index999 = (2..ExportNaming.MAX_INDEX).map { "$stem ($it)$ext" }
+        val numbered = ExportNaming.uniqueName(name, listOf(name) + index999.dropLast(1))
+        assertNotNull(numbered)
+        assertTrue("序号没加到 999: $numbered", numbered!!.endsWith(" (999)$ext"))
+        val numberedBytes = numbered.toByteArray(Charsets.UTF_8).size
+        assertTrue("带序号后 $numberedBytes 字节，超过 255: $numbered", numberedBytes <= 255)
+        // 240 + 6 = 246，仍在 255 以内
+        assertTrue("带序号后 $numberedBytes 字节，超过预留额度",
+            numberedBytes <= ExportNaming.MAX_FILE_NAME_BYTES + ExportNaming.INDEX_RESERVE_BYTES)
     }
 
     /** 扩展名：空的补 m4a，白名单外的原样保留（不转码），并滤掉危险字符。 */

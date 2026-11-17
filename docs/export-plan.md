@@ -205,6 +205,11 @@
 
 组合顺序：`基础名 + 博主 + 入库日期 + 扩展名`。
 
+**整名再收一次到 240 字节（UTF-8），只截标题。** 各部分单独有上限、加起来却没有：标题 200 + `" - "` 3 +
+博主 120 + `" (yyyy-MM-dd)"` 13 + `".matroska"` 9 ≈ 345 字节，而 ext4 / Android（FUSE、sdcardfs）都卡
+**255 字节**，超过就是 `ENAMETOOLONG`，写到一半整项失败。所以拼之前先算固定部分（博主 + 日期 + `.扩展名`）
+的字节数，剩下的额度全给标题；扣到 240 是给重名序号留位——`" (999)"` 最多 6 字节，240 + 6 = 246 < 255。
+
 ### 4.3 扩展名
 
 - 取 `audioFormat`（小写）。**空 → `m4a`**（与库内默认一致）；**有值就原样保留**——不转码，`webm`/`mkv` 该怎么落就怎么落。
@@ -422,6 +427,7 @@ python3 tools/scan_forbidden.py heavy /tmp/gm-free
 | 10 | 子文件夹路径 | 按类型 + 按博主 → `音频/博主名/` |
 | 11 | MIME 映射 | m4a→`audio/mp4`、mp4→`video/mp4`、未知→`application/octet-stream` |
 | 12 | 失败归类 | `SecurityException` → 「目录授权已失效」；`IOException(ENOSPC)` → 「空间不足」；文案内无路径 |
+| 13 | 整名字节上限 | 300 字标题 + 300 字博主 + 日期 + 8 字符扩展名：整名 ≤ 240 字节，且博主/日期/扩展名都还在；再叠 ` (999)` 后 ≤ 255 |
 
 ### 9.2 Robolectric / 仪器测试
 
@@ -464,14 +470,15 @@ free/ui/OwnerGate.kt             空实现（不渲染、无文案）
 full/ui/OwnerGate.kt             真实实现（文案 + 服务器库查询 + 先下载）
 AndroidManifest.xml              ExportService + FOREGROUND_SERVICE_DATA_SYNC
 tools/forbidden-heavy.txt        加「尚未下载到本机」「先下载再导出」两句
-test/.../ExportNamingTest.kt     9.1 的 1–7、10（含扩展名规则）
+test/.../ExportNamingTest.kt     9.1 的 1–7、10、13（含扩展名与整名上限）
 test/.../ExportPlanTest.kt       9.1 的 8、9、11、12
 ```
 
 交付顺序（已确认：A → B → C，每个节点单独交付，交付时给该节点的构建/测试证据）：
 
-- **A（纯逻辑，无 UI）**：`ExportNaming` + `ExportPlan` + 9.1 全部单测。交付物：代码 + 12 项用例 + 一次 `testFreeDebugUnitTest` 结果。
-  **状态：已交付（2026-11-17）**。`data/export/ExportTrack.kt`、`ExportNaming.kt`、`ExportPlan.kt` + 两个测试类，12 个编号用例全过。
+- **A（纯逻辑，无 UI）**：`ExportNaming` + `ExportPlan` + 9.1 全部单测。交付物：代码 + 13 项编号用例 + 一次 `testFreeDebugUnitTest` 结果。
+  **状态：已交付（2026-11-17，含第 13 项整名上限）**。`data/export/ExportTrack.kt`、`ExportNaming.kt`、
+  `ExportPlan.kt` + 两个测试类（16 个方法，覆盖 9.1 的 1–13），13 个编号用例全过。
 - **B（确认页与目录）**：`ExportSheet` 确认页 + SAF 目录选择 + 授权持久化 + 上次目录记忆 + 文件夹名/重名提示（导出 1 项走通全链路，进度先用应用内简单态）。
 - **C（服务与收口）**：`ExportService`（dataSync 前台服务）+ 通知 + 取消 + 摘要 + 重试失败项 + OwnerGate 接缝与产物隔离验证（9.3）。
 
