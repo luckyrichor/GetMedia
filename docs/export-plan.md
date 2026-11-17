@@ -207,8 +207,9 @@
 
 ### 4.3 扩展名
 
-- 取 `audioFormat`（小写）。空或不在白名单 → `m4a`（与库内默认一致）。
-- 白名单：`m4a mp3 aac flac wav ogg opus mp4 m4v webm mkv`。不在白名单的原样保留，但 MIME 用 `application/octet-stream`。
+- 取 `audioFormat`（小写）。**空 → `m4a`**（与库内默认一致）；**有值就原样保留**——不转码，`webm`/`mkv` 该怎么落就怎么落。
+- 白名单只用于 **MIME 判定**：`m4a mp3 aac flac wav ogg opus mp4 m4v webm mkv`；白名单外的 MIME 用 `application/octet-stream`（§5.7 的"不转码"）。
+- 落盘前滤掉非字母数字字符；滤完长度不在 1–8 就回落 `m4a`——防止该字段里混进路径分隔符。
 - 库内文件实际存为 `<id>.audio`，扩展名只存在于 `audioFormat` 字段，导出时按字段拼。
 
 ### 4.4 重名
@@ -463,13 +464,14 @@ free/ui/OwnerGate.kt             空实现（不渲染、无文案）
 full/ui/OwnerGate.kt             真实实现（文案 + 服务器库查询 + 先下载）
 AndroidManifest.xml              ExportService + FOREGROUND_SERVICE_DATA_SYNC
 tools/forbidden-heavy.txt        加「尚未下载到本机」「先下载再导出」两句
-test/.../ExportNamingTest.kt     9.1 的 1–7、10、11
-test/.../ExportPlanTest.kt       9.1 的 8、9、12
+test/.../ExportNamingTest.kt     9.1 的 1–7、10（含扩展名规则）
+test/.../ExportPlanTest.kt       9.1 的 8、9、11、12
 ```
 
 交付顺序（已确认：A → B → C，每个节点单独交付，交付时给该节点的构建/测试证据）：
 
 - **A（纯逻辑，无 UI）**：`ExportNaming` + `ExportPlan` + 9.1 全部单测。交付物：代码 + 12 项用例 + 一次 `testFreeDebugUnitTest` 结果。
+  **状态：已交付（2026-11-17）**。`data/export/ExportTrack.kt`、`ExportNaming.kt`、`ExportPlan.kt` + 两个测试类，12 个编号用例全过。
 - **B（确认页与目录）**：`ExportSheet` 确认页 + SAF 目录选择 + 授权持久化 + 上次目录记忆 + 文件夹名/重名提示（导出 1 项走通全链路，进度先用应用内简单态）。
 - **C（服务与收口）**：`ExportService`（dataSync 前台服务）+ 通知 + 取消 + 摘要 + 重试失败项 + OwnerGate 接缝与产物隔离验证（9.3）。
 

@@ -58,8 +58,9 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 当前进度（2026-11-17）
 
-- 补充任务（2026-11-17）：定时倒计时挤掉首页排序控件的缺陷已修复并提交（`15a1481`，`LibraryToolbar` 抽出、定时独立成行、排序+导入改 FlowRow、48 dp 热区），`LibraryToolbarLayoutTest` 10 项在 free/full 通过，真机验收由用户执行；批量导出方案已确认（6 点决定 + 「服务器库未下载」只经 `OwnerGate` 进 full），按 A → B → C 交付，**代码未开始**。
-- UI 方案 v2（`docs/ui-plan.md`）：free 占位入口、批量数量数字输入、北京时间日期区间、预览分页、博主批量入口移到提取页、写入导出入口。P6 部署材料 v2（本地文件）：快照最前、不覆盖 env、nginx 还原备份、页面发布与建账号、退役补 `getvideo-ai-worker`、A/B/C 三段等确认。
+- 补充任务（2026-11-17）：定时倒计时挤掉首页排序控件的缺陷已修复并提交（`15a1481`，`LibraryToolbar` 抽出、定时独立成行、排序+导入改 FlowRow、48 dp 热区），`LibraryToolbarLayoutTest` 10 项在 free/full 通过，真机验收由用户执行；批量导出按 A → B → C 交付，**节点 A 已交付**（`data/export/ExportTrack|ExportNaming|ExportPlan` + 12 个编号用例，free 144 / full 164 单测全过），B/C 未开始。
+- UI 方案 v3（`docs/ui-plan.md`）：v2 基础上加一条——free 的「我的」页账号卡片**不显示 tier**，只留设备数，tier 走 `OwnerGate.AccountTierBadge()`（free 空实现）。
+- P6 部署材料 v3（本地文件，不入公开仓库）：密钥只写 `键=值`（`GETMEDIA_SECRET_KEY` 不动、`GETMEDIA_CRED_KEY` 现场生成 44 字符）、`llm.env` 本次不建、`daemon-reload` 后 `restart` 并查 `schema_version=11`/health/journalctl、代码回退必须配库快照且 `/opt/getmedia/server` 保留、冒烟脚本传 `/tmp` 用完删、nginx 脚本插 include、只建 `owner1`/`owner2`、退役三条前置。
 
 - 服务端 P1–P3 完成（迁移工具就绪，真实迁移等部署后）；Android 双风味（free/full）已就绪。
 - 网页：公开页接新服务 + owner 认证壳 + 功能页 5c–5f 全部完成，管理台九栏都接真实接口
