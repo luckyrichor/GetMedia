@@ -1,0 +1,13 @@
+# 安装位置：/etc/systemd/system/getmedia-ai-gc.timer
+# 启用：systemctl enable --now getmedia-ai-gc.timer
+[Unit]
+Description=GetMedia AI retention cleanup timer
+
+[Timer]
+# 凌晨 4:10（快照 03:30 之后，避开白天流量与 worker 高峰）；错过的会在开机后补跑。
+OnCalendar=*-*-* 04:10:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target

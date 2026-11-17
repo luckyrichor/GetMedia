@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import re
 
 import pytest
 from PIL import Image
@@ -107,8 +108,7 @@ def test_image_exif_stripped_and_reencoded(user):
     src = jpeg(exif=True)
     assert b"SecretCam" in src
     r = post(env, h, files=[img_file(src)])
-    # 带上响应体：这个用例在沙箱里偶发失败过两次（单独跑与连续全量都通过），
-    # 下次出现时能直接看到是 429 还是 422，而不是只看到一个 201 断言。
+    # 带上响应体：将来若真被限流（429）或校验拦住（422），这里能直接看出来。
     assert r.status_code == 201, f"提交失败：HTTP {r.status_code} {r.text[:200]}"
     row = rows(env)[0]
     name = json.loads(row["image_paths"])[0]
@@ -116,7 +116,10 @@ def test_image_exif_stripped_and_reencoded(user):
     assert b"SecretCam" not in data, "落盘文件里仍有原始 EXIF 字符串"
     assert not Image.open(io.BytesIO(data)).getexif(), "落盘文件仍带 EXIF 块"
     assert oct((env.settings.feedback_image_dir / name).stat().st_mode & 0o777) == "0o600"
-    assert name.endswith(".jpg") and "a.jpg" not in name
+    # 原名 a.jpg 不得出现在落盘名里（防"直接用客户端文件名"的路径穿越/覆盖）。
+    # 注意不能写 `"a.jpg" not in name`：随机名是 32 位十六进制 + ".jpg"，末位是 a 时
+    # 会出现 "…a.jpg"，1/16 概率误报——这正是这个用例两次"偶发失败"的真正原因。
+    assert re.fullmatch(r"[0-9a-f]{32}\.jpg", name), f"落盘名不是随机名：{name}"
 
 
 def test_fake_extension_and_non_image_rejected(user):

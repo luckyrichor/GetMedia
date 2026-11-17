@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 from pathlib import Path
@@ -21,6 +22,18 @@ from .media import MediaError, MediaStore
 log = logging.getLogger("getmedia.recreations")
 
 KINDS = ("analyze", "generate")
+
+
+def fmt_size(n: int) -> str:
+    """给用户看的体积：0.5 GB / 180 MB / 12 KB。"""
+    n = max(0, int(n))
+    if n >= 1024 ** 3:
+        return f"{n / 1024 ** 3:.1f} GB"
+    if n >= 1024 ** 2:
+        return f"{n / 1024 ** 2:.0f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.0f} KB"
+    return f"{n} B"
 
 
 class RecreationError(Exception):
@@ -40,11 +53,39 @@ class RecreationService:
     def capabilities(self) -> dict:
         return {"available": bool(self.s.ai_enabled), "modes": list(KINDS),
                 "max_upload_bytes": self.s.ai_max_upload_bytes,
+                "retention_days": int(self.s.ai_retention_days),
+                "storage": self._storage(),
                 "reason": None if self.s.ai_enabled else "服务端未配置模型，AI 重建暂不可用"}
+
+    def _storage(self) -> dict:
+        """服务器库配额（archive 已含 AI）：页面用它画配额条、提示剩余空间。"""
+        if self.media is None:
+            return {"quota": 0, "used": 0, "ai_bytes": 0, "ai_files": 0}
+        ai = self.media.ai_stats()
+        return {"quota": self.media.quota_of("archive"), "used": self.media.storage_used("archive"),
+                "ai_bytes": ai["bytes"], "ai_files": ai["files"]}
 
     def _require_available(self) -> None:
         if not self.s.ai_enabled:
             raise RecreationError("ai_unconfigured", "服务端未配置模型，AI 重建暂不可用", 503)
+
+    def _ensure_room(self, need: int) -> None:
+        """上传前判服务器库配额（archive，含 AI 自己的占用），超了直接拒绝、不落盘。"""
+        if self.media is None:
+            return
+        quota = self.media.quota_of("archive")
+        if quota <= 0:
+            raise RecreationError("storage_disabled", "服务器库未开启", 409)
+        used = self.media.storage_used("archive")
+        if used + max(0, need) > quota:
+            # 文案与手机端、管理台共用同一句：三段（原因 / 现状 / 怎么办），不要各写一版。
+            raise RecreationError(
+                "quota_exceeded",
+                f"服务器库空间不足（AI 素材与产物计入 {fmt_size(quota)}）："
+                f"已用 {fmt_size(used)} / {fmt_size(quota)}，本次需要 {fmt_size(need)}。"
+                "先清理缓存或旧项目。",
+                409,
+            )
 
     # ---------- 资源 ----------
     def _dir(self, pid: int) -> Path:
@@ -59,6 +100,7 @@ class RecreationService:
         if len(data) > self.s.ai_max_upload_bytes:
             raise RecreationError("file_too_large",
                                   f"文件不能超过 {self.s.ai_max_upload_bytes // 1024**2} MB", 413)
+        self._ensure_room(len(data))  # 先判配额：拒绝时不留项目行、不写盘
         now = self.now()
         with self.engine.begin() as c:
             c.execute(text("INSERT INTO recreations(user_id, title, status, created_at, updated_at)"
@@ -101,12 +143,23 @@ class RecreationService:
             pid = int(c.execute(text("SELECT last_insert_rowid()")).scalar_one())
         return self.get(user_id, pid)
 
-    def _row(self, r) -> dict:
+    def _row(self, r, now: int) -> dict:
         m = r._mapping
-        return {k: m[k] for k in ("id", "title", "source_track_id", "source_path", "description",
-                                  "status", "created_at", "updated_at")}
+        out = {k: m[k] for k in ("id", "title", "source_track_id", "source_path", "description",
+                                 "status", "created_at", "updated_at")}
+        out.update(self._expiry(out, now))
+        return out
+
+    def _expiry(self, rec: dict, now: int) -> dict:
+        """保留期：从最后一次活动（``updated_at``）起算，到期由 ``gc`` 删文件、留记录。"""
+        days = int(self.s.ai_retention_days)
+        expires_at = int(rec["updated_at"]) + days * 86400
+        return {"expires_at": expires_at,
+                "days_left": max(0, math.ceil((expires_at - now) / 86400)),
+                "retention_days": days}
 
     def get(self, user_id: str, pid: int) -> dict:
+        now = self.now()
         with self.engine.begin() as c:
             row = c.execute(text("SELECT id, title, source_track_id, source_path, description, status,"
                                  " created_at, updated_at FROM recreations WHERE id=:i AND user_id=:u"),
@@ -116,16 +169,17 @@ class RecreationService:
             runs = c.execute(text("SELECT id, kind, status, progress, error_code, created_at, started_at,"
                                   " finished_at FROM recreation_runs WHERE recreation_id=:i ORDER BY id DESC"),
                              {"i": pid}).all()
-        out = self._row(row)
+        out = self._row(row, now)
         out["runs"] = [dict(r._mapping) for r in runs]
         return out
 
     def list(self, user_id: str, limit: int = 50) -> list[dict]:
+        now = self.now()
         with self.engine.begin() as c:
             rows = c.execute(text("SELECT id, title, source_track_id, source_path, description, status,"
                                   " created_at, updated_at FROM recreations WHERE user_id=:u"
                                   " ORDER BY id DESC LIMIT :l"), {"u": user_id, "l": limit}).all()
-        return [self._row(r) for r in rows]
+        return [self._row(r, now) for r in rows]
 
     def set_description(self, user_id: str, pid: int, description: str) -> dict:
         self.get(user_id, pid)
@@ -220,6 +274,53 @@ class RecreationService:
                 " error_code=CASE WHEN attempts>=3 THEN 'too_many_attempts' ELSE error_code END,"
                 " started_at=NULL WHERE status='running' AND started_at<:c"), {"c": cut}).rowcount
 
+    # ---------- 保留期清理 ----------
+    @staticmethod
+    def _dir_size(d: Path) -> int:
+        if not d.is_dir():
+            return 0
+        total = 0
+        for p in d.rglob("*"):
+            if p.is_file():
+                try:
+                    total += p.stat().st_size
+                except OSError:  # worker 正在写
+                    continue
+        return total
+
+    def gc(self, *, days: int | None = None, dry_run: bool = False) -> dict:
+        """删掉过期项目的**文件**，保留记录并把状态置 ``expired``。
+
+        三条约束：
+        - 只动 ``updated_at`` 早于 N 天的项目（N 默认取 ``GETMEDIA_AI_RETENTION_DAYS``）；
+        - 有 queued/running 任务的不动——删了文件会让 worker 半路失败，等它跑完；
+        - 只删 ``media_dir/ai/<项目号>/``，源来自媒体库的项目其真身（tracks 的文件）不受影响。
+        """
+        days = int(days or self.s.ai_retention_days)
+        cut = self.now() - max(1, days) * 86400
+        with self.engine.begin() as c:
+            rows = c.execute(text(
+                "SELECT id FROM recreations r WHERE updated_at < :cut AND status != 'expired'"
+                " AND NOT EXISTS (SELECT 1 FROM recreation_runs x WHERE x.recreation_id=r.id"
+                " AND x.status IN ('queued','running')) ORDER BY id"), {"cut": cut}).all()
+            ids = [int(r._mapping["id"]) for r in rows]
+        projects, freed = 0, 0
+        for pid in ids:
+            d = Path(self.s.media_dir) / "ai" / str(pid)
+            freed += self._dir_size(d)
+            projects += 1
+            if dry_run:
+                continue
+            if d.is_dir():
+                shutil.rmtree(d, ignore_errors=True)
+            with self.engine.begin() as c:
+                c.execute(text("UPDATE recreations SET status='expired', source_path=NULL WHERE id=:i"),
+                          {"i": pid})
+        if projects:
+            log.info("AI 保留期清理：%d 个项目，%s%s", projects, fmt_size(freed),
+                     "（演练，未删）" if dry_run else "")
+        return {"projects": projects, "freed_bytes": freed, "days": days, "dry_run": dry_run}
+
     def source_file(self, user_id: str, pid: int) -> Path:
         rec = self.get(user_id, pid)
         if not rec["source_path"]:
@@ -230,4 +331,4 @@ class RecreationService:
         return p
 
 
-__all__ = ["RecreationService", "RecreationError", "KINDS", "shutil"]
+__all__ = ["RecreationService", "RecreationError", "KINDS", "fmt_size", "shutil"]

@@ -67,7 +67,28 @@ export function MaintenancePage() {
     }
   }
 
+  async function gcAi() {
+    if (!confirm('清理过期的 AI 素材与产物？只删超过保留期、且没有排队/执行中任务的项目文件，'
+                 + '记录保留（状态变"文件已过期"），源来自媒体库的文件不受影响。')) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const out = await ownerApi.gcAi();
+      setNote(out.projects === 0
+        ? `没有到期的 AI 项目（保留期 ${out.days} 天）。`
+        : `清理完成：${out.projects} 个项目，释放 ${fmtBytes(out.freed_bytes)}。`);
+      await load();
+    } catch (e) {
+      setErr(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (phase === 'loading') return <Loading what="库状态" />;
+
+  // 旧服务端可能还没有 ai 字段：少一个字段不该让整页空白。
+  const ai = st?.ai ?? { files: 0, bytes: 0 };
 
   return (
     <>
@@ -91,7 +112,10 @@ export function MaintenancePage() {
                   <div class="metric-k">{k === 'archive' ? '归档' : '缓存'}</div>
                   <div class="metric-v">{fmtBytes(used)} <span class="small muted">/ {fmtBytes(quota)}</span></div>
                   <div class="bar" role="img" aria-label={`${pct}%`}><i style={`width:${pct}%`} /></div>
-                  <div class="small muted">{pct}% 已用</div>
+                  <div class="small muted">
+                    {pct}% 已用
+                    {k === 'archive' && ai.bytes > 0 ? `（含 AI ${fmtBytes(ai.bytes)}）` : ''}
+                  </div>
                 </div>
               );
             })}
@@ -109,7 +133,14 @@ export function MaintenancePage() {
                   <td>{fmtBytes(v.bytes)}</td>
                 </tr>
               ))}
-              {Object.keys(st.by_storage).length === 0 && (
+              {ai.files > 0 && (
+                <tr>
+                  <td>AI 素材与产物（计入归档）</td>
+                  <td>{ai.files}</td>
+                  <td>{fmtBytes(ai.bytes)}</td>
+                </tr>
+              )}
+              {Object.keys(st.by_storage).length === 0 && ai.files === 0 && (
                 <tr><td colSpan={3} class="muted">媒体库里还没有条目。</td></tr>
               )}
             </tbody>
@@ -121,10 +152,15 @@ export function MaintenancePage() {
             <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => void orphans()}>
               清理孤儿文件
             </button>
+            <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => void gcAi()}>
+              清理过期的 AI 文件
+            </button>
           </div>
           <p class="small muted">
-            这两个操作是<strong>全库</strong>的，不按账号过滤——服务器上只有 owner 会用到服务端媒体库。
-            删除文件不会删除记录（记录退回"仅元数据"），播放时会重新解析。
+            这三个操作是<strong>全库</strong>的，不按账号过滤——服务器上只有 owner 会用到服务端媒体库。
+            前两个删除文件不会删除记录（记录退回"仅元数据"），播放时会重新解析；
+            AI 清理只删超过保留期（默认 14 天，由 <code>getmedia-ai-gc.timer</code> 每天自动跑）
+            且没有排队/执行中任务的项目文件，记录保留并把状态置"文件已过期"。
           </p>
         </>
       )}

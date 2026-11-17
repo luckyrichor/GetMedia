@@ -31,6 +31,12 @@ nginx 四个 location（三个入口）、密钥是否加载、TLS 证书到期�
 Cookie 文件两种格式都认：curl/浏览器导出的 Netscape 格式（制表符分隔，含 `#HttpOnly_` 前缀行），
 或者一行一个 `name=value` / `a=b; c=d`。
 
+Cookie 文件的规矩（照做，别图省事）：
+
+- 只放 `/root/`，`chmod 600`、`chown root:root`；不要放 `/tmp`、`/home`、网站目录或任何会被备份/同步的位置。
+- **用完立刻删除**：`shred -u /root/smoke-*.cookie`；取 Cookie 的那条命令历史也一并清。
+- 不进仓库、不贴聊天、不写进日志。本脚本不回显 Cookie，报错信息里也只给状态码。
+
 退出码 = FAIL 的条数（0 表示没有失败；SKIP 不算失败，上限 120）。
 """
 from __future__ import annotations

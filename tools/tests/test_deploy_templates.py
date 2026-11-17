@@ -230,9 +230,11 @@ def test_getmedia_env_example_loads_and_placeholder_key_is_rejected():
     assert str(s.ledger_path).startswith("/var/lib/getmedia-ledger/")    # 台账在快照目录之外
     assert not str(s.ledger_path).startswith(str(s.backup_dir))
     assert s.bind == "127.0.0.1:8700"
+    # P2i：AI 默认关闭、保留 14 天；模板里的值必须能被 load_settings 解析成这两个默认
+    assert s.ai_enabled is False and s.ai_retention_days == 14
     known = {"GETMEDIA_SECRET_KEY", "GETMEDIA_DATA_DIR", "GETMEDIA_DATABASE_URL", "GETMEDIA_BACKUP_DIR", "GETMEDIA_FEEDBACK_IMAGE_DIR",
              "GETMEDIA_LEDGER_PATH", "GETMEDIA_LEGAL_DIR", "GETMEDIA_RELEASE_FILE", "GETMEDIA_RUNTIME_FILE", "GETMEDIA_BIND",
-             "GETMEDIA_CERT_PATH", "GETMEDIA_DISK_PATH"}
+             "GETMEDIA_CERT_PATH", "GETMEDIA_DISK_PATH", "GETMEDIA_AI_ENABLED", "GETMEDIA_AI_RETENTION_DAYS"}
     assert set(env) == known
 
 

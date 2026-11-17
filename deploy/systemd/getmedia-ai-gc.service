@@ -1,0 +1,26 @@
+# 安装位置：/etc/systemd/system/getmedia-ai-gc.service（由 getmedia-ai-gc.timer 触发）
+# AI 素材与产物的保留期清理（P2i）：删掉过期项目的**文件**，保留记录并把状态置 expired。
+# 天数取 GETMEDIA_AI_RETENTION_DAYS（默认 14）。有排队/执行中任务的项目会跳过——
+# 删了文件会让 worker 半路失败，等它跑完下一轮自然会清理。
+# 手动演练：sudo -u getmedia /opt/getmedia/venv/bin/python -m getmedia.cli ai-gc --dry-run
+[Unit]
+Description=GetMedia AI retention cleanup
+After=getmedia-api.service
+
+[Service]
+Type=oneshot
+User=getmedia
+Group=getmedia
+WorkingDirectory=/opt/getmedia/server
+EnvironmentFile=/etc/getmedia/getmedia.env
+EnvironmentFile=-/etc/getmedia/feedback.env
+ExecStart=/opt/getmedia/venv/bin/python -m getmedia.cli ai-gc
+UMask=0077
+StateDirectory=getmedia getmedia-ledger
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadOnlyPaths=/etc/getmedia

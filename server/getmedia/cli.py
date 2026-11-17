@@ -173,6 +173,13 @@ def ops_cmd(s: Settings, args, out=sys.stdout) -> int:
             return 1
         print("发送成功（请到收件箱确认）", file=out)
         return 0
+    if cmd == "ai-gc":
+        # 保留期清理：只删过期项目的文件，记录保留（status=expired）。默认天数取配置。
+        from .recreations import fmt_size
+        r = app.state.recreations.gc(days=args.days or None, dry_run=args.dry_run)
+        print(f"保留期 {r['days']} 天：{'待清理' if r['dry_run'] else '清理'} {r['projects']} 个项目，"
+              f"释放 {fmt_size(r['freed_bytes'])}{'（演练，未删任何文件）' if r['dry_run'] else ''}", file=out)
+        return 0
     if cmd == "tick":
         ops.tick(); print("完成", file=out); return 0
     return 2
@@ -195,6 +202,9 @@ def main(argv=None, settings: Settings | None = None, out=sys.stdout) -> int:
     ir = sub.add_parser("invite-required"); ir.add_argument("state", choices=["on", "off"])
     au = sub.add_parser("audit"); au.add_argument("--limit", type=int, default=50)
     sub.add_parser("snapshot"); sub.add_parser("verify-backup"); sub.add_parser("tick"); sub.add_parser("mail-test")
+    ag = sub.add_parser("ai-gc")
+    ag.add_argument("--days", type=int, default=0, help="保留天数（默认取 GETMEDIA_AI_RETENTION_DAYS，14）")
+    ag.add_argument("--dry-run", action="store_true", help="只统计释放量，不删文件、不改状态")
     al = sub.add_parser("alert"); al.add_argument("kind"); al.add_argument("detail", nargs="?", default="")
     rs = sub.add_parser("restore"); rs.add_argument("snapshot"); rs.add_argument("target"); rs.add_argument("--replay-ledger", action="store_true", default=True)
     args = p.parse_args(argv)

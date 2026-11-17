@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act } from 'preact/test-utils';
 import { button, calls, cleanup, click, mount, ownerRoutes, server, text, until } from './harness';
 
-const CAPS_ON = { json: { available: true, modes: ['analyze', 'generate'], max_upload_bytes: 200 * 1024 ** 2, reason: null } };
-const CAPS_OFF = { json: { available: false, modes: ['analyze', 'generate'], max_upload_bytes: 200 * 1024 ** 2, reason: '服务端未配置模型，AI 重建暂不可用' } };
+const STORAGE = { quota: 3 * 1024 ** 3, used: 512 * 1024 ** 2, ai_bytes: 100 * 1024 ** 2, ai_files: 3 };
+const CAPS_ON = { json: { available: true, modes: ['analyze', 'generate'], max_upload_bytes: 200 * 1024 ** 2, retention_days: 14, storage: STORAGE, reason: null } };
+const CAPS_OFF = { json: { available: false, modes: ['analyze', 'generate'], max_upload_bytes: 200 * 1024 ** 2, retention_days: 14, storage: STORAGE, reason: '服务端未配置模型，AI 重建暂不可用' } };
 
 const TRACK = {
   id: 12, media_type: 'video', platform: 'bilibili', video_id: 'BV1', page: 1,
@@ -17,6 +18,7 @@ function proj(over: Record<string, unknown> = {}) {
   return {
     id: 4, title: '一个视频', source_track_id: 12, source_path: 'ai/4/source.mp4',
     description: '', status: 'draft', created_at: 1_800_000_000, updated_at: 1_800_000_000,
+    expires_at: 1_800_000_000 + 14 * 86400, days_left: 3, retention_days: 14,
     ...over,
   };
 }
@@ -161,5 +163,67 @@ describe('AI 视频重建', () => {
     await click(button('生成视频'));
     await until(() => text().includes('未配置模型'));
     expect(text()).not.toContain('已加入生成队列');
+  });
+
+  test('服务器库配额与保留期：配额条、剩余天数、过期项目不渲染源播放器', async () => {
+    server(ownerRoutes({
+      [TRACKS]: { json: { items: [], count: 0 } },
+      'GET /v2/recreations/capabilities': CAPS_ON,
+      'GET /v2/recreations': {
+        json: {
+          recreations: [
+            proj(),
+            proj({ id: 5, title: '旧的', status: 'expired', source_path: null, days_left: 0 }),
+          ],
+        },
+      },
+      'GET /v2/recreations/5': detail({ id: 5, title: '旧的', status: 'expired', source_path: null, days_left: 0 }),
+    }));
+    mount('/ai');
+    await until(() => text().includes('服务器库（AI 素材与产物计入这里'));
+
+    // 配额条：已用 / 配额 / 其中 AI / 还可上传 / 保留天数
+    expect(text()).toContain('512 MB');
+    expect(text()).toContain('/ 3.0 GB');
+    expect(text()).toContain('其中 AI 100 MB（3 个文件）');
+    expect(text()).toContain('还可上传');
+    expect(text()).toContain('保留 14 天');
+
+    // 列表：正常的显示剩余天数，过期的显示状态且置灰标签
+    expect(text()).toContain('还剩 3 天');
+    expect(text()).toContain('文件已过期清理');
+
+    // 过期项目打开后不渲染源 video（文件已不在，渲染出来只会是个坏播放器）
+    const open5 = Array.from(document.querySelectorAll('button')).filter((b) => b.textContent === '打开');
+    await click(open5[1] as HTMLButtonElement);
+    await until(() => text().includes('该项目的文件已过期清理'));
+    expect(document.querySelectorAll('video').length).toBe(0);
+  });
+
+  test('上传超限：直接把服务端那句配额文案显示出来', async () => {
+    server(ownerRoutes({
+      [TRACKS]: { json: { items: [], count: 0 } },
+      'GET /v2/recreations/capabilities': CAPS_ON,
+      'GET /v2/recreations': { json: { recreations: [] } },
+      'POST /v2/recreations/upload': {
+        status: 409,
+        json: {
+          code: 'quota_exceeded',
+          detail: '服务器库空间不足（AI 素材与产物计入 3.0 GB）：已用 2.7 GB / 3.0 GB，本次需要 180 MB。先清理缓存或旧项目。',
+        },
+      },
+    }));
+    mount('/ai');
+    await until(() => document.querySelector('input[type="file"]') !== null);
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([new Uint8Array([0, 0, 0, 1])], 'clip.mp4', { type: 'video/mp4' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await until(() => text().includes('服务器库空间不足'));
+    expect(text()).toContain('先清理缓存或旧项目');
+    expect(text()).not.toContain('已创建项目');
   });
 });

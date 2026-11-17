@@ -15,13 +15,13 @@ from getmedia.config import testing_settings as make_settings
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def build(tmp_path, *, ai_enabled=False):
+def build(tmp_path, *, ai_enabled=False, **settings_kw):
     tmp_path.mkdir(parents=True, exist_ok=True)
     legal = tmp_path / "legal"
     legal.mkdir()
     for f in ("user-agreement.md", "privacy-policy.md"):
         shutil.copy(ROOT / "docs" / "legal" / f, legal / f)
-    settings = make_settings(tmp_path, legal).with_(ai_enabled=ai_enabled)
+    settings = make_settings(tmp_path, legal).with_(ai_enabled=ai_enabled, **settings_kw)
 
     class C:
         t = 1_800_000_000.0

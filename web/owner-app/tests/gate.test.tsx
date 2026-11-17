@@ -94,9 +94,9 @@ describe('owner 认证壳', () => {
       'GET /v2/memories': { json: { memories: [] } },
       'GET /account/platforms': { json: { platforms: [{ platform: 'bilibili', name: '哔哩哔哩', methods: ['cookie'], hint: '', oauth: 'unconfigured' }], oauth_configured: false } },
       'GET /account/platform-bindings': { json: { bindings: [], credentials: [] } },
-      'GET /v2/maintenance/storage': { json: { by_storage: {}, quota: { archive: 1, cache: 1 }, used: { archive: 0, cache: 0 } } },
+      'GET /v2/maintenance/storage': { json: { by_storage: {}, ai: { files: 0, bytes: 0 }, quota: { archive: 1, cache: 1 }, used: { archive: 0, cache: 0 } } },
       'GET /v2/diagnostics/extractions?limit=50': { json: { reports: [] } },
-      'GET /v2/recreations/capabilities': { json: { available: false, reason: '未配置模型', max_upload_bytes: 209715200, modes: [] } },
+      'GET /v2/recreations/capabilities': { json: { available: false, reason: '未配置模型', max_upload_bytes: 209715200, modes: [], retention_days: 14, storage: { quota: 1, used: 0, ai_bytes: 0, ai_files: 0 } } },
       'GET /v2/recreations': { json: { recreations: [] } },
     });
     // 每个栏目都注册了真实页面，所以"还没实现"这句话不该再出现在任何一栏

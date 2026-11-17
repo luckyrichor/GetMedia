@@ -9,6 +9,7 @@ const STORAGE = {
       cache: { tracks: 2, bytes: 100 * 1024 * 1024 },
       metadata: { tracks: 4, bytes: 0 },
     },
+    ai: { files: 0, bytes: 0 },
     quota: { archive: 20 * 1024 ** 3, cache: 5 * 1024 ** 3 },
     used: { archive: 300 * 1024 * 1024, cache: 1024 ** 3 },
   },
@@ -120,5 +121,35 @@ describe('库维护', () => {
     await until(() => text().includes('统计失败'));
     await click(button('重试'));
     await until(() => text().includes('300 MB'));
+  });
+
+  test('AI 文件：单列一行、归档里注明含 AI，清理走 gc 且需确认', async () => {
+    const withAi = {
+      json: {
+        ...STORAGE.json,
+        ai: { files: 2, bytes: 200 * 1024 * 1024 },
+        used: { archive: 500 * 1024 * 1024, cache: 1024 ** 3 },
+      },
+    };
+    server(ownerRoutes({
+      'GET /v2/maintenance/storage': withAi,
+      'GET /v2/diagnostics/extractions?limit=50': { json: { reports: [] } },
+      'POST /v2/recreations/gc': { json: { projects: 2, freed_bytes: 200 * 1024 * 1024, days: 14, dry_run: false } },
+    }));
+    mount('/maintenance');
+    await until(() => text().includes('AI 素材与产物（计入归档）'));
+
+    expect(text()).toContain('含 AI 200 MB');
+    expect(text()).toContain('默认 14 天');
+
+    vi.stubGlobal('confirm', () => false);
+    await click(button('清理过期的 AI 文件'));
+    expect(calls.some((c) => c.path === '/v2/recreations/gc')).toBe(false);
+
+    vi.stubGlobal('confirm', () => true);
+    await click(button('清理过期的 AI 文件'));
+    await until(() => text().includes('清理完成：2 个项目'));
+    expect(text()).toContain('释放 200 MB');
+    expect(calls.find((c) => c.path === '/v2/recreations/gc')?.method).toBe('POST');
   });
 });

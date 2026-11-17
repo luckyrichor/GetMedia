@@ -114,6 +114,9 @@ class Settings:
     ai_timeout_sec: int = 1800
     ai_min_free_mb: int = 2048
     ai_concurrency: int = 1
+    # AI 素材与产物的保留天数：到期只删文件、保留记录（status=expired），见 recreations.gc。
+    # 14 天：一次 200 MiB 素材 + 产物在 3 GiB 里大约能放 7 个项目，按两周缓存的节奏够用。
+    ai_retention_days: int = 14
     # 运维
     deletion_cooldown_days: int = 7
     retention_days: int = 30          # 审计 / 限流 / 活跃明细
@@ -215,6 +218,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         llm_daily_cap=_int_env(env, "GETMEDIA_LLM_DAILY_CAP", 200, 0, 100000),
         douyin_browser=_bool_env(env, "GETMEDIA_DOUYIN_BROWSER", False),
         ai_enabled=_bool_env(env, "GETMEDIA_AI_ENABLED", False),
+        ai_retention_days=_int_env(env, "GETMEDIA_AI_RETENTION_DAYS", 14, 1, 365),
         douyin_browser_headless=_bool_env(env, "GETMEDIA_DOUYIN_BROWSER_HEADLESS", True),
         douyin_browser_channel=env.get("GETMEDIA_DOUYIN_BROWSER_CHANNEL", ""),
         mail=load_mail(env),

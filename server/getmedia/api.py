@@ -347,7 +347,7 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
 
     # AI 重建（P2g）：只入队，执行在 getmedia-ai-worker
     from .recreations_api import register as register_recreations
-    register_recreations(app, require_tier("owner"), engine, clock, media=media_store)
+    register_recreations(app, require_tier("owner"), engine, clock, media=media_store, audit=svc.audit)
 
     ops = Ops(engine, settings, fb, alerts, clock)
     app.state.ops = ops

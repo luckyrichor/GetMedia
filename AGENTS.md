@@ -13,7 +13,7 @@ GetMedia 是新的 Android 音视频提取、管理和播放项目，配套账�
 
 - Android：Kotlin 1.9.23、AGP 8.3.2、Gradle 8.7、JDK 17、Compose、Room 2.6.1、Media3 1.3.1、OkHttp；compile/target SDK 34，minSdk 26。
 - 后端：Python、FastAPI、SQLAlchemy/SQLite，依赖见 `server/requirements.txt`，测试见 `server/tests`。
-- 网页：`web/public-app`（公开页，`/getmedia/`）与 `web/owner-app`（管理台，`/getmedia/owner/`）两个独立构建，共用 `web/shared`。P5a/P5b 已实现认证壳与公开页；管理台的功能页（5c–5f）尚未实现，不要声称已完成。
+- 网页：`web/public-app`（公开页，`/getmedia/`）与 `web/owner-app`（管理台，`/getmedia/owner/`）两个独立构建，共用 `web/shared`。P5a/P5b 实现认证壳与公开页，P5c–P5f 接入管理台九个功能页；构建产物隔离由 `tools/tests/test_web_contract.py` 在真实 dist 上断言（公开页零 owner 代码）。
 - Mac JDK 17：`/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home`；SDK：`/Users/lc/Library/Android/sdk`。
 - 后端配置变量、账号规则和部署路径详见方案 §9 与 `deploy/env/*.example`。仅记录变量名及用途，不写入真实凭据。
 - Release 固定签名配置从本机 `~/.android-keys/getmedia.properties` 或项目忽略的 `android/keystore.properties` 读取；缺失时 release 构建应失败。Debug 构建不要求 release 密钥。
@@ -56,11 +56,15 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 - `deploy/`：生产部署模板；`tools/`：扫描、签名工具及测试。
 - `docs/reports/`：工作包报告；`docs/provenance.md` 与 `docs/reports/wp5-merge-map.md`：上游移植来源。
 
-## 当前进度（2026-11-16）
+## 当前进度（2026-11-17）
 
 - 服务端 P1–P3 完成（迁移工具就绪，真实迁移等部署后）；Android 双风味（free/full）已就绪。
-- 网页：公开页接新服务 + owner 认证壳已完成（`docs/p5-web-report.md`）；功能页 5c–5f 未做。
+- 网页：公开页接新服务 + owner 认证壳 + 功能页 5c–5f 全部完成，管理台九栏都接真实接口
+  （`docs/p5{c,d,e,f}-report.md`）。
+- 服务端 P2h（Agent 接模型 + 动作闭环，schema v11）与 P2i（AI 存储归属 + 14 天保留期清理）完成，
+  均**未部署**（`docs/p2i-report.md`）。
 - 部署材料 P6 已备好但**未部署**；用户明确说"部署"之前不改动服务器。
+- Android UI 等 `docs/ui-plan.md` 的 5 个决策。
 - 仓库为 public：含真实服务器路径/旧账号片段/nginx 细节的文档不入库（`.gitignore` 末段）。
 
 ## 历史进度（2026-11-01）

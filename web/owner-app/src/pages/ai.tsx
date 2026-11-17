@@ -19,7 +19,8 @@ const RUN: Record<string, string> = {
 };
 const KIND: Record<string, string> = { analyze: '分析画面', generate: '生成视频' };
 const REC: Record<string, string> = {
-  draft: '草稿', queued: '排队中', running: '进行中', done: '已完成', failed: '失败', saved: '已保存',
+  draft: '草稿', queued: '排队中', running: '进行中', done: '已完成', failed: '失败',
+  saved: '已保存', expired: '文件已过期',
 };
 
 export function AiPage() {
@@ -195,6 +196,10 @@ export function AiPage() {
   const off = !caps?.available;
   // 只有 generate 的产物是视频；analyze 的结果不是能播的东西，不放进播放器。
   const doneRun = sel?.runs?.find((r) => r.status === 'done' && r.kind === 'generate');
+  const st = caps?.storage;
+  const pct = st && st.quota > 0 ? Math.min(100, Math.round((st.used / st.quota) * 100)) : 0;
+  const room = st ? Math.max(0, st.quota - st.used) : 0;
+  const days = caps?.retention_days ?? 14;
 
   return (
     <>
@@ -217,6 +222,19 @@ export function AiPage() {
 
       <h2>新建项目</h2>
       <div class="panel-card">
+        {st && st.quota > 0 && (
+          <div class="metric">
+            <div class="metric-k">服务器库（AI 素材与产物计入这里，和媒体库共用 3 GiB）</div>
+            <div class="metric-v">
+              {fmtBytes(st.used)} <span class="small muted">/ {fmtBytes(st.quota)}</span>
+            </div>
+            <div class="bar" role="img" aria-label={`${pct}%`}><i style={`width:${pct}%`} /></div>
+            <div class="small muted">
+              {pct}% 已用 · 其中 AI {fmtBytes(st.ai_bytes)}（{st.ai_files} 个文件）·
+              还可上传 {fmtBytes(room)} · 保留 {days} 天
+            </div>
+          </div>
+        )}
         <div class="field-row">
           <label class="field">
             <span>用媒体库里的视频（仅"服务器上有文件"的视频）</span>
@@ -239,7 +257,9 @@ export function AiPage() {
           </label>
         </div>
         <p class="small muted">
-          上传的文件先落到服务器的项目目录（600 权限），再交给 worker；源文件与产物的保留期由服务端清理任务决定。
+          上传的文件先落到服务器的项目目录（600 权限），再交给 worker。源文件与产物保留 {days} 天
+          （<code>GETMEDIA_AI_RETENTION_DAYS</code>）：到期由服务端删掉文件、保留记录，
+          项目状态变"文件已过期"；有排队/执行中任务的会等它跑完再清。空间一直不够时先清缓存或旧项目。
         </p>
       </div>
 
@@ -264,6 +284,12 @@ export function AiPage() {
                 #{p.id}
                 {p.source_track_id ? ` · 来自媒体库 #${p.source_track_id}` : ' · 上传文件'}
                 {' · '}{p.description ? `已有描述（${p.description.length} 字）` : '还没有描述'}
+                {' · '}
+                {p.status === 'expired' || !p.source_path ? (
+                  <span class="tag warn-tag">文件已过期清理</span>
+                ) : (
+                  `还剩 ${p.days_left ?? days} 天`
+                )}
               </div>
               <div class="row-actions">
                 <button type="button" class="btn btn-ghost small" onClick={() => void open(p.id)}>
@@ -283,9 +309,22 @@ export function AiPage() {
             <span class="grow" />
             <button type="button" class="btn btn-ghost small" onClick={() => setSel(null)}>收起</button>
           </div>
+          <p class="small muted">
+            {sel.status === 'expired' || !sel.source_path
+              ? `文件已过期清理（保留期 ${sel.retention_days ?? days} 天），记录保留。`
+              : `保留期 ${sel.retention_days ?? days} 天，还剩 ${sel.days_left ?? days} 天；`
+                + '到期自动清理文件、保留记录，有排队/执行中任务时等它跑完。'}
+          </p>
 
           <h3>源视频</h3>
-          <video class="player-media" controls preload="metadata" src={recreationSourceUrl(sel.id)} />
+          {sel.source_path ? (
+            <video class="player-media" controls preload="metadata" src={recreationSourceUrl(sel.id)} />
+          ) : (
+            <p class="small muted">
+              该项目的文件已过期清理（保留期 {sel.retention_days ?? days} 天），记录还在但源视频不在服务器上了。
+              要重新做，上传一个新文件建项目即可。
+            </p>
+          )}
 
           <h3>描述</h3>
           <label class="field">

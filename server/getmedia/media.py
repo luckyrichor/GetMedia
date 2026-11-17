@@ -107,16 +107,36 @@ class MediaStore:
         return [_row_to_dict(r) for r in rows]
 
     def storage_used(self, storage: str, *, now: int | None = None) -> int:
-        """当前占用：archive 全量；cache 只算未过期的。"""
+        """当前占用：archive 全量（含 AI 素材与产物）；cache 只算未过期的。"""
         now = self.now() if now is None else now
         with self.engine.begin() as c:
             if storage == "cache":
                 return int(c.execute(text(
                     "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage='cache' AND deleted=0 "
                     "AND (cache_expires_at IS NULL OR cache_expires_at>:n)"), {"n": now}).scalar_one())
-            return int(c.execute(text(
+            used = int(c.execute(text(
                 "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage=:s AND deleted=0"),
                 {"s": storage}).scalar_one())
+        # AI 重建的源文件与产物不在 tracks 表里（在 media_dir/ai/<项目号>/），
+        # 但按方案 §8.1 计入服务器库（archive）3 GiB，所以这里要一起算。
+        if storage == "archive":
+            used += self.ai_stats()["bytes"]
+        return used
+
+    def ai_stats(self) -> dict:
+        """``media_dir/ai`` 下的文件数与字节数（按目录求和，不新增表字段）。"""
+        root = Path(self.s.media_dir) / "ai"
+        files = size = 0
+        if root.is_dir():
+            for p in root.rglob("*"):
+                if not p.is_file():
+                    continue
+                try:
+                    size += p.stat().st_size
+                except OSError:  # 正在被 worker 写/删：跳过，不为此报错
+                    continue
+                files += 1
+        return {"files": files, "bytes": size}
 
     def quota_of(self, storage: str) -> int:
         return self.s.archive_quota_bytes if storage == "archive" else self.s.cache_quota_bytes

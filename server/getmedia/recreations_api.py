@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import Depends, File, Header, Response, UploadFile
+from fastapi import Depends, File, Header, Query, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 
 from .errors import ApiError
@@ -18,7 +18,7 @@ class DescriptionBody(BaseModel):
     description: str = Field(max_length=4000)
 
 
-def register(app, guard, engine, clock, *, media=None) -> RecreationService:
+def register(app, guard, engine, clock, *, media=None, audit=None) -> RecreationService:
     service = RecreationService(engine, app.state.settings, clock, media=media)
     app.state.recreations = service
 
@@ -73,6 +73,15 @@ def register(app, guard, engine, clock, *, media=None) -> RecreationService:
             raise ApiError(404, "track_not_found", "媒体不存在") from None
         except RecreationError as exc:
             _err(exc)
+
+    @app.post("/v2/recreations/gc")
+    def gc(days: int | None = Query(default=None, ge=1, le=365),
+           dry_run: bool = Query(default=False), ctx=Depends(guard)):
+        out = service.gc(days=days, dry_run=dry_run)
+        if audit is not None and not dry_run:
+            with engine.begin() as c:
+                audit(c, "ai_gc", ctx.user_id, "", "/v2/recreations/gc", "ok")
+        return out
 
     @app.get("/v2/recreations/{pid}/source")
     def source(pid: str, range_header: str | None = Header(default=None, alias="Range"), ctx=Depends(guard)):

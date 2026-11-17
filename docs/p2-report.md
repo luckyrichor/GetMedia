@@ -129,49 +129,47 @@
 - **容量**：单文件上限 200 MiB，一次上传 + 一份产物就可能占掉 400 MiB。放进 5 GiB 的缓存会把网页缓存挤掉，
   而网页缓存被挤掉的代价是"下次重新解析"，AI 被挤掉的代价是"素材和结果都没了"。
 
-#### 现状（部署前必读）：两个配额都还没计
+#### 实施状态：P2i 已落地（2026-11-17）
 
-这不是"计入了但没显示"，而是**根本没参与计算**：
+原先这两个配额**都不计**：AI 文件在 `media_dir/ai/<项目号>/`，不在 `tracks` 表里，而
+`storage_used()` / `stats()` 只按 `tracks` 求和；上传只拦单文件 200 MiB，`purge_orphans()`
+只删两个目录的**顶层文件**（`ai/` 是目录，误删不了也回收不了），也没有任何保留期任务。
 
-| 事实 | 位置 |
+P2i 之后的行为（逐条对应下面"目标行为"）：
+
+| 行为 | 实现位置 |
 |---|---|
-| AI 文件落在 `media_dir/ai/{项目号}/`（源 `source.ext`，产物由 runner 写同目录） | `recreations.py::_dir`、`ai_worker.py::run_once` |
-| 配额只用 `tracks` 表求和，`storage` 列取 `archive`/`cache` | `media.py::storage_used`、`media.py::stats` |
-| `/v2/maintenance/storage` 的 `by_storage` 来自 `GROUP BY storage`，因此看不到 AI | `media_api.py:313` |
-| `purge_orphans()` 只遍历 `media_dir`/`cache_dir` 的**顶层文件**（`is_file()`），`ai/` 是目录 | `media.py::purge_orphans` |
-| 上传只查单文件 200 MiB（413），不查剩余配额 | `recreations.py::create_upload` |
-| worker 只在剩余磁盘 < `ai_min_free_mb`（默认 2048 MB）时判 `no_space` | `ai_worker.py::run_once` |
+| `storage_used("archive")` = tracks 的 archive 字节 + `media_dir/ai` 目录字节 | `media.py::storage_used`、`ai_stats` |
+| 上传前判配额，超了 409 `quota_exceeded`，**不建项目、不写盘** | `recreations.py::_ensure_room` |
+| `/v2/maintenance/storage` 多一个 `ai: {files, bytes}`；`used.archive` 已含 AI | `media_api.py` |
+| 保留期 `GETMEDIA_AI_RETENTION_DAYS`，默认 **14 天** | `config.py` |
+| `cli ai-gc [--days N] [--dry-run]` + `getmedia-ai-gc.timer`（每天 04:10） | `cli.py`、`deploy/systemd/` |
+| 项目带 `expires_at` / `days_left` / `retention_days`；管理台显示"还剩 N 天" | `recreations.py`、`web/owner-app` |
 
-两点后果要说清：**AI 上传目前可以无限占盘**（只受磁盘本身限制，不受 3 GiB 约束）；
-`ai/` 也**没有任何保留期或清理任务**，孤儿清理不会误删它（`is_file()` 挡住了），但也永远不会回收它。
+4 GiB 的事不再有歧义：媒体库归档与 AI 共用一个 3 GiB 池子，`ensure_room("archive", …)` 在两个入口
+判的是同一笔账；缓存 5 GiB 一分不动。
 
-#### 目标行为（决定已定，代码待实施 = P2i）
+清理规则（`RecreationService.gc`）：
 
-1. **上传前判配额**：`archive_used + ai_used + new_bytes <= archive_quota`，超了直接 409，
-   不写盘、不建项目（与媒体库 `ensure_room` 同口径：先拒绝，不留半成品）。
-2. **`ai_used` 用目录求和**：遍历 `media_dir/ai` 下的文件字节，不新增表字段；项目量级是个位到几十，成本可忽略。
-3. **维护接口加一项**：`/v2/maintenance/storage` 的 `by_storage` 增 `ai`（文件数 + 字节），
-   管理台「库维护」显示「AI 素材与产物」，归档配额条改为 `archive_used + ai_used` / 3 GiB。
-4. **保留期清理**：`GETMEDIA_AI_RETENTION_DAYS`，默认 **7 天**；
-   `python -m getmedia.cli ai-gc --days 7 [--dry-run]`，或每日 04:10 的 systemd timer。
-   只删「没有 queued/running 任务、且 `updated_at` 早于 N 天」的项目的**文件**，
-   **保留记录**并把 `status` 置 `expired`、`source_path` 置 NULL；页面显示「文件已过期清理，可重新上传或重新生成」。
-   注意产物是按 run 存的，清理时整个项目目录一起删，`recreation_runs.status` 保留 `done` 不动——
-   历史仍然可查，只是文件不在了。
-5. **手动入口**：库维护页加「清理 AI 文件」，与「清理缓存」「清理孤儿」并列，二次确认，返回释放字节数。
+1. `updated_at` 早于 N 天、且状态不是 `expired`；
+2. **没有** `queued`/`running` 任务——删了文件会让 worker 半路失败，等它跑完下一轮自然会清；
+3. 只删 `media_dir/ai/<项目号>/`；源来自媒体库的项目，其真身在 `tracks` 那边，**不受影响**；
+4. 记录保留，`status='expired'`、`source_path=NULL`；`recreation_runs` 不动，历史仍可查；
+   页面显示"文件已过期清理"且不再渲染源播放器（渲染出来只会是个坏播放器）。
 
 #### 超限提示（服务端与客户端用同一句）
 
 - 服务端 409 `quota_exceeded`：
-  `服务器库空间不足（AI 素材与产物计入 3 GiB）：已用 2.7 GB / 3.0 GB，本次需要 180 MB。先清理缓存或旧项目。`
-- 管理台：上传区提示条 + 维护页配额条（≥90% 黄、≥100% 红）。
+  `服务器库空间不足（AI 素材与产物计入 3.0 GB）：已用 2.7 GB / 3.0 GB，本次需要 180 MB。先清理缓存或旧项目。`
+  体积用 `fmt_size()` 统一格式化（GB 一位小数 / MB 整数），所以窗口变大变小文案都跟着变。
+- 管理台：AI 页配额条（已用 / 3 GiB、其中 AI 多少、"还可上传"）+ 上传失败直接显示服务端那句话；
+  库维护页单列一行「AI 素材与产物（计入归档）」并给「清理过期的 AI 文件」按钮（二次确认）。
 - 手机端：显示服务端 `detail`，不自己编文案（`error_code` 用于分支，文案只透传）。
 
-#### 为什么这一期只写不做
+#### 为什么单独一期（P2i）
 
-要动 `recreations.py`（配额）、`media.py`（统计与 gc 复用）、`media_api.py`（报告字段）、`cli.py`（`ai-gc`）
-四处，外加一个 timer，属于独立一期；测试至少 5 项（AI 字节计数、上传超限 409 且不落盘、
-gc 只删该删的、记录变 `expired` 且文件不在、`storage` 报告含 `ai`）。列为 P2i，等确认后再提交。
+配额判断、统计口径、保留期清理、维护接口与 CLI 要一起改，散着改容易出现"文档说计了、代码没计"。
+P2i 的细节与测试见 `docs/p2i-report.md`。
 
 ## 9. 与 `plan.md` 的偏差（请重点看这一节）
 
@@ -202,8 +200,9 @@ gc 只删该删的、记录变 `expired` 且文件不在、`storage` 报告含 `
 | P2f 失败上报 | 4 | 复用 `extraction_failures` | — | `test_diagnostics.py` 3 项 | 完成 |
 | P2g AI 重建 | 12 | `recreations`、`recreation_runs` | v10 | `test_recreations.py` 9 项 | 完成，默认关闭 |
 | P2h Agent 模型 + 动作 | 5 | `agent_actions`、`agent_usage` | v11 | `test_agent_actions.py` 18 项 | 完成；无密钥时纯规则 |
+| P2i AI 存储归属 + 保留期 | 1 | 无新表（`recreations.status` 复用 `expired`） | 仍 v11 | `test_recreations_quota.py` 10 项 | 完成；14 天保留期 |
 
-合计 **71 条 owner 路由**、P2 测试 **68 项**；全仓当前 **302 passed / 50 skipped**（skip 是需要 nginx 的原有用例，
+合计 **72 条 owner 路由**、P2 测试 **78 项**；全仓当前 **332 passed / 50 skipped**（skip 是需要 nginx 的原有用例，
 其中 41 项已在服务器上跑过）。启动自检未防护路由 **0**，权限矩阵违反 **0**。
 
 ### 11.2 目标 schema 版本 = v11

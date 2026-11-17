@@ -356,6 +356,8 @@ export interface AuthSession {
 // ---------------- 库维护（5e） ----------------
 export interface StorageReport {
   by_storage: Record<string, { tracks: number; bytes: number }>;
+  /** AI 素材与产物：目录求和，已计入 used.archive，不能与 by_storage 相加。 */
+  ai: { files: number; bytes: number };
   quota: { archive: number; cache: number };
   used: { archive: number; cache: number };
 }
@@ -377,6 +379,10 @@ export interface AiCapabilities {
   available: boolean;
   modes: string[];
   max_upload_bytes: number;
+  /** 素材与产物的保留天数（服务端 GETMEDIA_AI_RETENTION_DAYS）。 */
+  retention_days: number;
+  /** 服务器库配额：used 已含 AI 自己的占用。 */
+  storage: { quota: number; used: number; ai_bytes: number; ai_files: number };
   reason: string | null;
 }
 
@@ -403,6 +409,10 @@ export interface Recreation {
   status: string;
   created_at: number;
   updated_at: number;
+  /** 保留期：到点由服务端的 gc 删文件、留记录（status 变 expired）。 */
+  expires_at?: number;
+  days_left?: number;
+  retention_days?: number;
   runs?: RecreationRun[];
 }
 
@@ -561,6 +571,14 @@ export const ownerApi = {
     api.request<{ run_id: number; status: string }>('POST', `/v2/recreations/${id}/runs/${rid}/cancel`),
   saveOutput: (id: number, rid: number) =>
     api.request<{ saved: boolean; bytes: number }>('POST', `/v2/recreations/${id}/runs/${rid}/save`),
+  /** 保留期清理：dry_run 只统计；不给 days 用服务端配置的 14 天。 */
+  gcAi: (opts: { days?: number; dryRun?: boolean } = {}) => {
+    // 查询串写在 ? 之后（契约测试按 "?" 归一，路径部分必须是字面量）
+    const q = new URLSearchParams({ dry_run: String(Boolean(opts.dryRun)) });
+    if (opts.days) q.set('days', String(opts.days));
+    return api.request<{ projects: number; freed_bytes: number; days: number; dry_run: boolean }>(
+      'POST', `/v2/recreations/gc?${q}`);
+  },
 };
 
 /** AI 产物与源视频：直接交给 `<video>` 播，不经过 fetch。 */
