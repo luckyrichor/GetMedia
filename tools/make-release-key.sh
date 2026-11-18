@@ -11,11 +11,14 @@ if [ -e "$jks" ] || [ -e "$props" ]; then
 fi
 command -v keytool >/dev/null || { echo "需要 JDK 的 keytool（JDK 17）。" >&2; exit 1; }
 mkdir -p "$dir"; chmod 700 "$dir"
-rand() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32; }
+# 32 位十六进制（128 位熵）。刻意不用 `tr < /dev/urandom | head -c 32`：
+# head 提前退出会让 tr 吃 SIGPIPE，脚本在 `set -eu` 下会以 137 直接退出（本机实测）。
+rand() { LC_ALL=C od -An -tx1 -N16 /dev/urandom | tr -d ' \n'; }
 store_pw=$(rand); key_pw=$store_pw
 keytool -genkeypair -v -keystore "$jks" -storetype PKCS12 -alias getmedia \
   -keyalg RSA -keysize 4096 -validity 36500 \
-  -storepass "$store_pw" -keypass "$key_pw" -dname "CN=GetMedia" >/dev/null 2>&1
+  -storepass "$store_pw" -keypass "$key_pw" -dname "CN=GetMedia" >/dev/null \
+  || { echo "keytool 生成失败，已删除半成品，未写属性文件。" >&2; rm -f "$jks"; exit 1; }
 chmod 600 "$jks"
 umask 077
 cat > "$props" <<PROPS
