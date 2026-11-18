@@ -264,6 +264,12 @@ def test_apply_then_verify(env, capsys, monkeypatch):
 
 
 def test_apply_is_idempotent(env, capsys, monkeypatch):
+    """连跑三次 apply，**每张表行数都不变**。
+
+    这张用例曾经只断言 tracks 与 platform_credentials，漏掉了 extract_jobs /
+    extraction_failures / agent_messages —— 那三张表在目标库里没有唯一键，
+    裸 INSERT 每跑一次就翻一倍（P3 手册 §13 的增量迁移靠这条守住）。
+    """
     monkeypatch.setenv("GETMEDIA_CRED_KEY", base64.urlsafe_b64encode(NEW_KEY).decode())
     mapping = env["root"] / "map.json"
     mapping.write_text(json.dumps({
@@ -272,15 +278,30 @@ def test_apply_is_idempotent(env, capsys, monkeypatch):
     }))
     args = ["apply", *base_args(env), "--map", mapping, "--media-root", env["root"] / "m",
             "--log-dir", env["root"]]
-    first = json.loads(run(capsys, *args)[1])["stats"]
-    second = json.loads(run(capsys, *args)[1])["stats"]
-    assert first["tracks"]["inserted"] == 4
-    assert second["tracks"]["inserted"] == 0
-    assert second["tracks"]["duplicate"] >= 1
+    stats = [json.loads(run(capsys, *args)[1])["stats"] for _ in range(3)]
+
+    assert stats[0]["tracks"]["inserted"] == 4
+    for later in stats[1:]:
+        assert later["tracks"]["inserted"] == 0
+        assert later["tracks"]["duplicate"] >= 1
+        # 没有唯一键的四组：靠工具按自然键先查后插，第二次开始一律 0 新增
+        assert later["extract_jobs"]["inserted"] == 0
+        assert later["extract_jobs"]["skipped_existing"] >= 1
+        assert later["extraction_failures"]["inserted"] == 0
+        assert later["extraction_failures"]["skipped_existing"] >= 1
+        assert later["agent"]["messages"] == 0
+        assert later["agent"]["messages_skipped_existing"] >= 1
+
+    tables = ("tracks", "extract_jobs", "extraction_failures", "platform_credentials",
+              "account_platform_bindings", "agent_conversations", "agent_messages",
+              "agent_memories", "recreations", "recreation_runs")
     c = sqlite3.connect(env["target"])
-    assert c.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 4
-    assert c.execute("SELECT COUNT(*) FROM platform_credentials").fetchone()[0] == 2
+    counts = {t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
     c.close()
+    assert counts == {"tracks": 4, "extract_jobs": 2, "extraction_failures": 1,
+                      "platform_credentials": 2, "account_platform_bindings": 1,
+                      "agent_conversations": 1, "agent_messages": 1, "agent_memories": 1,
+                      "recreations": 0, "recreation_runs": 0}
 
 
 def test_apply_without_map_fails(env, capsys):

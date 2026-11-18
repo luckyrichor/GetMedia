@@ -4,7 +4,7 @@
 四个子命令，对应 plan.md §9.3：
 
 - ``plan``     只读，输出「迁什么、多少条、多少字节、哪些会丢」的人读报告 + JSON；
-- ``apply``    按表分批写入目标库，幂等，可 ``--since-id`` 续跑，迁移前自动快照；
+- ``apply``    按表分批写入目标库，**可重复执行**（见下），迁移前自动快照；
 - ``verify``   比对条数/字节/抽样 sha256，检查凭据能否解密、列出孤儿文件；
 - ``rollback`` 用 apply 时的快照把目标库整体还原。
 
@@ -16,6 +16,19 @@
 - 凭据用旧密钥解出明文后用 ``GETMEDIA_CRED_KEY`` 重加密；解不开的记
   ``needs_reauth``，绝不把解不开的密文当明文写进去；
 - 日志与报告只写计数、id、哈希前缀，**不写 Cookie、不写密钥**。
+
+可重复执行的口径（P3 手册 §13 要求"退役前再增量补一次"，靠的就是这个）：
+
+- 有唯一约束的表直接用 ``INSERT OR IGNORE`` 让库自己挡：``tracks``
+  （``UNIQUE(user_id,platform,video_id,page)``）、``account_platform_bindings``
+  （主键 ``(user_id,platform)``）、``agent_conversations``（旧 id 复用主键）、
+  ``agent_memories``（``UNIQUE(user_id,key)``，key 用 ``legacy:<旧id>``）；
+- ``platform_credentials`` 先查后写（同一 (user_id,platform) 只留一份）；
+- 目标库里**没有唯一键**的表 —— ``extract_jobs``、``extraction_failures``、
+  ``agent_messages``、``recreations``、``recreation_runs`` —— 由本文件按自然键
+  **先查后插**（见 ``_seen``），否则重复 apply 会让行数翻倍；
+- 判据由 ``tools/tests/test_migrate_legacy.py::test_apply_is_idempotent`` 守，
+  它连跑三次并逐表断言行数不变。
 """
 from __future__ import annotations
 
@@ -493,13 +506,17 @@ def cmd_apply(args: argparse.Namespace, sources: list[Source]) -> int:
         log(f"snapshot={snap}")
 
     stats: dict[str, Any] = {"tracks": {"inserted": 0, "duplicate": 0, "orphan": 0},
-                             "extract_jobs": {"inserted": 0, "skipped": 0},
-                             "extraction_failures": {"inserted": 0},
+                             "extract_jobs": {"inserted": 0, "skipped": 0,
+                                              "skipped_existing": 0},
+                             "extraction_failures": {"inserted": 0, "skipped_existing": 0},
                              "credentials": {"inserted": 0, "needs_reauth": 0, "skipped": 0,
                                              "conflict": 0, "conflicts": []},
                              "bindings": 0,
-                             "agent": {"conversations": 0, "messages": 0, "memories": 0},
-                             "recreations": {"projects": 0, "runs": 0}}
+                             "agent": {"conversations": 0, "messages": 0, "memories": 0,
+                                       "messages_skipped_existing": 0},
+                             "recreations": {"projects": 0, "runs": 0,
+                                             "projects_skipped_existing": 0,
+                                             "runs_skipped_existing": 0}}
     seq = int(conn.execute("SELECT COALESCE(MAX(updated_seq),0) FROM tracks").fetchone()[0])
     media_root = Path(args.media_root) if args.media_root else (target.parent / "media")
 
@@ -539,6 +556,19 @@ def cmd_apply(args: argparse.Namespace, sources: list[Source]) -> int:
            "snapshot": str(args.snapshot) if args.snapshot else None}
     print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0
+
+
+def _seen(conn: sqlite3.Connection, sql: str, params: tuple) -> bool:
+    """先查后插的守门员：目标库这几张表没有唯一键，只能按自然键自己挡。
+
+    为什么不在目标库补唯一索引：那要改 schema（`schema_version` 现在锁在 11，
+    迁移工具只写不升版），为一个一次性迁移工具动生产库结构不划算。
+    自然键取"旧库一行能稳定复算出来的列"，不用旧库主键 —— 旧 id 没被迁过来。
+
+    SQL 里用 ``IS`` 而不是 ``=``：``platform`` / ``video_id`` / ``source_path``
+    这些列在旧库可能是 NULL，``=`` 比不出 NULL。
+    """
+    return conn.execute(sql, params).fetchone() is not None
 
 
 def _apply_tracks(conn, src: Source, mapping: dict[str, str], stats, seq: int,
@@ -608,16 +638,25 @@ def _apply_jobs(conn, src: Source, mapping: dict[str, str], stats, log) -> None:
             new_track = int(t["id"]) if t else None
         # 实测旧库存的是大写枚举（DONE/FAILED），不能直接查小写表
         status = STATUS_MAP.get(str(rget(row, "status") or "").lower(), "failed")
+        created = to_epoch(rget(row, "created_at"), 0)
+        payload = str(rget(row, "raw_input") or "")
+        if _seen(conn,
+                 "SELECT 1 FROM extract_jobs WHERE user_id=? AND media_type=? AND input=?"
+                 " AND created_at=? AND status=? LIMIT 1",
+                 (new_user, media_type, payload, created, status)):
+            stats["extract_jobs"]["skipped_existing"] += 1
+            log(f"extract_job 已存在（{payload}），跳过重复写入")
+            continue
         cur = conn.execute(
             """INSERT INTO extract_jobs
                (user_id,media_type,storage,input,platform,video_id,status,error_code,
                 error_detail,track_id,created_at,started_at,finished_at)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (new_user, media_type, "metadata", str(rget(row, "raw_input") or ""),
+            (new_user, media_type, "metadata", payload,
              rget(row, "platform"), rget(row, "video_id"), status,
              "legacy_error" if status == "failed" else None,
              rget(row, "error"), new_track,
-             to_epoch(rget(row, "created_at"), 0), None, to_epoch(rget(row, "finished_at"))),
+             created, None, to_epoch(rget(row, "finished_at"))),
         )
         if cur.rowcount:
             stats["extract_jobs"]["inserted"] += 1
@@ -655,13 +694,21 @@ def _apply_failures(conn, src: Source, mapping: dict[str, str], stats, log) -> N
         code = _dig(logs, ("errorCode", "error_code", "reason")) or "legacy_report"
         share = str(rget(row, "share_text") or "")
         detail = share if len(share) <= 1000 else share[:1000] + "…"
+        created = (int(rget(row, "occurred_at_ms") or 0) // 1000
+                   or to_epoch(rget(row, "received_at"), 0))
+        if _seen(conn,
+                 "SELECT 1 FROM extraction_failures WHERE user_id=? AND platform IS ?"
+                 " AND video_id IS ? AND created_at=? AND error_code=? LIMIT 1",
+                 (new_user, platform, video_id, created, str(code))):
+            stats["extraction_failures"]["skipped_existing"] += 1
+            log("extraction_failure 已存在，跳过重复写入")
+            continue
         conn.execute(
             """INSERT INTO extraction_failures
                (user_id,platform,video_id,track_id,stage,error_code,detail,client_version,created_at)
                VALUES(?,?,?,?,?,?,?,?,?)""",
             (new_user, platform, video_id, None, "legacy", str(code), detail,
-             str(rget(row, "version") or ""),
-             int(rget(row, "occurred_at_ms") or 0) // 1000 or to_epoch(rget(row, "received_at"), 0)),
+             str(rget(row, "version") or ""), created),
         )
         stats["extraction_failures"]["inserted"] += 1
 
@@ -825,12 +872,23 @@ def _apply_agent(conn, src: Source, mapping: dict[str, str], stats, log) -> None
                     text = _dig(data, ("text", "content")) or payload
                 except json.JSONDecodeError:
                     text = payload
+                role = str(rget(row, "role") or "user")
+                content = str(text)[:4000]
+                created = to_epoch(rget(row, "created_at"), 0)
+                # agent_messages 表上没有唯一键，OR IGNORE 挡不住重复，得自己查
+                if _seen(conn,
+                         "SELECT 1 FROM agent_messages WHERE conversation_id=? AND role=?"
+                         " AND content=? AND created_at=? LIMIT 1",
+                         (cid, role, content, created)):
+                    stats["agent"]["messages_skipped_existing"] += 1
+                    log(f"agent_message 已存在（会话 {cid}），跳过重复写入")
+                    continue
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO agent_messages(conversation_id,role,content,meta_json,created_at)"
                     " VALUES(?,?,?,?,?)",
-                    (cid, str(rget(row, "role") or "user"), str(text)[:4000],
+                    (cid, role, content,
                      json.dumps({"legacy_request_id": rget(row, "request_id")}, ensure_ascii=False),
-                     to_epoch(rget(row, "created_at"), 0)))
+                     created))
                 if cur.rowcount:
                     stats["agent"]["messages"] += 1
         if has_table(conn_src, "agent_memories"):
@@ -859,12 +917,23 @@ def _apply_recreations(conn, src: Source, mapping: dict[str, str], stats, log) -
                 new_user = mapping.get(str(rget(row, "owner_id") or ""))
                 if not new_user:
                     continue
+                title = str(rget(row, "title") or "")
+                source_path = rget(row, "source_path")
+                created = to_epoch(rget(row, "created_at"), 0)
+                # recreations 也没有唯一键：按 (user_id, title, source_path, created_at) 查重
+                if _seen(conn,
+                         "SELECT 1 FROM recreations WHERE user_id=? AND title=?"
+                         " AND source_path IS ? AND created_at=? LIMIT 1",
+                         (new_user, title, source_path, created)):
+                    stats["recreations"]["projects_skipped_existing"] += 1
+                    log("recreation_project 已存在，跳过重复写入")
+                    continue
                 cur = conn.execute(
                     """INSERT INTO recreations(user_id,title,source_track_id,source_path,
                        description,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)""",
-                    (new_user, str(rget(row, "title") or ""), None, rget(row, "source_path"),
+                    (new_user, title, None, source_path,
                      rget(row, "guidance"), str(rget(row, "status") or "draft"),
-                     to_epoch(rget(row, "created_at"), 0), to_epoch(rget(row, "created_at"), 0)))
+                     created, created))
                 if cur.rowcount:
                     stats["recreations"]["projects"] += 1
         if has_table(conn_src, "recreation_runs"):
@@ -873,12 +942,21 @@ def _apply_recreations(conn, src: Source, mapping: dict[str, str], stats, log) -
                 if not new_user:
                     continue
                 created = to_epoch(rget(row, "created_at"), 0)
+                status = str(rget(row, "status") or "queued")
+                output_path = rget(row, "result_path")
+                if _seen(conn,
+                         "SELECT 1 FROM recreation_runs WHERE kind='legacy' AND status=?"
+                         " AND output_path IS ? AND created_at=? LIMIT 1",
+                         (status, output_path, created)):
+                    stats["recreations"]["runs_skipped_existing"] += 1
+                    log("recreation_run 已存在，跳过重复写入")
+                    continue
                 conn.execute(
                     """INSERT INTO recreation_runs(recreation_id,kind,status,progress,output_path,
                        error_code,attempts,created_at,started_at,finished_at)
                        VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                    (0, "legacy", str(rget(row, "status") or "queued"), 0,
-                     rget(row, "result_path"), rget(row, "error"), 0, created, created, None))
+                    (0, "legacy", status, 0,
+                     output_path, rget(row, "error"), 0, created, created, None))
                 stats["recreations"]["runs"] += 1
     finally:
         conn_src.close()
