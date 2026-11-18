@@ -62,3 +62,4 @@ __pycache__/
 /docs/feature-gap-*.md
 /docs/p0-1-extract-design.md
 /docs/p0-2-sync-design.md
+/docs/metadata-backup-design.md
