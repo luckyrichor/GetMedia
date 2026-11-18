@@ -359,12 +359,16 @@ def test_snapshot_only_when_asked(env, capsys, monkeypatch):
 
 
 def test_apply_rejects_wrong_target_schema(env, capsys):
-    """目标库必须是当前 schema（v11）；旧版本库要提前拒绝，不能写一半再报错。"""
+    """目标库必须是当前 schema；旧版本库要提前拒绝，不能写一半再报错。
+
+    版本号从工具取，不在测试里再抄一份 —— 抄的那份会随着加版本而悄悄变成"低两版"，
+    断言和实际提示对不上，看着像工具坏了。
+    """
     # 直接在夹具目标库上退版本（每个用例独立 tmp_path）；注意库是 WAL，
     # 不能用 shutil.copy2 复制主文件——未 checkpoint 的内容在 -wal 里。
     old = env["target"]
     c = sqlite3.connect(old)
-    c.execute("DELETE FROM schema_version WHERE version=11")
+    c.execute("DELETE FROM schema_version WHERE version=?", (mig.TARGET_SCHEMA,))
     c.commit()
     c.close()
 
@@ -376,7 +380,7 @@ def test_apply_rejects_wrong_target_schema(env, capsys):
         "--target", str(old), "--map", str(mapping), "--log-dir", str(env["root"])]])
     assert code == 2
     err = capsys.readouterr().err
-    assert "schema v10" in err and "v11" in err
+    assert f"schema v{mig.TARGET_SCHEMA - 1}" in err and f"v{mig.TARGET_SCHEMA}" in err
 
     # verify 同样要拦
     assert mig.main([str(a) for a in [

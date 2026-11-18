@@ -49,13 +49,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
 
 from getmedia.credentials import CredentialError, CredentialVault  # noqa: E402
+from getmedia.db import MIGRATIONS  # noqa: E402
 
 BATCH = 500
-# 本工具写入的目标 schema 版本，必须等于 server/getmedia/db.py 里 MIGRATIONS 的最大版本。
-# P2 的表（v6 creator_jobs/creator_items、v7 schedules/schedule_runs、v8 agent_*、
-# v9 platform_credentials/account_platform_bindings、v10 recreations）都落在这套版本里，
-# 所以 P2 完成后目标库就是这个版本；表结构再变时必须同步改这里，否则 apply 会拒绝写库。
-TARGET_SCHEMA = 11
+# 本工具写入的目标 schema 版本 = server/getmedia/db.py 里 MIGRATIONS 的最大版本。
+# 直接取常量，而不是再抄一份数字：两边各写一份的结果就是加版本时漏改（v12 就漏过一次），
+# 而漏改的表现是 apply 在整个迁移开始前被拒，看起来像测试或库坏了。
+TARGET_SCHEMA = max(v for v, _ in MIGRATIONS)
 STATUS_MAP = {"pending": "queued", "queued": "queued", "running": "running",
               "done": "done", "failed": "failed"}
 # 旧库里明确要丢弃的测试残留（plan.md §9.4-4）
@@ -561,8 +561,8 @@ def cmd_apply(args: argparse.Namespace, sources: list[Source]) -> int:
 def _seen(conn: sqlite3.Connection, sql: str, params: tuple) -> bool:
     """先查后插的守门员：目标库这几张表没有唯一键，只能按自然键自己挡。
 
-    为什么不在目标库补唯一索引：那要改 schema（`schema_version` 现在锁在 11，
-    迁移工具只写不升版），为一个一次性迁移工具动生产库结构不划算。
+    为什么不在目标库补唯一索引：那要改 schema（本工具只写不升版，见
+    ``TARGET_SCHEMA``），为一个一次性迁移工具动生产库结构不划算。
     自然键取"旧库一行能稳定复算出来的列"，不用旧库主键 —— 旧 id 没被迁过来。
 
     SQL 里用 ``IS`` 而不是 ``=``：``platform`` / ``video_id`` / ``source_path``
