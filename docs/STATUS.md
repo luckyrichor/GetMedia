@@ -7,7 +7,7 @@
 | # | 事项 | 为什么 / 完成判据 |
 |---|---|---|
 | 1 | 会话 Cookie 路径改为可配置：`Settings.cookie_path` 支持 `GETMEDIA_COOKIE_PATH`，**默认改为 `/getmedia/`**；同步改 `server/tests/test_accounts.py::test_web_cookie_attributes_and_no_token_in_body` 里 `Path=/getmedia/api/` 的断言（以及 `deploy/env/getmedia.env.example` 加注释） | 现在 `cookie_path` 硬编码为 `/getmedia/api/`，owner 管理台在 `/getmedia/owner/` 下收不到会话，只能靠边缘 `proxy_cookie_path` 改写兜住。代码改完后：把 `deploy/nginx/getmedia-prefix.conf` 里两处 `proxy_cookie_path`（owner/api 与 api 两个 location）删掉，重新 `nginx -t` + reload，复验"浏览器登录 `/getmedia/login` 后 `/getmedia/owner/` 返回 200、匿名仍 404" |
-| 2 | `tools/smoke_deploy.py` 的 `证书：到期日` 检查：**改动已完成在工作区（未提交）** —— ① 不再静默 SKIP，读不到到期日判 FAIL 并写明原因；② 改用 `CERT_REQUIRED`（关 hostname 校验）取解析结果，失败再退到 `getpeercert(binary_form=True)` 解码；③ 阈值改为**剩余不足 36 小时判 FAIL** | 该检查原先恒 SKIP 等于假绿；2026-11-17 20:43 复跑：`剩 3.9 天（2026-11-21 23:19 UTC 到期）` PASS，14 PASS / 0 FAIL / 2 SKIP |
+| 2 | `tools/smoke_deploy.py` 的 `证书：到期日` 检查：**已改并提交（`1737677`）** —— ① 不再静默 SKIP，读不到到期日判 FAIL 并写明原因；② 改用 `CERT_REQUIRED`（关 hostname 校验）取解析结果，失败再退到 `getpeercert(binary_form=True)` 解码；③ 阈值改为**剩余不足 36 小时判 FAIL** | 该检查原先恒 SKIP 等于假绿；2026-11-17 20:43 复跑：`剩 3.9 天（2026-11-21 23:19 UTC 到期）` PASS，14 PASS / 0 FAIL / 2 SKIP。**11-19 那次核对里再复验一次**（证书续期后应报新的 notAfter） |
 
 ## 2026-11-17 补充任务（批量导出 + 定时倒计时缺陷）
 
