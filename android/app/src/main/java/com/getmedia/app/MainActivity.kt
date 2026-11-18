@@ -112,7 +112,11 @@ class MainActivity : ComponentActivity() {
                     Surface(Modifier.fillMaxSize().padding(padding), color = Color.Transparent) {
                         Box(Modifier.fillMaxSize()) {
                             when (tab) {
-                                Tab.LIBRARY -> LibraryScreenV2(openCategories)
+                                // 空库的「去提取」直接把底部导航切到提取页，不用用户自己找。
+                                Tab.LIBRARY -> LibraryScreenV2(openCategories, onGoExtract = {
+                                    openCategories = false
+                                    tab = Tab.EXTRACT
+                                })
                                 Tab.EXTRACT -> ExtractScreen(prefill = shared, onSharedConsumed = { shared = null })
                                 Tab.MY -> MyScreen()
                             }

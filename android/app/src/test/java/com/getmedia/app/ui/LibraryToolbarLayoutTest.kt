@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.getmedia.app.ui.screen.LibraryToolbar
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.ui.screen.LibraryToolbarTags
 import com.getmedia.app.ui.screen.SortField
 import org.junit.Rule
@@ -63,6 +64,8 @@ class LibraryToolbarLayoutTest {
                             sortField = SortField.MANUAL,
                             sortAsc = false,
                             importing = false,
+                            kind = MediaKind.AUDIO,
+                            onPickKind = {},
                             onToggleDirection = {},
                             onPickField = {},
                             onImport = {},
@@ -174,6 +177,8 @@ class LibraryToolbarLayoutTest {
                     sortField = SortField.MANUAL,
                     sortAsc = false,
                     importing = false,
+                    kind = MediaKind.AUDIO,
+                    onPickKind = {},
                     onToggleDirection = {},
                     onPickField = {},
                     onImport = {},
@@ -231,6 +236,8 @@ class LibraryToolbarLayoutTest {
                     sortField = SortField.MANUAL,
                     sortAsc = false,
                     importing = false,
+                    kind = MediaKind.AUDIO,
+                    onPickKind = {},
                     onToggleDirection = {},
                     onPickField = { picked += it },
                     onImport = {},
@@ -245,5 +252,39 @@ class LibraryToolbarLayoutTest {
         }
         rule.onNodeWithTag(LibraryToolbarTags.option(SortField.NAME)).performClick()
         assert(picked.single() == SortField.NAME) { "点击「名称」应回调 NAME，实际 $picked" }
+    }
+
+    /**
+     * 类型只有音频/视频两个，始终有一个被选中：两个都必须在，且点击要回调。
+     * 「全部」已经移除，不再有"一个都不选"的状态。
+     */
+    @Test
+    @Config(sdk = [33], qualifiers = "w320dp-h640dp-xhdpi")
+    fun kindChipsAreBothVisibleAndClickable() {
+        val picked = mutableListOf<MediaKind>()
+        rule.setContent {
+            MaterialTheme {
+                LibraryToolbar(
+                    timer = null,
+                    sortField = SortField.MANUAL,
+                    sortAsc = false,
+                    importing = false,
+                    kind = MediaKind.AUDIO,
+                    onPickKind = { picked += it },
+                    onToggleDirection = {},
+                    onPickField = {},
+                    onImport = {},
+                    onCancelTimer = {},
+                )
+            }
+        }
+        rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.AUDIO)).assertIsDisplayed()
+        rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.VIDEO)).assertIsDisplayed()
+        assertSortFullyUsable()
+        rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.VIDEO)).performClick()
+        rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.VIDEO)).performClick()
+        assert(picked == listOf(MediaKind.VIDEO, MediaKind.VIDEO)) {
+            "点「视频」两次应回调两次 VIDEO（不会取消选中），实际 $picked"
+        }
     }
 }

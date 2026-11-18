@@ -72,6 +72,7 @@ import com.getmedia.app.data.local.CategoryEntity
 import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.repo.CategoryRepository
+import com.getmedia.app.data.repo.LibraryPrefs
 import com.getmedia.app.data.repo.PlaylistRepository
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.repo.ErrorText
@@ -163,7 +164,8 @@ private fun SortChip(
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(Modifier.width(4.dp))
-                Text(field.label, style = MaterialTheme.typography.labelLarge)
+                // 按钮上写明「排序：手动」，不再只写字段名 —— 单独一个「手动」看不出是干什么的。
+                Text("排序：" + field.label, style = MaterialTheme.typography.labelLarge)
                 if (field != SortField.MANUAL) {
                     Spacer(Modifier.width(2.dp))
                     Icon(
@@ -210,13 +212,15 @@ private fun SortChip(
 }
 
 /**
- * 媒体库顶部的操作条：定时状态 + 排序 + 导入。
+ * 媒体库顶部的操作条：定时状态 + 「音频/视频」+ 排序 + 导入。
  *
  * 单独抽出来是为了能在 JVM 上做渲染回归（320dp 窄屏、字体 200%、横屏），
  * 不必挂整个页面（整页依赖 Room 与播放器单例）。
  *
  * 布局约束（回归用例守住）：
  * - 定时状态**不能**和排序挤在同一行抢宽度；
+ * - 「音频/视频」「排序」「导入」放在同一行，宽度不够（窄屏 / 字体 200%）时**整块**换行，
+ *   换行由 [FlowRow] 处理，不会把任何一个按钮挤成 0 宽；
  * - 排序控件在任何宽度与字体缩放下都要完整可见、可点击，触控区 ≥ 48dp。
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -226,6 +230,8 @@ internal fun LibraryToolbar(
     sortField: SortField,
     sortAsc: Boolean,
     importing: Boolean,
+    kind: MediaKind,
+    onPickKind: (MediaKind) -> Unit,
     onToggleDirection: () -> Unit,
     onPickField: (SortField) -> Unit,
     onImport: () -> Unit,
@@ -263,14 +269,31 @@ internal fun LibraryToolbar(
                 ) { Text("取消") }
             }
         }
-        // 排序 + 导入：FlowRow 而不是死挤在一行。
-        // 宽度不够（320dp 窄屏 / 字体 200%）时「导入」换到下一行，排序永远完整可见；
+        // 「音频/视频」+ 排序 + 导入：同一行的 FlowRow，宽度不够时整块换行。
+        // 类型筛选原来是独立一行、还带个「全部」，既浪费一行又把左边距撑没了；
+        // 现在只留音频/视频两个、始终选中一个，和排序、导入并进一行。
         // 定时条的开关只影响上面那一行，这一行的可用宽度不变，所以不会跟着跳。
         FlowRow(
             Modifier.fillMaxWidth().testTag(LibraryToolbarTags.ROOT),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            // 二选一，点已选中的那个也不会取消 —— 没有「都不选」的状态。
+            MediaKind.entries.forEach { k ->
+                Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+                    FilterChip(
+                        selected = kind == k,
+                        onClick = { onPickKind(k) },
+                        label = {
+                            Text(
+                                if (k == MediaKind.AUDIO) "音频" else "视频",
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        },
+                        modifier = Modifier.testTag(LibraryToolbarTags.kind(k)),
+                    )
+                }
+            }
             // 排序：主体点一下翻转正/倒序，右侧小箭头点开字段下拉（手动才能长按拖动）。
             SortChip(
                 field = sortField,
@@ -301,12 +324,13 @@ internal object LibraryToolbarTags {
     const val SORT = "library-sort"
     const val SORT_MENU = "library-sort-menu"
     const val IMPORT = "library-import"
+    fun kind(kind: MediaKind): String = "library-kind-${kind.name}"
     fun option(field: SortField): String = "sort-option-${field.name}"
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun LibraryScreenV2(openCategories: Boolean = false) {
+fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.get(context) }
@@ -357,12 +381,13 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
     val allTracks by db.trackDao().allWithTimeRange(query, startMs, endMs).collectAsState(initial = emptyList())
     val libraryTracks by db.trackDao().observeAll().collectAsState(initial = emptyList())
     val categoryTracks by db.trackDao().inCategory(categoryId ?: -1L).collectAsState(initial = emptyList())
-    // 类型筛选：全部 / 音频 / 视频。只改显示，不改库里顺序；手动排序仍只重排可见槽位。
-    var kindFilter by remember { mutableStateOf<MediaKind?>(null) }
-    fun matches(t: TrackEntity) = kindFilter == null || t.mediaType == kindFilter!!.name
-    val typedTracks = remember(allTracks, kindFilter) { allTracks.filter(::matches) }
-    val typedCategoryTracks = remember(categoryTracks, kindFilter) { categoryTracks.filter(::matches) }
-    val visibleTracks = if (section == 0) typedTracks else typedCategoryTracks
+    // 类型筛选：音频 / 视频，二选一且始终有一个被选中（默认音频，记住上次选择）。
+    // 只改显示，不改库里顺序；手动排序仍只重排可见槽位。
+    var kind by remember { mutableStateOf(LibraryPrefs.kind(context)) }
+    fun matches(t: TrackEntity) = t.mediaType == kind.name
+    val typedTracks = remember(allTracks, kind) { allTracks.filter(::matches) }
+    // 类别页不按类型过滤：类型开关只在「媒体库」页，类别里的视频不能因为开关停在音频就消失。
+    val visibleTracks = if (section == 0) typedTracks else categoryTracks
     // 排序：字段从按钮右侧的下拉里选，方向点按钮主体切换；默认「手动」= 拖动出来的顺序。
     var sortField by remember { mutableStateOf(SortField.MANUAL) }
     var sortAsc by remember { mutableStateOf(false) }
@@ -433,7 +458,7 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
                 .height(44.dp).clip(RoundedCornerShape(14.dp)).background(uiAccentContainer()).padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                listOf("全部音频", "类别").forEachIndexed { index, label ->
+                listOf("媒体库", "类别").forEachIndexed { index, label ->
                     val selected = section == index
                     Box(Modifier.weight(1f).fillMaxHeight()
                         .clip(RoundedCornerShape(11.dp))
@@ -465,7 +490,7 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(
                         query, { query = it },
-                        placeholder = { Text("搜索音频名称", style = MaterialTheme.typography.bodyMedium) },
+                        placeholder = { Text(if (kind == MediaKind.AUDIO) "搜索音频名称" else "搜索视频名称", style = MaterialTheme.typography.bodyMedium) },
                         leadingIcon = { Icon(Icons.Default.Search, null, Modifier.size(18.dp), tint = uiMuted()) },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
@@ -503,6 +528,15 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
                     sortField = sortField,
                     sortAsc = sortAsc,
                     importing = importing,
+                    kind = kind,
+                    onPickKind = { picked ->
+                        if (picked != kind) {
+                            kind = picked
+                            LibraryPrefs.setKind(context, picked)
+                            // 换类型后旧的勾选没有意义了：勾着音频去切视频，批量删除会删错东西。
+                            if (selecting) exitSelection()
+                        }
+                    },
                     onToggleDirection = {
                         if (sortField == SortField.MANUAL) {
                             notice = "手动顺序：长按条目上下拖动即可调整"
@@ -522,12 +556,7 @@ fun LibraryScreenV2(openCategories: Boolean = false) {
                 if (startMs != null || endTimeMs != null) {
                     AreaButton(onClick = { startMs = null; endTimeMs = null }) { Text("${startMs?.let { displayDateTime(it) } ?: "不限"} ~ ${endTimeMs?.let { displayDateTime(it) } ?: "不限"} ×") }
                 }
-                Row(Modifier.padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(kindFilter == null, { kindFilter = null }, { Text("全部") })
-                    FilterChip(kindFilter == MediaKind.AUDIO, { kindFilter = MediaKind.AUDIO }, { Text("音频") })
-                    FilterChip(kindFilter == MediaKind.VIDEO, { kindFilter = MediaKind.VIDEO }, { Text("视频") })
-                }
-                if (typedTracks.isEmpty()) EmptyLibrary()
+                if (typedTracks.isEmpty()) EmptyLibrary(kind = kind, onGoExtract = onGoExtract)
                 else LibraryTrackList(
                     tracks = displayTracks,
                     dragEnabled = sortField == SortField.MANUAL,
@@ -955,7 +984,12 @@ private fun EmptyCategory() {
         ) {
             Icon(Icons.Default.FolderOpen, null, Modifier.size(30.dp), tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f))
         }
-        Text("这里还是空的", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+        Text(
+            "这里还是空的",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
         Text(
             "新建类别给音频分组，比如「睡前」「通勤」\n也可以长按音频，用「移动到…」放进来",
             style = MaterialTheme.typography.bodySmall,
@@ -966,9 +1000,10 @@ private fun EmptyCategory() {
     }
 }
 
-/** 空库引导：给出下一步动作，而不是只丢一句「暂无音频」。 */
+/** 空库引导：文案跟着当前类型走，并直接给一个「去提取」的主操作，而不是只丢一句「暂无音频」。 */
 @Composable
-private fun EmptyLibrary() {
+private fun EmptyLibrary(kind: MediaKind, onGoExtract: () -> Unit) {
+    val audio = kind == MediaKind.AUDIO
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -979,22 +1014,44 @@ private fun EmptyLibrary() {
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Default.GraphicEq,
+                    if (audio) Icons.Default.GraphicEq else Icons.Default.Movie,
                     null,
                     Modifier.size(34.dp),
                     tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f),
                 )
             }
-            Text("还没有音频", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
             Text(
-                "去「提取」页粘贴 B 站或抖音链接\n就能把声音保存到这里",
+                if (audio) "还没有音频" else "还没有视频",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Medium,
+                // 不给颜色会继承 LocalContentColor 的默认黑，深色模式下一片糊。
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                if (audio) "去「提取」页粘贴 B 站或抖音链接\n就能把声音保存到这里"
+                else "去「提取」页粘贴 B 站或抖音链接\n就能把视频保存到这里",
                 style = MaterialTheme.typography.bodySmall,
                 color = uiMuted(),
                 textAlign = TextAlign.Center,
                 lineHeight = 19.sp,
             )
+            Spacer(Modifier.height(2.dp))
+            Button(
+                onClick = onGoExtract,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.heightIn(min = 48.dp).testTag(LibraryEmptyTags.GO_EXTRACT),
+            ) {
+                Icon(Icons.Default.Link, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("去提取", style = MaterialTheme.typography.labelLarge)
+            }
         }
     }
+}
+
+/** 空态按钮的定位标记，供渲染回归用。 */
+internal object LibraryEmptyTags {
+    const val GO_EXTRACT = "library-empty-go-extract"
 }
 
 @OptIn(ExperimentalFoundationApi::class)
