@@ -7,7 +7,7 @@
 | # | 事项 | 为什么 / 完成判据 |
 |---|---|---|
 | 1 | 会话 Cookie 路径改为可配置：`Settings.cookie_path` 支持 `GETMEDIA_COOKIE_PATH`，**默认改为 `/getmedia/`**；同步改 `server/tests/test_accounts.py::test_web_cookie_attributes_and_no_token_in_body` 里 `Path=/getmedia/api/` 的断言（以及 `deploy/env/getmedia.env.example` 加注释） | 现在 `cookie_path` 硬编码为 `/getmedia/api/`，owner 管理台在 `/getmedia/owner/` 下收不到会话，只能靠边缘 `proxy_cookie_path` 改写兜住。代码改完后：把 `deploy/nginx/getmedia-prefix.conf` 里两处 `proxy_cookie_path`（owner/api 与 api 两个 location）删掉，重新 `nginx -t` + reload，复验"浏览器登录 `/getmedia/login` 后 `/getmedia/owner/` 返回 200、匿名仍 404" |
-| 2 | 修 `tools/smoke_deploy.py` 的 `证书：到期日` 检查：① **不得静默 SKIP** —— 读不到到期日要判 FAIL 并说清原因（不是记一句"对端没有给证书"就放过）；② 原因：`verify_mode=CERT_NONE` 时 `getpeercert()` 只返回 `{}`，得走 `getpeercert(binary_form=True)` 解析、或 `CERT_REQUIRED` 但关掉 hostname 校验；③ **判失败阈值改为剩余不足 36 小时**（原 `< 21 天` 不适用本机的约 6 天短周期证书，会天天误报） | 该检查现在恒 SKIP，等于假绿；2026-11-17 冒烟只能手工 `openssl x509 -noout -enddate` 代替。改完后在 11-19 那次核对里复验：证书已续期时应报 PASS 并给出具体到期时间 |
+| 2 | `tools/smoke_deploy.py` 的 `证书：到期日` 检查：**改动已完成在工作区（未提交）** —— ① 不再静默 SKIP，读不到到期日判 FAIL 并写明原因；② 改用 `CERT_REQUIRED`（关 hostname 校验）取解析结果，失败再退到 `getpeercert(binary_form=True)` 解码；③ 阈值改为**剩余不足 36 小时判 FAIL** | 该检查原先恒 SKIP 等于假绿；2026-11-17 20:43 复跑：`剩 3.9 天（2026-11-21 23:19 UTC 到期）` PASS，14 PASS / 0 FAIL / 2 SKIP |
 
 ## 2026-11-17 补充任务（批量导出 + 定时倒计时缺陷）
 
@@ -27,7 +27,7 @@
 | P2 服务端功能合并（媒体/批量/定时/Agent/授权/上报/AI） | 完成 | `docs/p2-report.md`、`docs/p2-api-mapping.md`、`docs/p2-acceptance-evidence.md` |
 | P2h Agent 接模型（方案 B）+ 动作闭环 | 服务端完成（schema v11）；**未部署、未用真实密钥调用** | `docs/agent-model-plan.md` §0 |
 | P2i AI 存储归属 + 保留期清理 | 完成（未改 schema）：AI 计入服务器库 3 GiB、保留 14 天、超限 409、`ai-gc` + 每天 04:10 timer；**未部署** | `docs/p2i-report.md`、`docs/p2-report.md` §8.1 |
-| P3 旧库迁移工具 | 工具与演练完成；**真实迁移等 P2 部署后、用户确认窗口** | `docs/p3-report.md` |
+| P3 旧库迁移工具 | 工具与演练完成；**执行手册已写（2026-11-17），待用户审**；真实迁移需先定账号映射与时间窗 | `docs/p3-report.md`、本地 `docs/p3-migration-runbook.md` |
 | P4a UI 方案 | 完成，等用户确认 5 个决策后才写 UI | `docs/ui-plan.md` |
 | P5a web-public 接新服务 | 完成 | `docs/p5-web-report.md` |
 | P5b owner 认证壳 | 完成 | `docs/p5-web-report.md` |

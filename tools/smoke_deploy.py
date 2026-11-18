@@ -48,6 +48,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -405,29 +406,65 @@ def check_cert(host: str, port: int, timeout: float = 8.0) -> list[Check]:
         out.append(Check("证书：链与主机名", FAIL, f"连不上 {host}:{port}：{exc}"))
         return out
 
-    # 2) 到期日（不校验也能读，证书过期时仍可给出日期）
+    # 2) 到期日。**这一项不允许静默 SKIP**：读不到到期日就当失败报出来，否则等于假绿。
+    #    坑（2026-11-17 实测）：verify_mode=CERT_NONE 时 getpeercert() 只返回 {}，
+    #    所以这里先按 CERT_REQUIRED + 关 hostname 校验取解析结果；失败再退到二进制形式解码。
+    expires: float | None = None
+    reason = ""
     try:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        ctx.verify_mode = ssl.CERT_REQUIRED
         with socket.create_connection((host, port), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as ss:
                 cert = ss.getpeercert() or {}
         not_after = cert.get("notAfter")
-        if not not_after:
-            out.append(Check("证书：到期日", SKIP, "对端没有给证书"))
-            return out
-        expires = ssl.cert_time_to_seconds(not_after)
-        days = (expires - time.time()) / 86400
-        when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(expires))
-        if days < 0:
-            out.append(Check("证书：到期日", FAIL, f"已过期（{when}）"))
-        elif days < 21:
-            out.append(Check("证书：到期日", FAIL, f"只剩 {days:.0f} 天（{when}），续期可能没跑"))
+        if not_after:
+            expires = ssl.cert_time_to_seconds(not_after)
         else:
-            out.append(Check("证书：到期日", PASS, f"剩 {days:.0f} 天（{when} 到期）"))
-    except (OSError, ssl.SSLError) as exc:
-        out.append(Check("证书：到期日", FAIL, str(exc)))
+            reason = "CERT_REQUIRED 下 getpeercert() 仍为空"
+    except (ssl.SSLError, OSError) as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+
+    if expires is None:
+        # 退路：取 DER 再解码（证书过期/自签时 CERT_REQUIRED 会失败，这条路仍能读日期）
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with socket.create_connection((host, port), timeout=timeout) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host) as ss:
+                    der = ss.getpeercert(binary_form=True)
+            if der:
+                with tempfile.NamedTemporaryFile("wb", suffix=".pem", delete=False) as fh:
+                    fh.write(ssl.DER_cert_to_PEM_cert(der).encode())
+                    pem_path = fh.name
+                try:
+                    decoded = ssl._ssl._test_decode_cert(pem_path)  # 标准库内部的 PEM 解码，仅本机只读用
+                    not_after = decoded.get("notAfter")
+                    if not_after:
+                        expires = ssl.cert_time_to_seconds(not_after)
+                finally:
+                    Path(pem_path).unlink(missing_ok=True)
+            if expires is None and not reason:
+                reason = "二进制形式也解不出 notAfter"
+        except (ssl.SSLError, OSError) as exc:
+            reason = reason or f"{type(exc).__name__}: {exc}"
+
+    if expires is None:
+        out.append(Check("证书：到期日", FAIL,
+                         f"读不到到期日，按失败计（{reason or '未知原因'}）"))
+        return out
+
+    hours = (expires - time.time()) / 3600
+    when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(expires))
+    if hours < 0:
+        out.append(Check("证书：到期日", FAIL, f"已过期（{when}）"))
+    elif hours < 36:
+        out.append(Check("证书：到期日", FAIL,
+                         f"只剩 {hours:.1f} 小时（{when} 到期），续期没跑或没 reload"))
+    else:
+        out.append(Check("证书：到期日", PASS, f"剩 {hours / 24:.1f} 天（{when} 到期）"))
     return out
 
 
