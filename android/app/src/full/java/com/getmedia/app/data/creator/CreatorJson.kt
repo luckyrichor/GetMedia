@@ -77,8 +77,10 @@ object CreatorJson {
 
     private fun fallback(status: Int, code: String): String = when {
         status == 401 -> "登录已失效，请重新登录"
-        // 服务端还是旧版本时，路由不存在会返回不带 code 的 404
-        status == 404 && code.isBlank() -> "服务器还没有这个功能，请更新服务端后再试"
+        // 不带 code 的 404：owner 通道在边缘把"未登录 / 不是 owner"和"路由不存在"
+        // 一律回成无 body 的裸 404（对外不可区分），所以文案只能把两种可能都说清，
+        // 落到用户身上是同一个动作：确认账号权限、必要时重新登录。
+        status == 404 && code.isBlank() -> "当前账号无权使用，或登录已过期，请重新登录"
         code == "creator_not_found" -> "没有找到这个博主，请检查链接或 ID"
         code == "creator_auth" -> "平台需要重新授权，请稍后再试"
         code == "creator_unavailable" -> "平台暂时不可用，请稍后重试"

@@ -15,9 +15,14 @@ import java.io.IOException
 /**
  * 博主批量接口。只调用 GetMedia 自己的服务器（编译期地址 + 现有会话令牌），
  * 不直连任何平台——列表抓取需要服务端出口和服务端 cookie，手机端做不稳定。
+ *
+ * 基址默认走 **owner 通道** `/getmedia/owner/api`（`BuildConfig.OWNER_SERVER_BASE`）：
+ * 免费通道 `/getmedia/api` 在边缘只有 18 条白名单路由，owner 级接口不在其中（走那里一律 404）；
+ * owner 通道由 nginx 的 auth_request 判定"会话是不是 owner"，通过后剥掉前缀转给应用。
+ * 也就是说：同一把会话令牌，路径不同、放行机制不同，账号接口仍然走免费通道（AccountApi 不变）。
  */
 class CreatorApi(
-    baseUrl: String = com.getmedia.app.BuildConfig.SERVER_BASE,
+    baseUrl: String = com.getmedia.app.BuildConfig.OWNER_SERVER_BASE,
     private val client: OkHttpClient = AccountApi.defaultClient(),
     private val token: () -> String? = SessionStore::token,
 ) {

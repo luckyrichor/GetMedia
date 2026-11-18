@@ -139,8 +139,21 @@ class CreatorJsonTest {
     @Test fun oldServerWithoutRouteIsExplained() {
         val e = CreatorJson.error(404, """{"detail":"未找到","code":"http_404"}""")
         assertEquals(CreatorProblem.NOT_FOUND, e.problem)
-        // 带 code 的 404 视为「博主不存在」的兜底文案，而不是服务端缺功能
+        // 带 code 的 404 优先用服务端 detail，不套兜底文案
         assertEquals("未找到", e.message)
-        assertEquals("服务器还没有这个功能，请更新服务端后再试", CreatorJson.error(404, "").message)
+    }
+
+    /**
+     * owner 通道（/getmedia/owner/api）在边缘把 401/403 都改写成无 body 的裸 404，
+     * 客户端拿不到 code，也就分不清"没登录 / 不是 owner / 路由不存在"。
+     * 文案必须把两种情况都说出来，并且给出可执行的动作（重新登录）。
+     */
+    @Test fun ownerChannelBareNotFoundAsksToCheckAccountOrRelogin() {
+        for (body in listOf("", "<html><head><title>404 Not Found</title></head></html>", "  ")) {
+            val e = CreatorJson.error(404, body)
+            assertEquals(CreatorProblem.NOT_FOUND, e.problem)
+            assertEquals("当前账号无权使用，或登录已过期，请重新登录", e.message)
+            assertFalse(e.message.contains("服务器还没有这个功能"))
+        }
     }
 }

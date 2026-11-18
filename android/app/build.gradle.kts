@@ -97,6 +97,19 @@ if (serverBase == placeholderServerBase) {
     )
 }
 
+// owner 级接口的基址：把 serverBase 末尾的 /api 换成 /owner/api
+// （https://<域名>/getmedia/api → https://<域名>/getmedia/owner/api）。
+// 为什么要两条基址：/getmedia/api/ 是免费白名单通道，边缘只放行那 18 条免费路由，
+// owner 级接口（如 /v2/creators/preview）不在其中、也不该为它扩白名单；
+// 这些接口在边缘走 auth_request 判定 owner 的专用通道 /getmedia/owner/api/。
+val ownerServerBase: String = if (serverBase.endsWith("/api")) {
+    serverBase.removeSuffix("/api") + "/owner/api"
+} else {
+    // 配成不以 /api 结尾的地址时无从推导，原样给出去，让请求在真实环境里暴露问题
+    // （release 构建仍会被上面的 HTTPS / 占位值两条检查挡住）。
+    serverBase
+}
+
 android {
     namespace = "com.getmedia.app"
     compileSdk = 34
@@ -122,6 +135,8 @@ android {
         versionName = "0.1.0"
         manifestPlaceholders["appLabel"] = "@string/app_name"
         buildConfigField("String", "SERVER_BASE", "\"$serverBase\"")
+        // owner 通道基址，只给 owner 级接口用（free 风味里不会用到，留着不影响）
+        buildConfigField("String", "OWNER_SERVER_BASE", "\"$ownerServerBase\"")
     }
 
     // 免费版与完整版是两个独立安装包（包名不同，可同机并存）。任务一只构建 free；
