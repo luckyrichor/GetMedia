@@ -58,3 +58,7 @@ __pycache__/
 /docs/p3-migration-runbook.md
 /docs/platform-matrix-server-*.md
 /docs/credential-merge.md
+# 功能对照含旧 App 运维细节；两份 P0 设计含服务器地址与内部字段：均只留本地
+/docs/feature-gap-*.md
+/docs/p0-1-extract-design.md
+/docs/p0-2-sync-design.md
