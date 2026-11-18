@@ -12,6 +12,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, Header, Query, Response
 from fastapi.responses import StreamingResponse
@@ -89,19 +90,44 @@ def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     return start, min(end, size - 1)
 
 
-def _file_response(path: Path, range_header: str | None, media_type: str) -> Response:
+_UNSAFE_NAME = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
+
+
+def _attachment_name(title: str | None, track_id: int, ext: str) -> str:
+    """把标题变成可安全放进响应头的文件名。
+
+    标题是用户/平台给的内容，可能带换行、引号、斜杠：不清洗会直接构成响应头注入，
+    也会让浏览器存出奇怪的路径。这里只保留可打印字符，其余换成下划线。
+    """
+    cleaned = _UNSAFE_NAME.sub("_", (title or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ._")
+    if not cleaned:
+        cleaned = f"media-{track_id}"
+    return f"{cleaned[:60]}.{ext.lstrip('.') or 'mp4'}"
+
+
+def _disposition(name: str, track_id: int, ext: str) -> str:
+    """RFC 6266：ASCII 兜底名 + UTF-8 真名（中文标题不会变成乱码）。"""
+    fallback = f"media-{track_id}.{ext.lstrip('.') or 'mp4'}"
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+def _file_response(path: Path, range_header: str | None, media_type: str,
+                   disposition: str | None = None) -> Response:
     size = path.stat().st_size
     ctype = "video/mp4" if media_type == "video" else "audio/mp4"
+    extra = {"Content-Disposition": disposition} if disposition else {}
     rng = _parse_range(range_header, size)
     if range_header and rng is None:
         return Response(status_code=416, headers={"Content-Range": f"bytes */{size}", "Accept-Ranges": "bytes"})
     if rng is None:
         return StreamingResponse(_read_file(path, 0, size - 1), media_type=ctype,
-                                 headers={"Content-Length": str(size), "Accept-Ranges": "bytes"})
+                                 headers={"Content-Length": str(size), "Accept-Ranges": "bytes", **extra})
     start, end = rng
     return StreamingResponse(_read_file(path, start, end), status_code=206, media_type=ctype,
                              headers={"Content-Range": f"bytes {start}-{end}/{size}",
-                                      "Content-Length": str(end - start + 1), "Accept-Ranges": "bytes"})
+                                      "Content-Length": str(end - start + 1), "Accept-Ranges": "bytes",
+                                      **extra})
 
 
 def _read_file(path: Path, start: int, end: int, chunk: int = 256 * 1024):
@@ -269,7 +295,13 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
     # ---------- 媒体流 ----------
     @app.get("/v2/media/{track_id}")
     def media(track_id: str, range_header: str | None = Header(default=None, alias="Range"),
+              download: bool = Query(default=False),
               ctx: AuthCtx = Depends(guard)):
+        """``?download=1`` 时按附件下发（浏览器直接存盘），否则内联给播放器。
+
+        两种来源都支持：服务器有文件就直读，没有就当场解析并中转——所以「仅元数据」的
+        条目也能下载，代价是每次都要现解析、且拿不到总长度。
+        """
         tid = _tid(track_id)
         try:
             track = store.get(ctx.user_id, tid, include_deleted=True)
@@ -278,7 +310,11 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
             _translate(exc)
         if tf is not None:
             store.touch(tid)
-            return _file_response(tf.path, range_header, track["media_type"])
+            disposition = None
+            if download:
+                ext = tf.path.suffix
+                disposition = _disposition(_attachment_name(track["title"], tid, ext), tid, ext)
+            return _file_response(tf.path, range_header, track["media_type"], disposition)
 
         # 没有落盘文件：当场解析并中转，不写盘
         if not track.get("source_url"):
@@ -296,6 +332,9 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
             if k in resp.headers:
                 headers[k] = resp.headers[k]
         headers.setdefault("Content-Type", "video/mp4" if track["media_type"] == "video" else "audio/mp4")
+        if download:
+            headers["Content-Disposition"] = _disposition(
+                _attachment_name(track["title"], tid, m.ext), tid, m.ext)
 
         def _body():
             try:

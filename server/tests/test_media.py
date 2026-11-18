@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -210,3 +211,62 @@ def test_all_media_routes_are_owner_only(menv):
                          ("POST", "/v2/resolve"), ("POST", "/v2/extract"),
                          ("GET", "/v2/maintenance/storage")]:
         assert menv.client.request(method, path, json={} if method == "POST" else None).status_code == 401
+
+
+# ---------- 下载到本机（?download=1） ----------
+
+def _track_id(menv, storage: str) -> int:
+    r = extract(menv, storage=storage)
+    return menv.client.get(f"/v2/extraction-jobs/{r.json()['id']}", headers=hdr(menv.token)).json()["track_id"]
+
+
+def test_download_archived_file_is_attachment(menv):
+    tid = _track_id(menv, "archive")
+    got = menv.client.get(f"/v2/media/{tid}?download=1", headers=hdr(menv.token))
+    assert got.status_code == 200 and got.content == PAYLOAD
+    cd = got.headers["content-disposition"]
+    assert cd.startswith("attachment;")
+    assert f'filename="media-{tid}.mp4"' in cd
+    # 中文标题走 RFC 5987 编码，不会在头里出现裸中文
+    assert "filename*=UTF-8''" in cd
+    assert quote("示例作品", safe="") in cd
+
+    # 拖动进度条也要是附件，否则浏览器会当成内联播放
+    part = menv.client.get(f"/v2/media/{tid}?download=1",
+                           headers={**hdr(menv.token), "Range": "bytes=4-11"})
+    assert part.status_code == 206 and part.content == PAYLOAD[4:12]
+    assert part.headers["content-disposition"].startswith("attachment;")
+
+
+def test_download_metadata_only_still_streams_with_attachment(menv):
+    """没有落盘文件也能下：当场解析 + 中转，同样按附件下发。"""
+    tid = _track_id(menv, "metadata")
+    got = menv.client.get(f"/v2/media/{tid}?download=1", headers=hdr(menv.token))
+    assert got.status_code == 200 and got.content == PAYLOAD
+    assert got.headers["content-disposition"].startswith("attachment;")
+
+
+def test_plain_playback_stays_inline(menv):
+    """不加参数时不能带 attachment，否则播放器会变成"下载"而不是播放。"""
+    tid = _track_id(menv, "archive")
+    got = menv.client.get(f"/v2/media/{tid}", headers=hdr(menv.token))
+    assert got.status_code == 200
+    assert "content-disposition" not in got.headers
+
+
+def test_download_filename_sanitizes_hostile_title(menv):
+    """标题里的换行/引号/斜杠不能漏进响应头（否则是头注入）。"""
+    tid = _track_id(menv, "archive")
+    evil = 'bad\r\nX-Evil: 1/../有"引号"?'
+    r = menv.client.patch(f"/v2/tracks/{tid}", headers=hdr(menv.token), json={"title": evil})
+    assert r.status_code == 200
+    got = menv.client.get(f"/v2/media/{tid}?download=1", headers=hdr(menv.token))
+    cd = got.headers["content-disposition"]
+    assert "\n" not in cd and "\r" not in cd
+    assert got.headers.get("x-evil") is None
+    assert '"' not in cd.split("filename*=UTF-8''")[0].split("filename=")[1].strip('"; ')
+    # 真正要守的是"不能带路径分隔符、不能以点开头"；文件名中间出现 .. 无害
+    from urllib.parse import unquote
+    name = unquote(cd.split("filename*=UTF-8''", 1)[1])
+    assert "/" not in name and "\\" not in name
+    assert not name.startswith(".")

@@ -28,6 +28,8 @@ const api = createApi({ base: `${BASE}/api` });
 
 /** 交给 `<audio>/<video>/<img>` 直接加载的地址（不是 fetch，所以单独拼）。 */
 export const mediaUrl = (trackId: number) => `${BASE}/api/v2/media/${trackId}`;
+/** 下载到本机：同一地址加 `download=1`，服务端按附件下发，文件名是条目标题。 */
+export const downloadUrl = (trackId: number) => `${mediaUrl(trackId)}?download=1`;
 export const feedbackImageUrl = (id: string, index: number) =>
   `${BASE}/api/v2/feedback/${encodeURIComponent(id)}/images/${index}`;
 

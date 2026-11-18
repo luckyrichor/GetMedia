@@ -183,4 +183,42 @@ describe('媒体库与播放', () => {
     await click(button('重试'));
     await until(() => text().includes('曲目 1'));
   });
+
+  test('下载：行内与播放器都给下载链接，指向 ?download=1 且带 download 属性', async () => {
+    server(ownerRoutes({ [LIST]: { json: { items: [track(1)], count: 1 } } }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+
+    const rowLink = Array.from(document.querySelectorAll('.row-actions a')).find(
+      (a) => a.textContent === '下载',
+    ) as HTMLAnchorElement | undefined;
+    expect(rowLink).toBeTruthy();
+    expect(rowLink!.getAttribute('href')).toMatch(/\/api\/v2\/media\/1\?download=1$/);
+    expect(rowLink!.hasAttribute('download')).toBe(true);
+
+    await click(document.querySelector('.track-main') as Element);
+    await until(() => document.querySelector('audio') !== null);
+    const playerLink = Array.from(document.querySelectorAll('.player-head a')).find(
+      (a) => a.textContent === '下载到本机',
+    ) as HTMLAnchorElement | undefined;
+    expect(playerLink?.getAttribute('href')).toMatch(/\/api\/v2\/media\/1\?download=1$/);
+  });
+
+  test('下载：没有文件也没有来源链接时按钮置灰，不给死链', async () => {
+    server(ownerRoutes({
+      [LIST]: { json: { items: [track(1, { storage: 'metadata', has_file: false, source_url: null })], count: 1 } },
+    }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+
+    const dl = Array.from(document.querySelectorAll('.row-actions button')).find(
+      (b) => b.textContent === '下载',
+    ) as HTMLButtonElement | undefined;
+    expect(dl).toBeTruthy();
+    expect(dl!.disabled).toBe(true);
+    const link = Array.from(document.querySelectorAll('.row-actions a')).find(
+      (a) => a.textContent === '下载',
+    );
+    expect(link).toBeUndefined();
+  });
 });

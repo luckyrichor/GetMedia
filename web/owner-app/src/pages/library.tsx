@@ -3,10 +3,12 @@
  * 只读/改标题/删文件/删记录四件事，全部走当前登录账号的 `/v2/tracks`（不跨账号）。
  * 播放交给浏览器的 `<audio>/<video>` 直接取 `/v2/media/{id}`：服务端支持 Range，拖动进度条不会重下整段；
  * 没有落盘文件时服务端会当场解析并中转（不写盘），所以"仅元数据"的条目也能放。
+ * 「下载」是同一个地址加 `?download=1`，服务端回 `Content-Disposition: attachment`，
+ * 浏览器存到打开这个页面的那台电脑上（不需要 App、不经过手机）。
  */
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
-import { mediaUrl, ownerApi, type MediaType, type Track } from '../api';
+import { downloadUrl, mediaUrl, ownerApi, type MediaType, type Track } from '../api';
 import { Chips, Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading } from '../ui';
 
 type Filter = 'all' | MediaType;
@@ -194,6 +196,16 @@ export function LibraryPage() {
                   ) : (
                     <div class="row-actions">
                       <button type="button" class="btn btn-ghost small" onClick={() => setSelected(t.id)}>播放</button>
+                      {t.has_file || t.source_url ? (
+                        <a class="btn btn-ghost small" href={downloadUrl(t.id)} download>
+                          下载
+                        </a>
+                      ) : (
+                        <button type="button" class="btn btn-ghost small" disabled
+                                title="这条没有来源链接，服务器也取不到流，无法下载">
+                          下载
+                        </button>
+                      )}
                       <button
                         type="button"
                         class="btn btn-ghost small"
@@ -232,6 +244,9 @@ function Player({ track, onClose }: { track: Track; onClose: () => void }) {
     <div class="player">
       <div class="player-head">
         <strong>{track.title || '(无标题)'}</strong>
+        {track.has_file || track.source_url ? (
+          <a class="btn btn-ghost small" href={downloadUrl(track.id)} download>下载到本机</a>
+        ) : null}
         <button type="button" class="btn btn-ghost small" onClick={onClose}>关闭</button>
       </div>
       {track.media_type === 'video' ? (
