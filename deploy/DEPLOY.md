@@ -72,6 +72,9 @@ sudo install -m 640 -o root -g getmedia /opt/getmedia/deploy/env/release.json.ex
 - `getmedia.env`：把 `GETMEDIA_SECRET_KEY` 换成随机值（`python3 -c "import secrets; print(secrets.token_urlsafe(48))"`），
   `GETMEDIA_CERT_PATH` 填 443 块里 `ssl_certificate` 指向的文件。占位密钥过短，**忘记改会让服务拒绝启动**（有测试守护）。
 - `feedback.env`：填你为 GetMedia **另建**的邮箱配置（QQ 邮箱 SMTP 授权码等）。
+  可选第八项 `FEEDBACK_SMTP_PROXY=http://127.0.0.1:7890`：直连 SMTP 被断（如 Gmail 465/587 报
+  `SSLEOF`）时走本机 HTTP 代理；留空即直连。只支持 `http://` 的 CONNECT 隧道，`socks5://` 会启动失败。
+  修改后 `sudo systemctl restart getmedia-api`，再用 `sudo getmedia-admin mail-test` 自检。
 
 - 可选：`GETMEDIA_ARGON_MEMORY_KIB` / `GETMEDIA_ARGON_ITERATIONS`。沙箱里单次哈希约 130 ms，**服务器规格上的耗时没测过**，
   请在服务器上测一次注册/登录耗时，调到约 100–200 ms（方案 §8）。

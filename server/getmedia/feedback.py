@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import secrets
-import smtplib
 import ssl
 import threading
 import time
@@ -22,6 +21,7 @@ from sqlalchemy.engine import Engine
 from . import ratelimit
 from .config import MailConfig, Settings
 from .errors import ApiError
+from .smtp_proxy import open_smtp
 
 log = logging.getLogger("getmedia.feedback")
 
@@ -206,12 +206,8 @@ class FeedbackService:
 
     def mailer(self, msg: EmailMessage) -> None:
         cfg = self.s.mail
-        ctx = ssl.create_default_context()
-        if cfg.security == "ssl":
-            smtp = smtplib.SMTP_SSL(cfg.host, cfg.port, timeout=20, context=ctx)
-        else:
-            smtp = smtplib.SMTP(cfg.host, cfg.port, timeout=20)
-            smtp.ehlo(); smtp.starttls(context=ctx)
+        # 直连与经代理（FEEDBACK_SMTP_PROXY）在这里分岔：465 立刻 TLS，587 由 starttls() 负责
+        smtp = open_smtp(cfg, ssl.create_default_context(), timeout=20)
         try:
             smtp.login(cfg.user, cfg.password)
             smtp.send_message(msg)

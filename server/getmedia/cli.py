@@ -169,7 +169,9 @@ def ops_cmd(s: Settings, args, out=sys.stdout) -> int:
         try:
             app.state.fb.mailer(m)
         except Exception as e:  # noqa: BLE001
-            print(f"发送失败：{type(e).__name__}  SMTP 码：{getattr(e, 'smtp_code', None)}", file=sys.stderr)
+            # 代理段的失败没有 SMTP 数字码，补一个短原因（proxy_connect/proxy_auth/...），不含地址与口令
+            print(f"发送失败：{type(e).__name__}  SMTP 码：{getattr(e, 'smtp_code', None)}"
+                  + (f"  代理：{e.reason}" if getattr(e, "reason", "") else ""), file=sys.stderr)
             return 1
         print("发送成功（请到收件箱确认）", file=out)
         return 0

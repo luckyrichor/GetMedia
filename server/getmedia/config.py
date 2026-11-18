@@ -1,10 +1,12 @@
 """配置：只从环境读取；不写入任何真实密钥。"""
 from __future__ import annotations
 
+import base64
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import unquote, urlsplit
 
 
 class ConfigError(RuntimeError):
@@ -12,8 +14,16 @@ class ConfigError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class ProxyConfig:
+    """SMTP 代理（HTTP CONNECT）。repr 不含认证头，避免日志里出现凭据。"""
+    host: str
+    port: int
+    auth_header: str = field(default="", repr=False)
+
+
+@dataclass(frozen=True)
 class MailConfig:
-    """FEEDBACK_* 七个变量；只从环境读取。repr 不含任何值。"""
+    """FEEDBACK_* 变量；只从环境读取。repr 不含任何值。"""
     to: str = field(repr=False)
     sender: str = field(repr=False)
     host: str = field(repr=False)
@@ -21,9 +31,41 @@ class MailConfig:
     security: str = field(repr=False)
     user: str = field(repr=False)
     password: str = field(repr=False)
+    # 可选：FEEDBACK_SMTP_PROXY。None = 直连；否则先 CONNECT 隧道再 TLS
+    proxy: "ProxyConfig | None" = field(default=None, repr=False)
+
+
+def parse_proxy(raw: str | None) -> ProxyConfig | None:
+    """`http://[user:pass@]host:port`，也接受简写 `host:port`；空值返回 None（直连）。
+
+    格式错误抛 ConfigError，让它在启动期暴露，不拖到第一次发信才炸。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if "://" not in text:
+        text = "http://" + text
+    parts = urlsplit(text)
+    if parts.scheme.lower() != "http":
+        raise ConfigError(f"FEEDBACK_SMTP_PROXY 只支持 http://，收到 {parts.scheme}://")
+    if not parts.hostname:
+        raise ConfigError("FEEDBACK_SMTP_PROXY 缺少主机名")
+    try:
+        port = parts.port
+    except ValueError:
+        raise ConfigError("FEEDBACK_SMTP_PROXY 的端口不是数字") from None
+    if not port:
+        raise ConfigError("FEEDBACK_SMTP_PROXY 必须写明端口，例如 http://127.0.0.1:7890")
+
+    auth = ""
+    if parts.username is not None:
+        pair = f"{unquote(parts.username)}:{unquote(parts.password or '')}"
+        auth = "Basic " + base64.b64encode(pair.encode("utf-8")).decode("ascii")
+    return ProxyConfig(parts.hostname, port, auth)
 
 
 def load_mail(env: Mapping[str, str]) -> "MailConfig | None":
+    # 这七项缺一个就整块视为未配置（只落库不发信）；FEEDBACK_SMTP_PROXY 是可选的第八项
     keys = ["FEEDBACK_MAIL_TO", "FEEDBACK_MAIL_FROM", "FEEDBACK_SMTP_HOST", "FEEDBACK_SMTP_PORT",
             "FEEDBACK_SMTP_SECURITY", "FEEDBACK_SMTP_USER", "FEEDBACK_SMTP_PASSWORD"]
     if not all(env.get(k) for k in keys):
@@ -35,7 +77,8 @@ def load_mail(env: Mapping[str, str]) -> "MailConfig | None":
         port = int(env["FEEDBACK_SMTP_PORT"])
     except ValueError:
         raise ConfigError("FEEDBACK_SMTP_PORT 必须是数字") from None
-    return MailConfig(env[keys[0]], env[keys[1]], env[keys[2]], port, sec, env[keys[5]], env[keys[6]])
+    return MailConfig(env[keys[0]], env[keys[1]], env[keys[2]], port, sec, env[keys[5]], env[keys[6]],
+                      proxy=parse_proxy(env.get("FEEDBACK_SMTP_PROXY")))
 
 
 @dataclass(frozen=True)
