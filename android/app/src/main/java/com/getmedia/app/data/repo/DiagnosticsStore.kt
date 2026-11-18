@@ -26,6 +26,7 @@ object DiagnosticsStore {
         enqueue { if (archive == null) archive = DiagnosticArchive(directory) }
     }
     fun beginLocal(version: String) = begin("手机直提取", version)
+    fun beginServer(version: String) = begin("服务器提取", version)
     private fun begin(kind: String, version: String) {
         val id = UUID.randomUUID().toString()
         current = id

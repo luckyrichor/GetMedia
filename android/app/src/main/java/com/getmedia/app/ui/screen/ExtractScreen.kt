@@ -5,6 +5,8 @@ import android.content.Context
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -42,6 +44,7 @@ import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.repo.DiagnosticsStore
 import com.getmedia.app.data.repo.PendingNotice
 import com.getmedia.app.ui.formatDuration
+import com.getmedia.app.ui.ownerGate
 import com.getmedia.app.ui.components.uiAccentContainer
 import com.getmedia.app.data.localextract.LinkScanner
 import com.getmedia.app.ui.components.uiCardColor
@@ -200,10 +203,12 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
     val vm: ExtractViewModel = viewModel(factory = ExtractViewModel.Factory(context))
     val snackbar = remember { SnackbarHostState() }
     var showCreator by rememberSaveable { mutableStateOf(false) }
+    // 免费版没有服务器提取（ownerGate.serverExtract = false），开关不出现，永远是本机提取。
+    var mode by rememberSaveable { mutableStateOf(ExtractMode.LOCAL) }
 
     if (showCreator) {
         BackHandler { showCreator = false }
-        com.getmedia.app.ui.ownerGate.BatchExtract(onBack = { showCreator = false })
+        ownerGate.BatchExtract(onBack = { showCreator = false })
         return
     }
 
@@ -229,171 +234,223 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(if (vm.kind == MediaKind.VIDEO) "提取视频" else "提取音频", style = MaterialTheme.typography.headlineSmall)
-            AreaAction(onClick = { showCreator = true }, tone = ActionTone.SYNC) {
-                Icon(Icons.Default.Person, null, Modifier.size(17.dp))
-                Spacer(Modifier.width(8.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("博主批量提取", style = MaterialTheme.typography.titleSmall)
-                    Text("传一个博主主页，先看作品列表再挑着提取", fontSize = 11.sp, color = uiMuted())
-                }
-                Text("进入", fontSize = 12.sp)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(vm.kind == MediaKind.AUDIO, { vm.kind = MediaKind.AUDIO }, { Text("音频") }, enabled = !vm.busy)
-                FilterChip(vm.kind == MediaKind.VIDEO, { vm.kind = MediaKind.VIDEO }, { Text("视频") }, enabled = !vm.busy)
-            }
-            Text("粘贴视频链接或完整分享文本，自动识别 B站、抖音。多个链接可以一起粘贴。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            OutlinedTextField(
-                value = vm.input, onValueChange = { vm.input = it }, enabled = !vm.busy,
-                placeholder = { Text("粘贴分享文本或链接，可一次粘贴多条", style = MaterialTheme.typography.bodyMedium) },
-                minLines = 4, maxLines = 8, modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedContainerColor = uiCardColor(),
-                    unfocusedContainerColor = uiAccentContainer(),
-                ),
+            Text(
+                if (vm.kind == MediaKind.VIDEO) "提取视频" else "提取音频",
+                style = MaterialTheme.typography.headlineSmall,
+                // Scaffold 的容器是透明的，取不到 contentColorFor，标题会退回黑色；暗色下必须显式给色
+                color = MaterialTheme.colorScheme.onBackground,
             )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                AreaButton(onClick = { vm.pasteFromClipboard(context) }, enabled = !vm.busy, tone = ActionTone.SYNC) {
-                    Icon(Icons.Default.ContentPaste, null, Modifier.size(15.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("粘贴剪贴板")
-                }
-                AreaButton(onClick = { vm.input = "" }, enabled = !vm.busy && vm.input.isNotBlank()) { Text("清空") }
+            if (ownerGate.serverExtract) {
+                ExtractModeSwitch(
+                    mode = mode,
+                    enabled = !vm.busy,
+                    onChange = { mode = it },
+                )
             }
-            // 识别结果：一条以上就展示清单，用户能确认到底抓到了哪些链接。
-            val found = vm.links
-            if (found.size > 1) {
-                val bili = found.count { it.platform == "bilibili" }
-                val douyin = found.size - bili
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(uiAccentContainer())
-                        .padding(horizontal = 14.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Default.Link, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(9.dp))
-                    Text(
-                        "识别到 ${found.size} 个链接" +
-                            listOfNotNull(
-                                if (bili > 0) "B站 $bili" else null,
-                                if (douyin > 0) "抖音 $douyin" else null,
-                            ).joinToString(" · ", prefix = "（", postfix = "）"),
-                        Modifier.weight(1f),
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+            if (mode == ExtractMode.SERVER) {
+                ownerGate.ServerExtract(snackbar)
+            } else {
+                AreaAction(onClick = { showCreator = true }, tone = ActionTone.SYNC) {
+                    Icon(Icons.Default.Person, null, Modifier.size(17.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("博主批量提取", style = MaterialTheme.typography.titleSmall)
+                        Text("传一个博主主页，先看作品列表再挑着提取", fontSize = 11.sp, color = uiMuted())
+                    }
+                    Text("进入", fontSize = 12.sp)
                 }
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(uiCardColor())) {
-                    found.forEachIndexed { index, link ->
-                        if (index > 0) Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(uiHairline()))
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                "${index + 1}",
-                                Modifier.width(22.dp),
-                                fontSize = 12.sp,
-                                color = uiMuted(),
-                            )
-                            Column(Modifier.weight(1f)) {
-                                Text(link.label, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(vm.kind == MediaKind.AUDIO, { vm.kind = MediaKind.AUDIO }, { Text("音频") }, enabled = !vm.busy)
+                    FilterChip(vm.kind == MediaKind.VIDEO, { vm.kind = MediaKind.VIDEO }, { Text("视频") }, enabled = !vm.busy)
+                }
+                Text("粘贴视频链接或完整分享文本，自动识别 B站、抖音。多个链接可以一起粘贴。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(
+                    value = vm.input, onValueChange = { vm.input = it }, enabled = !vm.busy,
+                    placeholder = { Text("粘贴分享文本或链接，可一次粘贴多条", style = MaterialTheme.typography.bodyMedium) },
+                    minLines = 4, maxLines = 8, modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.45f),
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedContainerColor = uiCardColor(),
+                        unfocusedContainerColor = uiAccentContainer(),
+                    ),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    AreaButton(onClick = { vm.pasteFromClipboard(context) }, enabled = !vm.busy, tone = ActionTone.SYNC) {
+                        Icon(Icons.Default.ContentPaste, null, Modifier.size(15.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("粘贴剪贴板")
+                    }
+                    AreaButton(onClick = { vm.input = "" }, enabled = !vm.busy && vm.input.isNotBlank()) { Text("清空") }
+                }
+                // 识别结果：一条以上就展示清单，用户能确认到底抓到了哪些链接。
+                val found = vm.links
+                if (found.size > 1) {
+                    val bili = found.count { it.platform == "bilibili" }
+                    val douyin = found.size - bili
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(uiAccentContainer())
+                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.Link, null, Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(9.dp))
+                        Text(
+                            "识别到 ${found.size} 个链接" +
+                                listOfNotNull(
+                                    if (bili > 0) "B站 $bili" else null,
+                                    if (douyin > 0) "抖音 $douyin" else null,
+                                ).joinToString(" · ", prefix = "（", postfix = "）"),
+                            Modifier.weight(1f),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(uiCardColor())) {
+                        found.forEachIndexed { index, link ->
+                            if (index > 0) Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(uiHairline()))
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
                                 Text(
-                                    link.url,
-                                    fontSize = 11.sp,
+                                    "${index + 1}",
+                                    Modifier.width(22.dp),
+                                    fontSize = 12.sp,
                                     color = uiMuted(),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
                                 )
+                                Column(Modifier.weight(1f)) {
+                                    Text(link.label, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
+                                    Text(
+                                        link.url,
+                                        fontSize = 11.sp,
+                                        color = uiMuted(),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
-            Spacer(Modifier.height(2.dp))
-            Button(
-                onClick = { vm.submit() },
-                enabled = !vm.busy && vm.input.isNotBlank(),
-                modifier = Modifier.fillMaxWidth().height(54.dp),
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                Icon(if (found.size > 1) Icons.Default.Download else Icons.Default.GraphicEq, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    when {
-                        vm.busy && vm.batchTotal > 0 -> "正在批量提取 ${vm.batchIndex}/${vm.batchTotal}"
-                        vm.busy -> "正在提取…"
-                        found.size > 1 -> "批量提取 ${found.size} 条"
-                        else -> "提取音频"
-                    },
-                    style = MaterialTheme.typography.titleSmall,
-                )
-            }
-            Text(
-                if (found.size > 1) "批量提取会逐条用手机直连解析；某条失败不影响其它条。"
-                else "用手机直连解析，不经过任何服务器。",
-                style = MaterialTheme.typography.bodySmall,
-                color = uiMuted(),
-                lineHeight = 18.sp,
-            )
-            if (vm.busy) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)))
-                Text(
-                    when {
-                        vm.batchTotal > 0 -> vm.batchCurrent.ifBlank { "准备中…" }
-                        else -> "手机正在解析并下载音频"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = uiMuted(),
-                )
-            }
-            if (vm.batchSummary != null && !vm.busy) {
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                        .background(uiSuccessContainer())
-                        .padding(horizontal = 14.dp, vertical = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                Spacer(Modifier.height(2.dp))
+                Button(
+                    onClick = { vm.submit() },
+                    enabled = !vm.busy && vm.input.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    shape = RoundedCornerShape(16.dp),
                 ) {
-                    Icon(
-                        if (vm.batchDone.isEmpty()) Icons.Default.CheckCircle else Icons.Default.Info,
-                        null,
-                        Modifier.size(17.dp),
-                        tint = if (vm.batchDone.isEmpty()) uiSuccess() else MaterialTheme.colorScheme.error,
-                    )
+                    Icon(if (found.size > 1) Icons.Default.Download else Icons.Default.GraphicEq, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        vm.batchSummary!!,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (vm.batchDone.isEmpty()) uiSuccess() else MaterialTheme.colorScheme.onSurface,
+                        when {
+                            vm.busy && vm.batchTotal > 0 -> "正在批量提取 ${vm.batchIndex}/${vm.batchTotal}"
+                            vm.busy -> "正在提取…"
+                            found.size > 1 -> "批量提取 ${found.size} 条"
+                            else -> "提取音频"
+                        },
+                        style = MaterialTheme.typography.titleSmall,
                     )
                 }
-            }
-            if (vm.batchDone.isNotEmpty() && !vm.busy) {
-                Column(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.error.copy(alpha = 0.07f))
-                        .padding(horizontal = 14.dp, vertical = 11.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Text("${vm.batchDone.size} 条失败", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
-                    vm.batchDone.forEach { (url, reason) ->
+                Text(
+                    if (found.size > 1) "批量提取会逐条用手机直连解析；某条失败不影响其它条。"
+                    else "用手机直连解析，不经过任何服务器。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = uiMuted(),
+                    lineHeight = 18.sp,
+                )
+                if (vm.busy) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)))
+                    Text(
+                        when {
+                            vm.batchTotal > 0 -> vm.batchCurrent.ifBlank { "准备中…" }
+                            else -> "手机正在解析并下载音频"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = uiMuted(),
+                    )
+                }
+                if (vm.batchSummary != null && !vm.busy) {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                            .background(uiSuccessContainer())
+                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            if (vm.batchDone.isEmpty()) Icons.Default.CheckCircle else Icons.Default.Info,
+                            null,
+                            Modifier.size(17.dp),
+                            tint = if (vm.batchDone.isEmpty()) uiSuccess() else MaterialTheme.colorScheme.error,
+                        )
+                        Spacer(Modifier.width(8.dp))
                         Text(
-                            "$url · ${reason ?: "未知原因"}",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.85f),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
+                            vm.batchSummary!!,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = if (vm.batchDone.isEmpty()) uiSuccess() else MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
+                if (vm.batchDone.isNotEmpty() && !vm.busy) {
+                    Column(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.07f))
+                            .padding(horizontal = 14.dp, vertical = 11.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text("${vm.batchDone.size} 条失败", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                        vm.batchDone.forEach { (url, reason) ->
+                            Text(
+                                "$url · ${reason ?: "未知原因"}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.85f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+                ExtractionDiagnostics()
             }
-            ExtractionDiagnostics()
         }
     }
 }
 
+/** 提取方式：手机上直接解析，或把链接交给服务器（P0-1）。 */
+enum class ExtractMode(val label: String) {
+    LOCAL("本机提取"),
+    SERVER("服务器提取"),
+}
+
+/**
+ * 两段式开关。没有用 SegmentedButton：那是实验 API，且这里要跟卡片、强调色走同一套底色。
+ */
+@Composable
+private fun ExtractModeSwitch(mode: ExtractMode, enabled: Boolean, onChange: (ExtractMode) -> Unit) {
+    val shape = RoundedCornerShape(11.dp)
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(uiAccentContainer()).padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ExtractMode.entries.forEach { item ->
+            val selected = item == mode
+            Box(
+                Modifier.weight(1f).clip(shape)
+                    .background(if (selected) uiCardColor() else Color.Transparent)
+                    .then(if (selected) Modifier.border(1.dp, uiHairline(), shape) else Modifier)
+                    .clickable(enabled = enabled) { onChange(item) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    item.label,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) MaterialTheme.colorScheme.primary else uiMuted(),
+                )
+            }
+        }
+    }
+}
