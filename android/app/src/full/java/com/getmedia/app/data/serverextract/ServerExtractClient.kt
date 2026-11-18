@@ -65,7 +65,10 @@ class ServerExtractClient(
         val trackId = done.trackId ?: throw ServerMediaException(
             ServerProblem.SERVER, "任务完成了但没有返回媒体编号")
         val track = api.track(trackId)
-        val part = File(cacheDir, "server-$trackId.part")
+        // 名字里带 updatedSeq 与 bytes：服务器重新提取后这两个值会变，旧 `.part` 就不会被续传。
+        val part = PartStore.file(cacheDir, track.id, track.updatedSeq, track.bytes)
+        // 顺手清掉过期的、以及同一 trackId 下版本标识不同的旧 `.part`（服务器缓存 TTL 1 天）。
+        PartStore.sweep(cacheDir, part)
         // 断流时 **不删** `.part`：里面的字节是真实前缀，下一次下载用 Range 接着要。
         // 只有 [ServerDownload] 判定"内容已确认不可用"时才由它自己删。
         val downloaded = ServerDownload.fetch(api, track.id, part, track.bytes) { got, total ->

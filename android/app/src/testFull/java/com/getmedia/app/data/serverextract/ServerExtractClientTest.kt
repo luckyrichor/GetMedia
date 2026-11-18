@@ -42,11 +42,11 @@ class ServerExtractClientTest {
         dir.deleteRecursively()
     }
 
-    private fun serverTrack(bytes: Long = media.size.toLong()) = ServerTrack(
+    private fun serverTrack(bytes: Long = media.size.toLong(), updatedSeq: Long = 17) = ServerTrack(
         id = 31, platform = "douyin", videoId = "7412", page = 2, title = "标题",
         uploader = "作者", durationSec = 9.5, coverUrl = "https://c/1.jpg",
         sourceUrl = "https://s/1", storage = Storage.CACHE, bytes = bytes,
-        updatedSeq = 17, updatedAtSec = 1_700_000_000, hasFile = true,
+        updatedSeq = updatedSeq, updatedAtSec = 1_700_000_000, hasFile = true,
     )
 
     /** 依次返回 [jobs] 里的状态，最后一个会一直重复；媒体流按 offset 切片。 */
@@ -313,8 +313,80 @@ class ServerExtractClientTest {
             assertTrue("不能把原始 IOException 抛给上层", e.message.contains("网络中断"))
         }
         assertEquals("失败不落库", 0, adopted)
-        val partFile = File(dir, "server-31.part")
+        val partFile = PartStore.file(dir, 31, 17, media.size.toLong())
         assertTrue("断流后 .part 必须留着供续传", partFile.exists())
         assertEquals("已收到的字节不能被清掉", 4L, partFile.length())
+    }
+
+    // ---------- `.part` 的版本标识与清理 ----------
+
+    /** 记录每次 openMedia 的 offset；body 按 offset 切片返回。 */
+    private inner class RecordingGateway(
+        private val track: ServerTrack,
+    ) : MediaGateway {
+        val offsets = mutableListOf<Long>()
+
+        override suspend fun startExtract(input: String, kind: MediaKind, storage: String) =
+            ExtractJob(1, JobStatus.DONE, trackId = track.id)
+
+        override suspend fun job(id: Long) = ExtractJob(1, JobStatus.DONE, trackId = track.id)
+
+        override suspend fun track(id: Long): ServerTrack = track
+
+        override fun openMedia(trackId: Long, offset: Long): Response {
+            offsets += offset
+            val start = offset.toInt()
+            return Response.Builder()
+                .request(Request.Builder().url("http://localhost/v2/media/$trackId").build())
+                .protocol(Protocol.HTTP_1_1)
+                .code(if (start > 0) 206 else 200)
+                .message("OK")
+                .apply {
+                    if (start > 0) {
+                        header("Content-Range", "bytes $start-${media.size - 1}/${media.size}")
+                    }
+                }
+                .body(media.copyOfRange(start, media.size).toResponseBody())
+                .build()
+        }
+    }
+
+    @Test fun partNameCarriesVersionIdentity() {
+        assertEquals("server-31-17-16.part", PartStore.name(31, 17, 16))
+        assertEquals("bytes 为空时写 0", "server-31-17-0.part", PartStore.name(31, 17, null))
+        assertNotEquals(
+            "updatedSeq 变了名字必须跟着变",
+            PartStore.name(31, 17, 16),
+            PartStore.name(31, 18, 16),
+        )
+    }
+
+    @Test fun stalePartOfPreviousVersionIsNeverResumed() = runBlocking {
+        // 上一版（updatedSeq=17）下到 6 字节留下的断点
+        val stale = PartStore.file(dir, 31, 17, media.size.toLong())
+        stale.writeBytes(media.copyOfRange(0, 6))
+        val gateway = RecordingGateway(serverTrack(updatedSeq = 18))
+
+        val saved = client(gateway).extract("https://v.douyin.com/x/", MediaKind.AUDIO)
+
+        assertEquals("旧版本的断点不能被续传：第一次请求就不能带 Range", listOf(0L), gateway.offsets)
+        assertTrue("旧版本的 .part 应被清掉", !stale.exists())
+        assertEquals("落库内容必须是完整媒体", media.size.toLong(), saved.audioBytes)
+    }
+
+    @Test fun expiredPartsAreSweptWhileFreshOnesStay() = runBlocking {
+        val now = System.currentTimeMillis()
+        val expired = File(dir, PartStore.name(99, 1, media.size.toLong()))
+            .apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val fresh = File(dir, PartStore.name(98, 1, media.size.toLong()))
+            .apply { writeBytes(byteArrayOf(4, 5, 6)) }
+        // 24 小时前修改的断点：服务器那份缓存早没了，续不上
+        assertTrue(expired.setLastModified(now - 25L * 60 * 60 * 1000))
+        assertTrue(fresh.setLastModified(now - 60L * 60 * 1000))
+
+        client(RecordingGateway(serverTrack())).extract("https://v.douyin.com/x/", MediaKind.AUDIO)
+
+        assertTrue("超过 24 小时的 .part 应在 extract 开始时被清掉", !expired.exists())
+        assertTrue("未过期的 .part 不能被顺手删掉", fresh.exists())
     }
 }
