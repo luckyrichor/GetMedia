@@ -2,6 +2,12 @@
 
 最后更新：2026-11-17
 
+## 下个版本待办（v-next）
+
+| # | 事项 | 为什么 / 完成判据 |
+|---|---|---|
+| 1 | 会话 Cookie 路径改为可配置：`Settings.cookie_path` 支持 `GETMEDIA_COOKIE_PATH`，**默认改为 `/getmedia/`**；同步改 `server/tests/test_accounts.py::test_web_cookie_attributes_and_no_token_in_body` 里 `Path=/getmedia/api/` 的断言（以及 `deploy/env/getmedia.env.example` 加注释） | 现在 `cookie_path` 硬编码为 `/getmedia/api/`，owner 管理台在 `/getmedia/owner/` 下收不到会话，只能靠边缘 `proxy_cookie_path` 改写兜住。代码改完后：把 `deploy/nginx/getmedia-prefix.conf` 里两处 `proxy_cookie_path`（owner/api 与 api 两个 location）删掉，重新 `nginx -t` + reload，复验"浏览器登录 `/getmedia/login` 后 `/getmedia/owner/` 返回 200、匿名仍 404" |
+
 ## 2026-11-17 补充任务（批量导出 + 定时倒计时缺陷）
 
 | 事项 | 状态 | 证据 |
