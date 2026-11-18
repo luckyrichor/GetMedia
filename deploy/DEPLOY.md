@@ -29,6 +29,30 @@ sudo python3 -m venv /opt/getmedia/venv
 sudo /opt/getmedia/venv/bin/pip install -r /opt/getmedia/server/requirements.txt
 ```
 
+### 1.1 浏览器桥接的 Chromium（可选，抖音需要）
+
+`requirements.txt` 里的 `playwright` 只是 Python 包，浏览器二进制要单独装。抖音 Web 的
+`aweme/post` 接口要求 `uifid` + `a_bogus` 签名，而 `a_bogus` 不在 Cookie 里，直连必然被
+Argus 拦（`Uifid Not Found` / `Signature Not Found`）；桥接让页面自己签名，是唯一不靠逆向的路。
+
+```bash
+# 装到服务用户可读的共享目录：每个 release 自带独立 venv，浏览器放这里才不会随版本重下 700 MB
+sudo install -d -m 0755 -o getmedia -g getmedia /var/lib/getmedia/ms-playwright
+sudo -u getmedia PLAYWRIGHT_BROWSERS_PATH=/var/lib/getmedia/ms-playwright \
+     /opt/getmedia/current/venv/bin/python -m playwright install chromium
+sudo -u getmedia /opt/getmedia/current/venv/bin/python -m playwright install-deps chromium  # 缺系统库时
+```
+
+env 里对应两行（见 `deploy/env/getmedia.env.example`）：
+
+```
+GETMEDIA_DOUYIN_BROWSER=true
+PLAYWRIGHT_BROWSERS_PATH=/var/lib/getmedia/ms-playwright
+```
+
+**注意**：`playwright` 必须留在 `server/requirements.txt` 里。新建 release 会按它装依赖，
+漏了就是「代码有桥接、环境没包」，抖音会静默退回直连并报签名错。
+
 ## 2. `/etc/getmedia`：配置、协议、发布信息
 
 ```bash

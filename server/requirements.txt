@@ -7,3 +7,7 @@ Pillow==12.3.0
 python-multipart==0.0.32
 httpx==0.28.1
 uvicorn==0.54.0
+# 抖音浏览器桥接：让页面自己生成 uifid/msToken/a_bogus 并签名（直连缺这几个参数会被 Argus 拦）。
+# pip 只装 Python 包；Chromium 需要另外 `playwright install chromium`，且路径由
+# PLAYWRIGHT_BROWSERS_PATH 指到一个服务用户可读的共享目录，否则每个 release 都要下 700 MB。
+playwright==1.65.2

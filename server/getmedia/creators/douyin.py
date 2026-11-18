@@ -103,6 +103,24 @@ def _int(value) -> int | None:
         return None
 
 
+def _ck(cookies: dict[str, str], name: str) -> str:
+    """按名字取 Cookie，大小写不敏感。
+
+    抖音浏览器导出的键名大小写不统一：实际文件里是 ``UIFID`` / ``UIFID_TEMP``，
+    而请求参数要的是小写 ``uifid``。照字面 ``cookies.get("uifid")`` 取不到值时
+    会静默变成空串，服务端随即报 ``Blocked by ArgusSecurityPlugin Uifid Not Found``
+    —— 看起来像 IP 被风控，其实只是键名没对上。
+    """
+    value = cookies.get(name)
+    if value:
+        return value
+    lowered = name.lower()
+    for key, val in cookies.items():
+        if val and key.lower() == lowered:
+            return val
+    return ""
+
+
 def _first_url(node: Any) -> str | None:
     if not isinstance(node, dict):
         return None
@@ -603,9 +621,9 @@ class DouyinCreatorProvider:
                     "cut_version": "1",
                     "count": "18",
                     "publish_video_strategy_type": "2",
-                    "msToken": cookies.get("msToken", ""),
-                    "uifid": cookies.get("uifid", ""),
-                    "webid": cookies.get("webid", ""),
+                    "msToken": _ck(cookies, "msToken"),
+                    "uifid": _ck(cookies, "uifid"),
+                    "webid": _ck(cookies, "webid"),
                 }
                 try:
                     resp = client.get(API_POST, params=params)
