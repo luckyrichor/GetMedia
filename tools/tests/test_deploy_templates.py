@@ -234,7 +234,9 @@ def test_getmedia_env_example_loads_and_placeholder_key_is_rejected():
     assert s.ai_enabled is False and s.ai_retention_days == 14
     known = {"GETMEDIA_SECRET_KEY", "GETMEDIA_DATA_DIR", "GETMEDIA_DATABASE_URL", "GETMEDIA_BACKUP_DIR", "GETMEDIA_FEEDBACK_IMAGE_DIR",
              "GETMEDIA_LEDGER_PATH", "GETMEDIA_LEGAL_DIR", "GETMEDIA_RELEASE_FILE", "GETMEDIA_RUNTIME_FILE", "GETMEDIA_BIND",
-             "GETMEDIA_CERT_PATH", "GETMEDIA_DISK_PATH", "GETMEDIA_AI_ENABLED", "GETMEDIA_AI_RETENTION_DAYS"}
+             "GETMEDIA_CERT_PATH", "GETMEDIA_DISK_PATH", "GETMEDIA_AI_ENABLED", "GETMEDIA_AI_RETENTION_DAYS",
+             # 抖音浏览器桥接：前者由 load_settings 读取，后者是 Playwright 自己的变量（服务端不解析）
+             "GETMEDIA_DOUYIN_BROWSER", "PLAYWRIGHT_BROWSERS_PATH"}
     assert set(env) == known
 
 
