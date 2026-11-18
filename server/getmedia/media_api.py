@@ -93,7 +93,7 @@ def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
 _UNSAFE_NAME = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
 
 
-def _attachment_name(title: str | None, track_id: int, ext: str) -> str:
+def attachment_name(title: str | None, track_id: int, ext: str) -> str:
     """把标题变成可安全放进响应头的文件名。
 
     标题是用户/平台给的内容，可能带换行、引号、斜杠：不清洗会直接构成响应头注入，
@@ -106,7 +106,7 @@ def _attachment_name(title: str | None, track_id: int, ext: str) -> str:
     return f"{cleaned[:60]}.{ext.lstrip('.') or 'mp4'}"
 
 
-def _disposition(name: str, track_id: int, ext: str) -> str:
+def attachment_disposition(name: str, track_id: int, ext: str) -> str:
     """RFC 6266：ASCII 兜底名 + UTF-8 真名（中文标题不会变成乱码）。"""
     fallback = f"media-{track_id}.{ext.lstrip('.') or 'mp4'}"
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
@@ -313,7 +313,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
             disposition = None
             if download:
                 ext = tf.path.suffix
-                disposition = _disposition(_attachment_name(track["title"], tid, ext), tid, ext)
+                disposition = attachment_disposition(attachment_name(track["title"], tid, ext), tid, ext)
             return _file_response(tf.path, range_header, track["media_type"], disposition)
 
         # 没有落盘文件：当场解析并中转，不写盘
@@ -333,8 +333,8 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
                 headers[k] = resp.headers[k]
         headers.setdefault("Content-Type", "video/mp4" if track["media_type"] == "video" else "audio/mp4")
         if download:
-            headers["Content-Disposition"] = _disposition(
-                _attachment_name(track["title"], tid, m.ext), tid, m.ext)
+            headers["Content-Disposition"] = attachment_disposition(
+                attachment_name(track["title"], tid, m.ext), tid, m.ext)
 
         def _body():
             try:

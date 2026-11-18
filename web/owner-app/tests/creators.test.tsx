@@ -144,6 +144,15 @@ describe('博主批量', () => {
     expect(text()).toContain('失败');
     expect(text()).toContain('平台拒绝');
     expect(text()).toContain('媒体库 #9');
+
+    // 每条都能直接下到本机：链接指向任务的条目文件接口
+    const links = Array.from(document.querySelectorAll('.item-row a')) as HTMLAnchorElement[];
+    expect(links.map((a) => a.getAttribute('href'))).toEqual([
+      expect.stringMatching(/\/api\/v2\/creators\/jobs\/3\/items\/BV1\/file$/),
+      expect.stringMatching(/\/api\/v2\/creators\/jobs\/3\/items\/BV2\/file$/),
+    ]);
+    expect(links.every((a) => a.hasAttribute('download'))).toBe(true);
+    expect(text()).toContain('下载全部（2 条）');
   });
 
   test('抖音被挡时显示服务端给的原因，不粉饰成网络问题', async () => {

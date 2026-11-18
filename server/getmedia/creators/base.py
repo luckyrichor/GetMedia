@@ -72,6 +72,8 @@ class CreatorVideo:
     platform_oid: int | None = None
     # 抖音作品列表里已经带播放地址；下载时直接复用，避免再撞 aweme/detail。
     prefetched: dict | None = None
+    # 可直接下载的媒体地址（按优先级），扫描时顺手存进库；过期或为空时由下载接口重新解析。
+    play_urls: tuple[str, ...] = ()
 
 
 @dataclass

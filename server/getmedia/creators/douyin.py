@@ -130,6 +130,28 @@ def _first_url(node: Any) -> str | None:
     return None
 
 
+def play_urls(raw: dict) -> tuple[str, ...]:
+    """从作品对象里取可直接下载的地址，按优先级去重。
+
+    ``play_addr`` 是无水印的播放源，``download_addr`` 带水印，只在没有播放源时才用。
+    每个节点自带 3 个备用域名，全部留下：下载时先试主域名，失败换备用，比整条重新解析便宜得多。
+    """
+    video = raw.get("video") if isinstance(raw, dict) else None
+    if not isinstance(video, dict):
+        return ()
+    out: list[str] = []
+    for key in ("play_addr", "play_addr_h264", "play_addr_265", "download_addr"):
+        node = video.get(key)
+        if not isinstance(node, dict):
+            continue
+        for url in node.get("url_list") or []:
+            if isinstance(url, str) and url.startswith("http") and url not in out:
+                out.append(url)
+        if out and key == "play_addr":
+            break  # 主播放源有了就不再看 h264/265，避免混进不同编码的流
+    return tuple(out[:4])
+
+
 _SEC_UID_RE = re.compile(r"^MS4wLjAB[A-Za-z0-9_-]{8,}$")
 
 
@@ -714,6 +736,7 @@ class DouyinCreatorProvider:
                 favorite_count=_int(stats_raw.get("collect_count")),
             ),
             prefetched=raw,
+            play_urls=play_urls(raw),
         )
 
     # ---------- 互动数据 ----------

@@ -430,6 +430,13 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
             calls INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY(user_id, day))""",
     ]),
+    # v12 批量条目存播放地址：抖音的作品列表响应里本来就带 video.play_addr，
+    # 存下来后下载可以直接转发 CDN，不必为每条再开一次浏览器（一次约 10-20 秒）。
+    # 地址带签名、有过期时间，失效时下载接口会回落到实时解析。
+    (12, [
+        "ALTER TABLE creator_items ADD COLUMN play_urls TEXT",
+        "ALTER TABLE creator_items ADD COLUMN play_urls_at INTEGER",
+    ]),
 ]
 
 

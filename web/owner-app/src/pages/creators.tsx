@@ -2,12 +2,14 @@
  *
  * 预览走 `/v2/creators/preview`（不落库，只告诉你"会选多少条、大约多大"），
  * 建任务走 `/v2/creators/jobs`；任务由服务端跑，页面只轮询进度。
- * 抖音的列表抓取在服务器 IP 上会被挡（403），页面对预览失败给出这句解释，不把它说成"网络问题"。
+ * 抖音列表走浏览器桥接（页面自己算签名）；未配置桥接时会被 Argus 挡，页面对此给解释，不把它说成"网络问题"。
+ * 条目支持直接下载到本机：服务端用扫描时存下的播放地址转发，不落盘、不经过手机。
  */
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import {
-  ownerApi, type CreatorItem, type CreatorJob, type CreatorPreview, type JobStorage, type MediaType, type SelectionMode,
+  creatorItemUrl, ownerApi, type CreatorItem, type CreatorJob, type CreatorPreview, type JobStorage,
+  type MediaType, type SelectionMode,
 } from '../api';
 import { ITEM, JOB, SELECTION, STORAGE, TONE, platformName } from '../labels';
 import { Empty, ErrorBox, Field, fmtBytes, fmtDuration, fmtTime, Loading, relTime } from '../ui';
@@ -354,6 +356,24 @@ function JobItems({ jobId }: { jobId: number }) {
   if (phase === 'error') return <ErrorBox message={err} retry={() => void page(0)} />;
   if (phase === 'loading') return <Loading what="任务条目" />;
 
+  /** 逐条触发浏览器下载：每条一次请求，服务端转发完就关，不在服务器落盘。 */
+  function downloadAll() {
+    const todo = items.filter((i) => i.video_id);
+    if (!todo.length) return;
+    if (!confirm(`要把这 ${todo.length} 条逐个下载到本机吗？\n\n浏览器第一次会询问"是否允许下载多个文件"，请选允许。`)) return;
+    todo.forEach((i, idx) => {
+      // 拉开间隔，否则浏览器会把连续点击当成弹窗滥用直接拦掉
+      setTimeout(() => {
+        const a = document.createElement('a');
+        a.href = creatorItemUrl(jobId, i.video_id);
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }, idx * 1200);
+    });
+  }
+
   return (
     <div class="items">
       <div class="kv-grid">
@@ -361,6 +381,16 @@ function JobItems({ jobId }: { jobId: number }) {
         <Field label="已入库" value={items.filter((i) => i.download_state === 'done').length} />
         <Field label="失败" value={items.filter((i) => i.download_state === 'failed').length} />
       </div>
+      {items.length > 0 && (
+        <div class="row-actions" style="margin-bottom:6px">
+          <button type="button" class="btn btn-ghost small" onClick={downloadAll}>
+            下载全部（{items.length} 条）
+          </button>
+          {items.length < total && (
+            <span class="small muted">只含已加载的 {items.length} 条，可先「加载更多」</span>
+          )}
+        </div>
+      )}
       <ul class="plain tight">
         {items.map((i) => (
           <li class="item-row">
@@ -373,6 +403,9 @@ function JobItems({ jobId }: { jobId: number }) {
               {i.published_at ? ` · ${fmtTime(i.published_at)}` : ''}
               {i.track_id ? ` · 媒体库 #${i.track_id}` : ''}
             </span>
+            <a class="btn btn-ghost small nowrap" href={creatorItemUrl(jobId, i.video_id)} download>
+              下载
+            </a>
           </li>
         ))}
       </ul>

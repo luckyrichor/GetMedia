@@ -1,7 +1,8 @@
 """博主批量的任务编排（P2b）。
 
 服务器只负责"列作品 + 记账"：媒体仍由手机逐条提取（``phone``）或由网页按需缓存
-（``cache``），任务表不存直链、不存 cookie。
+（``cache``），任务表不存 cookie。唯一存的地址是 ``play_urls``——平台在列表响应里
+直接给出的短期签名播放地址，用于「下载到本机」时省掉一次解析；不带凭据，过期即失效。
 
 三种选取方式共用一条「按发布时间倒序翻页」的循环：
 - ``all``：翻到底；每 ``creator_max_pages_per_run`` 页停一次，游标已落库，可续；
@@ -251,8 +252,20 @@ class CreatorJobService:
         return {"items": [dict(r._mapping) | {"is_pinned": bool(r._mapping["is_pinned"])} for r in rows],
                 "total": total, "limit": limit, "offset": offset}
 
-    def set_item_state(self, user_id: str, job_id: int, video_id: str, *, state: str,
-                       error: str | None = None, track_id: int | None = None) -> dict:
+    def item(self, user_id: str, job_id: int, video_id: str, *, page: int = 1) -> dict:
+        """单条作品，供「下载到本机」用。带 play_urls：平台在列表里给的短期直链。"""
+        self._owned(user_id, job_id)
+        with self.engine.begin() as c:
+            row = c.execute(text(
+                "SELECT video_id, platform, page, title, duration_sec, source_url,"
+                " play_urls, play_urls_at FROM creator_items"
+                " WHERE job_id=:j AND video_id=:v AND page=:g"),
+                {"j": job_id, "v": video_id, "g": page}).first()
+        if row is None:
+            raise JobError("item_not_found", "任务里没有这条作品", 404)
+        return dict(row._mapping)
+
+    def set_item_state(self, user_id: str, job_id: int, video_id: str, *, state: str,                       error: str | None = None, track_id: int | None = None) -> dict:
         self._owned(user_id, job_id)
         if state not in ITEM_STATES:
             raise JobError("bad_state", "state 只能是 pending/downloading/done/failed/skipped")
@@ -361,7 +374,8 @@ class CreatorJobService:
                 return None
         return {"video_id": v.video_id, "title": v.title, "duration_sec": v.duration_sec,
                 "published_at": pub, "is_pinned": is_pinned, "cover_url": v.cover_url,
-                "source_url": v.source_url, "platform": v.platform.value}
+                "source_url": v.source_url, "platform": v.platform.value,
+                "play_urls": list(v.play_urls)}
 
     # ---------- 执行 ----------
     def run(self, job_id: int, *, max_pages: int | None = None) -> dict:
@@ -446,6 +460,16 @@ class CreatorJobService:
                 if r.rowcount:
                     added += 1
                     added_secs += float(item["duration_sec"] or 0)
+                # 播放地址单独补：不能并进上面的 INSERT，否则 upsert 的 rowcount 也会计 1，
+                # added 会虚高、latest_n 提前停止。重扫时总是换成最新地址（越新过期越晚）。
+                urls = item.get("play_urls") or []
+                if urls:
+                    c.execute(text(
+                        "UPDATE creator_items SET play_urls=:pu, play_urls_at=:n"
+                        " WHERE job_id=:j AND platform=:p AND video_id=:v AND page=1"
+                        " AND (play_urls IS NULL OR play_urls<>:pu)"),
+                        {"pu": json.dumps(urls, ensure_ascii=False), "n": now, "j": job_id,
+                         "p": item["platform"], "v": item["video_id"]})
             self._refresh_counters(c, job_id, now)
             if added_secs:
                 c.execute(text("UPDATE creator_jobs SET estimated_bytes=estimated_bytes+:b WHERE id=:j"),

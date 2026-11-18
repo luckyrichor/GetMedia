@@ -30,6 +30,9 @@ const api = createApi({ base: `${BASE}/api` });
 export const mediaUrl = (trackId: number) => `${BASE}/api/v2/media/${trackId}`;
 /** 下载到本机：同一地址加 `download=1`，服务端按附件下发，文件名是条目标题。 */
 export const downloadUrl = (trackId: number) => `${mediaUrl(trackId)}?download=1`;
+/** 批量任务里的单条作品：服务端用扫描时存下的播放地址转发，过期时 B 站会现解析。 */
+export const creatorItemUrl = (jobId: number, videoId: string) =>
+  `${BASE}/api/v2/creators/jobs/${jobId}/items/${encodeURIComponent(videoId)}/file`;
 export const feedbackImageUrl = (id: string, index: number) =>
   `${BASE}/api/v2/feedback/${encodeURIComponent(id)}/images/${index}`;
 
