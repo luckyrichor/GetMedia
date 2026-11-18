@@ -7,6 +7,7 @@
 | # | 事项 | 为什么 / 完成判据 |
 |---|---|---|
 | 1 | 会话 Cookie 路径改为可配置：`Settings.cookie_path` 支持 `GETMEDIA_COOKIE_PATH`，**默认改为 `/getmedia/`**；同步改 `server/tests/test_accounts.py::test_web_cookie_attributes_and_no_token_in_body` 里 `Path=/getmedia/api/` 的断言（以及 `deploy/env/getmedia.env.example` 加注释） | 现在 `cookie_path` 硬编码为 `/getmedia/api/`，owner 管理台在 `/getmedia/owner/` 下收不到会话，只能靠边缘 `proxy_cookie_path` 改写兜住。代码改完后：把 `deploy/nginx/getmedia-prefix.conf` 里两处 `proxy_cookie_path`（owner/api 与 api 两个 location）删掉，重新 `nginx -t` + reload，复验"浏览器登录 `/getmedia/login` 后 `/getmedia/owner/` 返回 200、匿名仍 404" |
+| 2 | 修 `tools/smoke_deploy.py` 的 `证书：到期日` 检查：① **不得静默 SKIP** —— 读不到到期日要判 FAIL 并说清原因（不是记一句"对端没有给证书"就放过）；② 原因：`verify_mode=CERT_NONE` 时 `getpeercert()` 只返回 `{}`，得走 `getpeercert(binary_form=True)` 解析、或 `CERT_REQUIRED` 但关掉 hostname 校验；③ **判失败阈值改为剩余不足 36 小时**（原 `< 21 天` 不适用本机的约 6 天短周期证书，会天天误报） | 该检查现在恒 SKIP，等于假绿；2026-11-17 冒烟只能手工 `openssl x509 -noout -enddate` 代替。改完后在 11-19 那次核对里复验：证书已续期时应报 PASS 并给出具体到期时间 |
 
 ## 2026-11-17 补充任务（批量导出 + 定时倒计时缺陷）
 
@@ -34,7 +35,7 @@
 | P5d 提取 / 批量 / 定时 / Agent | 完成（未新增服务端接口） | `docs/p5d-report.md` |
 | P5e 平台授权 + 库维护 | 完成（未新增服务端接口） | `docs/p5e-report.md` |
 | P5f AI 视频重建 | 完成（未新增服务端接口）；九栏全部接真实页面 | `docs/p5f-report.md` |
-| P6 部署材料 | 材料完成，**未部署**；等用户说"部署"。含只读冒烟脚本 `tools/smoke_deploy.py`（先不执行）与 AI 清理 timer | 本地 `docs/p6-deploy-plan.md`（不入公开仓库） |
+| P6 部署 | **已部署（2026-11-17，A/B/C 三段完成）**：`current` → `releases/20261117-1`，库 schema 4→11，边缘装 owner 通道，公开页与 owner 页已上线（`/var/www/getmedia/{public,owner}`），owner1/owner2 已建；冒烟 18 PASS / 0 FAIL / 2 SKIP（free 身份未提供 Cookie、证书到期日检查自身失效） | 本地 `docs/p6-deploy-plan.md` §3–§5（不入公开仓库） |
 
 > 说明：含真实服务器路径、旧账号片段、nginx 细节的文档只留本地，见 `.gitignore` 末段。
 >
