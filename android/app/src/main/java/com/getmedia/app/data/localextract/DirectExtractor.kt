@@ -6,6 +6,7 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
+import com.getmedia.app.data.local.LocalIds
 import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.Dispatchers
@@ -43,7 +44,7 @@ class DirectExtractor(
         report("开始解析分享内容")
         val link = resolve(text)
         report("已识别平台：${if (link.platform == "douyin") "抖音" else "B 站"}")
-        val id = localId(link.platform, link.key)
+        val id = LocalIds.localId(link.platform, link.key)
         val video = kind == MediaKind.VIDEO
         val audioDir = File(context.filesDir, if (video) "video" else "audio").apply { mkdirs() }
         val dest = File(audioDir, if (video) "$id.mp4" else "$id.audio")
@@ -533,11 +534,5 @@ class DirectExtractor(
             37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
             22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
         )
-
-        private fun localId(platform: String, key: String): Long {
-            val bytes = MessageDigest.getInstance("SHA-256").digest("$platform:$key".toByteArray())
-            val positive = ByteBuffer.wrap(bytes).long and Long.MAX_VALUE
-            return -(positive.takeIf { it > 0 } ?: 1L)
-        }
     }
 }

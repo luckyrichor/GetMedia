@@ -126,6 +126,48 @@ class TrackRepository(private val context: Context) {
 
     // ---------- 下载 ----------
 
+    /**
+     * 把「已经在本地落好、但还没入库」的暂存文件纳入媒体库。
+     *
+     * full 版的服务器提取用它：服务器下载完的文件先写成 `.part`，校验长度后再由这里
+     * 搬到最终路径、算 sha256、写一行。`id` 由调用方按 [com.getmedia.app.data.local.LocalIds]
+     * 算好，因此同一作品和本机提取共用一行：收藏、分类、重命名、入库时间都保留。
+     *
+     * 只有本方法成功返回，库里才会出现这一行——文件与记录始终一一对应。
+     */
+    suspend fun adoptStaged(entity: TrackEntity, staged: File): TrackEntity = withContext(Dispatchers.IO) {
+        require(staged.isFile && staged.length() > 0) { "下载结果为空" }
+        fileMutex.withLock {
+            val video = MediaKind.of(entity.mediaType) == MediaKind.VIDEO
+            val dir = File(context.filesDir, if (video) "video" else "audio").apply { mkdirs() }
+            val dest = File(dir, if (video) "${entity.id}.mp4" else "${entity.id}.audio")
+            val existing = trackDao.byId(entity.id)
+            val previousPath = existing?.localPath
+            if (dest.exists() && !dest.delete()) error("无法覆盖本地文件")
+            if (!staged.renameTo(dest)) {
+                staged.copyTo(dest, overwrite = true)
+                staged.delete()
+            }
+            val now = System.currentTimeMillis()
+            val record = entity.copy(
+                localPath = dest.absolutePath,
+                audioBytes = dest.length(),
+                audioSha256 = sha256(dest),
+                favorite = existing?.favorite ?: false,
+                localCategoryId = existing?.localCategoryId ?: entity.localCategoryId,
+                localTitleOverride = existing?.localTitleOverride,
+                title = existing?.localTitleOverride ?: entity.title,
+                addedAtMs = existing?.addedAtMs?.takeIf { it > 0 } ?: now,
+                sortIndex = existing?.sortIndex ?: entity.sortIndex,
+                updatedAtMs = now,
+            )
+            trackDao.upsertAll(listOf(record))
+            // 覆盖到同一行时，旧路径（例如本机剪辑副本）留着就是孤儿文件
+            previousPath?.takeIf { it != dest.absolutePath }?.let { File(it).delete() }
+            record
+        }
+    }
+
     fun localFile(id: Long): File = File(audioDir, "$id.audio")
 
     /**

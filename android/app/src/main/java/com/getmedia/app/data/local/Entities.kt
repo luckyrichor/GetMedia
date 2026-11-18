@@ -40,6 +40,24 @@ data class TrackEntity(
      */
     @ColumnInfo(defaultValue = "0") val sortIndex: Long = 0,
     @ColumnInfo(defaultValue = "'AUDIO'") val mediaType: String = MediaKind.AUDIO.name,
+
+    // ---------- 服务器来源（P0-1 起写入；本机提取的行保持 null/LOCAL_ONLY） ----------
+
+    /** 服务器 track id；P0-2 的匹配键。null 表示这行没在服务器上出现过。 */
+    val serverId: Long? = null,
+    /** 上次见到的服务器 `updated_seq`，P0-2 用它判断哪边更新。 */
+    val serverSeq: Long? = null,
+    /**
+     * 服务器页码。B 站多 P 的行 id 已含页码（见 [LocalIds.key]），各 P 互不覆盖；
+     * 这里留一份原文用于展示与排查。
+     */
+    @ColumnInfo(defaultValue = "1") val serverPage: Int = 1,
+    /** 服务器 `updated_at`（秒 ×1000）；null 表示未知。 */
+    val serverUpdatedAtMs: Long? = null,
+    /** 同步状态：`LOCAL_ONLY` / `SYNCED`；P0-2 的状态机从这里继续。 */
+    @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SyncState.LOCAL_ONLY.name,
+    /** 登录名；P0-2 按账号隔离同步，本机提取的行留 null。 */
+    val accountKey: String? = null,
 )
 
 @Entity(tableName = "categories")

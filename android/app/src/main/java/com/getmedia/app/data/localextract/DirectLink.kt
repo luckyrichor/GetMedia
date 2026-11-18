@@ -1,11 +1,13 @@
 package com.getmedia.app.data.localextract
 
+import com.getmedia.app.data.local.LocalIds
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 internal data class DirectLink(
     val platform: String, val videoId: String, val url: String, val page: Int = 1,
 ) {
-    val key: String get() = if (platform == "bilibili" && page > 1) "$videoId-p$page" else videoId
+    /** 规则在 [LocalIds.key]，本地与服务器两条提取路径共用，避免两处各写一份。 */
+    val key: String get() = LocalIds.key(platform, videoId, page)
 }
 
 internal object DirectLinkParser {
