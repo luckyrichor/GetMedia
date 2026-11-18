@@ -41,6 +41,11 @@
 >
 > **P2i 已实施**（2026-11-17）：AI 素材与产物计入服务器库 3 GiB，保留期 14 天，`getmedia-ai-gc.timer` 每天 04:10 清理过期文件（保留记录）。部署这件事本身仍等 P6，见 `docs/p2i-report.md`。
 
+> **批量条目可直接下载到本机**（2026-11-18，已上线 `releases/20261118-2`，schema v12）：
+> `creator_items` 新增 `play_urls`/`play_urls_at`，扫描时把抖音列表响应里的 play_addr 存下；
+> `GET /v2/creators/jobs/{job}/items/{video_id}/file` 按附件转发（B 站无直链时回退现解析）。
+> 媒体库侧同一天加了 `GET /v2/media/{id}?download=1`。
+
 ## 工作包（历史）
 
 | 工作包 | 状态 | 分支 |
