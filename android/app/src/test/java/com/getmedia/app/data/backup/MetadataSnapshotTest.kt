@@ -1,6 +1,7 @@
 package com.getmedia.app.data.backup
 
 import com.getmedia.app.data.local.CategoryEntity
+import com.getmedia.app.data.local.LocalIds
 import com.getmedia.app.data.local.PlaylistEntity
 import com.getmedia.app.data.local.PlaylistItemEntity
 import com.getmedia.app.data.local.TrackEntity
@@ -27,12 +28,15 @@ class MetadataSnapshotTest {
         format: String = "m4a",
         duration: Double? = 12.5,
         bytes: Long? = 1024,
+        videoId: String = "BV1",
+        serverPage: Int = 1,
     ) = TrackEntity(
-        id = id, platform = "bilibili", videoId = "BV1", title = title, uploader = uploader,
+        id = id, platform = "bilibili", videoId = videoId, title = title, uploader = uploader,
         durationSec = duration, audioBytes = bytes, audioFormat = format, sourceUrl = sourceUrl,
         localPath = "/data/user/0/x/files/audio/-1.audio", favorite = favorite,
         localCategoryId = categoryId, sortIndex = sortIndex, localTitleOverride = override,
         addedAtMs = 1_700_000_000_000, audioSha256 = "deadbeef", coverUrl = "https://c/1.jpg",
+        serverPage = serverPage,
     )
 
     private val categories = listOf(
@@ -109,6 +113,45 @@ class MetadataSnapshotTest {
         assertEquals(1, MetadataSnapshot.pageOf("https://www.bilibili.com/video/BV1?p=0"))
         assertEquals(1, MetadataSnapshot.pageOf("https://www.bilibili.com/video/BV1?p=abc"))
         assertEquals(1, MetadataSnapshot.pageOf(""))
+    }
+
+    @Test
+    fun pageFallsBackToServerPageWhenUrlHasNoPart() {
+        // 服务器提取写的 sourceUrl 只有 bvid（server/getmedia/extractor.py），页码只在列里
+        val fromServer = track(videoId = "BV1", serverPage = 2, sourceUrl = "https://www.bilibili.com/video/BV1")
+        assertEquals(2, MetadataSnapshot.pageOf(fromServer))
+        val json = JSONObject(gunzip(build(tracks = listOf(fromServer)).gzip)).getJSONArray("tracks").getJSONObject(0)
+        assertEquals(2, json.getInt("page"))
+    }
+
+    @Test
+    fun pageFallsBackToTheSuffixOnVideoId() {
+        // 手机直提取的 videoId 本来就是键形态；链接与 serverPage 都沉默时靠后缀兜底
+        val direct = track(videoId = "BV1-p2", serverPage = 1, sourceUrl = "https://www.bilibili.com/video/BV1")
+        assertEquals(2, MetadataSnapshot.pageOf(direct))
+    }
+
+    @Test
+    fun snapshotStoresVideoIdWithoutThePartSuffix() {
+        val direct = track(videoId = "BV1-p2", sourceUrl = "https://www.bilibili.com/video/BV1?p=2")
+        assertEquals("BV1", MetadataSnapshot.videoIdOf(direct))
+        // 已经是裸 id 的行不能被误伤
+        assertEquals("BV1", MetadataSnapshot.videoIdOf(track(videoId = "BV1", serverPage = 2)))
+    }
+
+    @Test
+    fun multiPartSurvivesTheRoundTripWithTheSameId() {
+        // 上传 → 恢复 的往返：id 必须算回原值，否则恢复一次就多一条重复
+        val original = track(
+            id = LocalIds.localId("bilibili", "BV1", 2),
+            videoId = "BV1-p2",
+            sourceUrl = "https://www.bilibili.com/video/BV1?p=2",
+        )
+        val parsed = SnapshotReader.read(build(tracks = listOf(original), items = emptyList()).gzip, null).tracks.single()
+
+        assertEquals("BV1", parsed.videoId)
+        assertEquals(2, parsed.page)
+        assertEquals(original.id, LocalIds.localId(parsed.platform, parsed.videoId, parsed.page))
     }
 
     @Test

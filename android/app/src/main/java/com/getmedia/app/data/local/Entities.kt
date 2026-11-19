@@ -42,21 +42,27 @@ data class TrackEntity(
     @ColumnInfo(defaultValue = "'AUDIO'") val mediaType: String = MediaKind.AUDIO.name,
 
     // ---------- 服务器来源（P0-1 起写入；本机提取的行保持 null/LOCAL_ONLY） ----------
+    //
+    // 从云端清单"恢复"出来的行（RestoreService）是另一回事：serverId / serverSeq /
+    // serverUpdatedAtMs / accountKey 全为 null，serverPage 记快照里的真实页码，
+    // syncState = RESTORED。这四个 null 表示"这行的服务器身份未知"，RESTORED 表示
+    // "别当新条目上传"——两条合起来才是 P0-2 的判断依据。
 
-    /** 服务器 track id；P0-2 的匹配键。null 表示这行没在服务器上出现过。 */
+    /** 服务器 track id；P0-2 的匹配键。null 表示这行没在服务器上出现过（含恢复出来的行）。 */
     val serverId: Long? = null,
     /** 上次见到的服务器 `updated_seq`，P0-2 用它判断哪边更新。 */
     val serverSeq: Long? = null,
     /**
      * 服务器页码。B 站多 P 的行 id 已含页码（见 [LocalIds.key]），各 P 互不覆盖；
-     * 这里留一份原文用于展示与排查。
+     * 这里留一份原文用于展示与排查，也是恢复出来的行唯一还能拿到的页码来源
+     * （服务器提取写的 `sourceUrl` 没有 `?p=`）。
      */
     @ColumnInfo(defaultValue = "1") val serverPage: Int = 1,
     /** 服务器 `updated_at`（秒 ×1000）；null 表示未知。 */
     val serverUpdatedAtMs: Long? = null,
-    /** 同步状态：`LOCAL_ONLY` / `SYNCED`；P0-2 的状态机从这里继续。 */
+    /** 同步状态：`LOCAL_ONLY` / `SYNCED` / `RESTORED`；P0-2 的状态机从这里继续。 */
     @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SyncState.LOCAL_ONLY.name,
-    /** 登录名；P0-2 按账号隔离同步，本机提取的行留 null。 */
+    /** 登录名；P0-2 按账号隔离同步，本机提取与恢复出来的行都留 null。 */
     val accountKey: String? = null,
 )
 

@@ -35,10 +35,34 @@ object MetadataSnapshot {
     const val URL_MAX = 2048
 
     private val PAGE = Regex("[?&]p=(\\d+)")
+    private val PAGE_SUFFIX = Regex("-p(\\d+)$")
 
     /** 从来源链接取分 P；取不到按 1（设计 §2.3）。 */
     fun pageOf(sourceUrl: String): Int =
         PAGE.find(sourceUrl)?.groupValues?.get(1)?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+
+    /**
+     * 一行真实的页码。三个来源按可靠度排，缺一个就往下一个退：
+     *
+     * 1. `sourceUrl` 里的 `?p=N`——手机直提取写的规范 URL 一定带；
+     * 2. `serverPage`——服务器提取写的 `sourceUrl` **没有** `?p=`（`extractor.py` 只拼 bvid），
+     *    页码只在这一列里；
+     * 3. `videoId` 的 `-pN` 后缀——手机直提取的 `videoId` 本身就是键形态。
+     *
+     * 少了 2、3 两条，服务器提取进来的 P2 会被当成 P1 上传，恢复时和 P1 撞成同一行。
+     */
+    fun pageOf(t: TrackEntity): Int {
+        val fromUrl = pageOf(t.sourceUrl)
+        if (fromUrl > 1) return fromUrl
+        if (t.serverPage > 1) return t.serverPage
+        return PAGE_SUFFIX.find(t.videoId)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+    }
+
+    /** 快照里的 `video_id` 不带分 P 后缀：页码由 `page` 单独表达，恢复时再拼回去。 */
+    fun videoIdOf(t: TrackEntity): String {
+        val page = pageOf(t)
+        return if (page > 1) t.videoId.removeSuffix("-p$page") else t.videoId
+    }
 
     fun build(
         tracks: List<TrackEntity>,
@@ -90,8 +114,8 @@ object MetadataSnapshot {
 
     private fun trackJson(t: TrackEntity, items: List<PlaylistItemEntity>) = JSONObject()
         .put("platform", t.platform)
-        .put("video_id", t.videoId)
-        .put("page", pageOf(t.sourceUrl))
+        .put("video_id", videoIdOf(t))
+        .put("page", pageOf(t))
         .put("title", titleOf(t))
         .put("uploader", t.uploader?.let(::clipUploader) ?: JSONObject.NULL)
         .put("media_type", t.mediaType)
@@ -141,7 +165,7 @@ object MetadataSnapshot {
                     .field(p.createdAt.toString()).end()
             }
             tracks.sortedBy { it.id }.forEach { t ->
-                field("t").field(t.platform).field(t.videoId).field(pageOf(t.sourceUrl).toString())
+                field("t").field(t.platform).field(videoIdOf(t)).field(pageOf(t).toString())
                     .field(titleOf(t)).field(t.uploader?.let(::clipUploader)).field(t.mediaType)
                     .field(t.audioFormat).field(t.durationSec?.let { String.format(Locale.US, "%.3f", it) })
                     .field(t.audioBytes?.toString()).field(clipUrl(t.sourceUrl))

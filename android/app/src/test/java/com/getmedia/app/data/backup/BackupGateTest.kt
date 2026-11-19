@@ -31,6 +31,16 @@ class BackupGateTest {
             return BackupUpload("bkp_test", emptyList())
         }
 
+        override suspend fun list(): List<BackupItem> {
+            calls.incrementAndGet()
+            return emptyList()
+        }
+
+        override suspend fun download(backupId: String): BackupPayload {
+            calls.incrementAndGet()
+            return BackupPayload(ByteArray(0), null)
+        }
+
         override suspend fun deleteAll(): Int {
             calls.incrementAndGet()
             return 0

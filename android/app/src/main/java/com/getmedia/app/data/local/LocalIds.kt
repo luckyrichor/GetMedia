@@ -21,9 +21,16 @@ object LocalIds {
      * （`page` 不同）。若键里不带页码，P2 就会算出和 P1 相同的 id，直接覆盖 P1。
      * 这条规则手机直提取（[com.getmedia.app.data.localextract.DirectLink]）与服务器提取
      * 共用一处，改动只改这里。
+     *
+     * **幂等**：`videoId` 已经带了 `-pN` 后缀就直接返回。两个原因——
+     * 1. 手机直提取写进库的 `videoId` 本身就是键形态（`BV1xx-p2`），快照把它原样带上，
+     *    恢复时再拼一次就会变成 `BV1xx-p2-p2`，每往返一次后缀长一截、id 也跟着变；
+     * 2. 恢复要能算回和原行相同的 id，否则同一台设备恢复一次就多一条重复。
      */
-    fun key(platform: String, videoId: String, page: Int): String =
-        if (page > 1 && platform.equals("bilibili", ignoreCase = true)) "$videoId-p$page" else videoId
+    fun key(platform: String, videoId: String, page: Int): String {
+        if (page <= 1 || !platform.equals("bilibili", ignoreCase = true)) return videoId
+        return if (videoId.endsWith("-p$page")) videoId else "$videoId-p$page"
+    }
 
     fun localId(platform: String, key: String): Long {
         val bytes = MessageDigest.getInstance("SHA-256").digest("$platform:$key".toByteArray())

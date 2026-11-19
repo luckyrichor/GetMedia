@@ -16,12 +16,20 @@ import org.json.JSONObject
 
 data class BackupUpload(val id: String, val pruned: List<String>)
 
+/** 列表项不含 payload：条数、字节、时间、机型够用来选"恢复哪一份"。 */
+data class BackupItem(val id: String, val bytes: Int, val tracks: Int, val createdAt: Long, val device: String)
+
+/** 下载回来的原始 gzip 与响应头里的 sha256（用于校验传输是否完整）。 */
+class BackupPayload(val gzip: ByteArray, val sha256: String?)
+
 /**
- * 上传/删除这两个动作的抽象。生产只有 [BackupApi] 一个实现，
+ * 上传/列表/下载/删除的抽象。生产只有 [BackupApi] 一个实现，
  * 抽出来是为了让"某个状态下绝不出网"能在单测里用一个记账的假实现断言。
  */
 interface BackupTransport {
     suspend fun upload(body: ByteArray, appVersion: String, device: String): BackupUpload
+    suspend fun list(): List<BackupItem>
+    suspend fun download(backupId: String): BackupPayload
     suspend fun deleteAll(): Int
 }
 
@@ -57,6 +65,36 @@ class BackupApi(
                 pruned = o.optJSONArray("pruned")?.let { a -> (0 until a.length()).map(a::optString) }.orEmpty(),
             )
         }
+
+    /** 该账号的云端备份，服务端已按时间倒序。 */
+    override suspend fun list(): List<BackupItem> = withContext(Dispatchers.IO) {
+        val o = JSONObject(execute(authorized(Request.Builder().url((base + PATH).toHttpUrl()).get())))
+        val arr = o.optJSONArray("backups") ?: return@withContext emptyList()
+        (0 until arr.length()).mapNotNull { i ->
+            arr.optJSONObject(i)?.let {
+                BackupItem(
+                    id = it.optString("id"),
+                    bytes = it.optInt("bytes"),
+                    tracks = it.optJSONObject("counts")?.optInt("tracks") ?: 0,
+                    createdAt = it.optLong("created_at"),
+                    device = it.optString("device"),
+                )
+            }
+        }.filter { it.id.isNotEmpty() }
+    }
+
+    /** 下载一份备份的原始 gzip；sha256 取响应头，用于恢复前的一致性校验。 */
+    override suspend fun download(backupId: String): BackupPayload = withContext(Dispatchers.IO) {
+        val url = (base + PATH + "/" + backupId).toHttpUrl()
+        val request = authorized(Request.Builder().url(url).header("Accept", "application/gzip").get())
+        client.newCall(request).execute().use { response ->
+            val bytes = response.body?.bytes() ?: ByteArray(0)
+            if (!response.isSuccessful) {
+                throw AccountJson.error(response.code, bytes.toString(Charsets.UTF_8), response.header("Retry-After"))
+            }
+            BackupPayload(bytes, response.header("X-Backup-Sha256"))
+        }
+    }
 
     /** 删除该账号的全部云端备份，返回删掉的份数。 */
     override suspend fun deleteAll(): Int = withContext(Dispatchers.IO) {

@@ -116,4 +116,39 @@ class BackupApiTest {
         val req = server.takeRequest()
         assertEquals("14", req.getHeader("X-GetMedia-Device"))
     }
+
+    @Test fun listParsesBackupsAndIgnoresBrokenEntries() = runBlocking {
+        server.enqueue(json("""{"backups":[
+            {"id":"bkp_a","bytes":1234,"counts":{"tracks":12},"app_version":"0.1.0","device":"Pixel 8","created_at":1731912345},
+            {"bytes":1,"created_at":1},
+            null
+        ],"total_bytes":1235,"keep":3}"""))
+
+        val items = api.list()
+
+        assertEquals("缺 id 的条目直接丢掉", 1, items.size)
+        assertEquals("bkp_a", items.first().id)
+        assertEquals(12, items.first().tracks)
+        assertEquals(1731912345L, items.first().createdAt)
+        assertEquals("/getmedia/api/account/metadata-backups", server.takeRequest().path)
+    }
+
+    @Test fun downloadReturnsGzipAndServerSha() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200)
+            .setHeader("Content-Type", "application/gzip")
+            .setHeader("X-Backup-Sha256", "abc123")
+            .setBody(okio.Buffer().write("gz-bytes".toByteArray())))
+
+        val payload = api.download("bkp_a")
+
+        assertEquals("gz-bytes".length, payload.gzip.size)
+        assertEquals("abc123", payload.sha256)
+        assertEquals("/getmedia/api/account/metadata-backups/bkp_a", server.takeRequest().path)
+    }
+
+    @Test fun downloadOfMissingBackupIs404() {
+        server.enqueue(json("""{"detail":"备份不存在","code":"backup_not_found"}""", 404))
+        val error = assertThrows(ApiException::class.java) { runBlocking { api.download("bkp_x") } }
+        assertEquals(404, error.status)
+    }
 }

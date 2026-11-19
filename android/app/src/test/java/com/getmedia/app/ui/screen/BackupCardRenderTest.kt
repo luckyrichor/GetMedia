@@ -5,16 +5,20 @@ import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.getmedia.app.data.backup.BackupItem
 import com.getmedia.app.data.backup.BackupManager
 import com.getmedia.app.data.backup.BackupPrefs
 import com.getmedia.app.ui.theme.GetMediaTheme
@@ -98,5 +102,48 @@ class BackupCardRenderTest {
         render(BackupManager.UiState(loggedIn = false))
         saveShot("backup-light-loggedout")
         rule.onNodeWithText("登录后可用备份").assertIsDisplayed()
+    }
+
+    // ---------- 恢复：选一份备份 ----------
+
+    private val cloud = listOf(
+        BackupItem("bkp_new", 41_000, 128, 1_763_462_520, "Pixel 8"),
+        BackupItem("bkp_old", 39_500, 121, 1_762_000_000, "Redmi K70"),
+    )
+
+    private fun renderPicker(dark: Boolean) {
+        rule.setContent {
+            GetMediaTheme(darkTheme = dark) {
+                Box(Modifier.width(360.dp).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    androidx.compose.material3.Surface(
+                        Modifier.padding(16.dp),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                    ) {
+                        Column(Modifier.padding(20.dp)) {
+                            Text("选择要恢复的备份", style = MaterialTheme.typography.titleLarge)
+                            androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
+                            BackupPickerContent(cloud, cloud.first()) {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun pickerLight() {
+        renderPicker(dark = false)
+        saveShot("restore-light-picker")
+        rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("恢复只补", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun pickerDark() {
+        renderPicker(dark = true)
+        saveShot("restore-dark-picker")
+        rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
     }
 }

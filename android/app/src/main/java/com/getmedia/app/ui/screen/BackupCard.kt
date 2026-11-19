@@ -58,6 +58,7 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
     val live by BackupManager.state.collectAsState()
     val state = injected ?: live
     var confirmDelete by remember { mutableStateOf(false) }
+    var restoreOpen by remember { mutableStateOf(false) }
 
     SectionTitle("数据备份")
     SectionCard {
@@ -115,13 +116,21 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
                     Text(if (state.busy) "正在备份…" else "立即备份", fontSize = 13.sp)
                 }
                 AreaButton(
-                    onClick = { confirmDelete = true },
+                    onClick = { restoreOpen = true },
                     enabled = !state.busy,
                     modifier = Modifier.weight(1f),
-                    tone = ActionTone.DESTRUCTIVE,
+                    tone = ActionTone.SYNC,
                 ) {
-                    Text("删除云端备份", fontSize = 13.sp)
+                    Text("从云端备份恢复", fontSize = 13.sp)
                 }
+            }
+            AreaButton(
+                onClick = { confirmDelete = true },
+                enabled = !state.busy,
+                modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                tone = ActionTone.DESTRUCTIVE,
+            ) {
+                Text("删除云端备份", fontSize = 13.sp)
             }
         } else {
             Text(
@@ -133,6 +142,8 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
             )
         }
     }
+
+    if (restoreOpen) RestoreFlow(onClose = { restoreOpen = false })
 
     if (confirmDelete) {
         AlertDialog(

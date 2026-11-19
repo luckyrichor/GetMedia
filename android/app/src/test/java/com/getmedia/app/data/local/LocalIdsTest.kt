@@ -51,4 +51,22 @@ class LocalIdsTest {
         assertEquals("7412", LocalIds.key("douyin", "7412", 2))
         assertEquals(LocalIds.localId("douyin", "7412"), LocalIds.localId("douyin", "7412", 2))
     }
+
+    @Test fun keyIsIdempotentForMultiPart() {
+        // 手机直提取写进库的 videoId 本身就是键形态（BV1xx-p2），快照原样带上它；
+        // 恢复时若再拼一次就成了 BV1xx-p2-p2 —— 后缀每往返一次长一截，id 也跟着变，
+        // 同一台设备恢复一次就多一条重复。键必须幂等。
+        val once = LocalIds.key("bilibili", "BV1xx411c7mD", 2)
+        assertEquals(once, LocalIds.key("bilibili", once, 2))
+        assertEquals(
+            "恢复算出的 id 必须与建库时相同",
+            LocalIds.localId("bilibili", "BV1xx411c7mD", 2),
+            LocalIds.localId("bilibili", once, 2),
+        )
+    }
+
+    @Test fun keyedPageDoesNotSwallowAnotherPage() {
+        // 已经是 P2 的行若被说成 P3（脏数据），不能当成 P2 放过去
+        assertEquals("BV1xx411c7mD-p2-p3", LocalIds.key("bilibili", "BV1xx411c7mD-p2", 3))
+    }
 }

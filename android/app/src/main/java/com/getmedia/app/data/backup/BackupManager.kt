@@ -6,6 +6,7 @@ import androidx.annotation.VisibleForTesting
 import com.getmedia.app.BuildConfig
 import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.localextract.DirectExtractor
 import com.getmedia.app.data.repo.DiagnosticsStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -66,6 +67,7 @@ object BackupManager {
 
     private var ticker: Job? = null
     private var debounce: Job? = null
+    private var redownload: RedownloadRunner? = null
 
     fun initialize(context: Context) {
         if (this.context != null) return
@@ -81,7 +83,7 @@ object BackupManager {
     internal fun resetForTest() {
         ticker?.cancel(); ticker = null
         debounce?.cancel(); debounce = null
-        context = null; prefs = null; api = null
+        context = null; prefs = null; api = null; redownload = null
         sessionOverride = null; transportOverride = null
         _state.value = UiState()
     }
@@ -175,6 +177,62 @@ object BackupManager {
         val login = sessionNow()?.loginName ?: return
         p.update(login) { it.copy(noticeShown = true) }
         publish()
+    }
+
+    // ---------- 恢复 ----------
+
+    /** 云端有哪些备份。失败直接交给调用方显示，不弹窗、不写状态。 */
+    suspend fun listCloud(): Result<List<BackupItem>> {
+        val api = api ?: return Result.failure(IllegalStateException("未初始化"))
+        if (sessionNow() == null) return Result.failure(IllegalStateException("未登录"))
+        return runCatching { api.list() }
+    }
+
+    /**
+     * 下载 + 校验 + 合并恢复。整个过程是一个事务：校验不过就中止，本地库一个字节都不动。
+     * 恢复完标脏——合并后的清单和上次上传的不一样，下一个窗口该传一次。
+     */
+    suspend fun restoreNow(backupId: String): Result<RestoreService.Result> {
+        val api = api ?: return Result.failure(IllegalStateException("未初始化"))
+        val c = context ?: return Result.failure(IllegalStateException("未初始化"))
+        val session = sessionNow() ?: return Result.failure(IllegalStateException("未登录"))
+        return runCatching {
+            val payload = api.download(backupId)
+            val snapshot = SnapshotReader.read(payload.gzip, payload.sha256)
+            val result = RestoreService(AppDatabase.get(c)).restore(snapshot)
+            prefs?.update(session.loginName) { it.copy(dirty = true) }
+            DiagnosticsStore.event(
+                "数据备份",
+                "已恢复：新增 ${result.addedTracks} 首，跳过 ${result.skippedTracks} 首（本地已有）",
+                true,
+            )
+            result
+        }
+    }
+
+    /** "全部重新下载"的进度源；第一次用时才建（避免启动时就打开数据库）。 */
+    fun redownloadState(): StateFlow<RedownloadRunner.State>? = runner()?.state
+
+    suspend fun pendingDownloadIds(): List<Long> = runner()?.pendingIds().orEmpty()
+
+    fun startRedownload(ids: List<Long>) {
+        runner()?.start(ids)
+    }
+
+    fun resumeRedownload() {
+        runner()?.resume()
+    }
+
+    fun stopRedownload() {
+        runner()?.stop()
+    }
+
+    private fun runner(): RedownloadRunner? {
+        val c = context ?: return null
+        return redownload ?: RedownloadRunner(
+            AppDatabase.get(c),
+            extract = { url, kind -> DirectExtractor(c).extract(url, kind) },
+        ).also { redownload = it }
     }
 
     // ---------- 核心 ----------
