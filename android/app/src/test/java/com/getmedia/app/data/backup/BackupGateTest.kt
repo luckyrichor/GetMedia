@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.TrackEntity
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -75,6 +78,12 @@ class BackupGateTest {
 
     @After
     fun tearDown() {
+        // 空库不再上传（见 BackupEmptyLibraryTest），所以反向对照要先往库里放一首。
+        runBlocking {
+            val dao = AppDatabase.get(context).trackDao()
+            val ids = dao.allNow().map { it.id }
+            if (ids.isNotEmpty()) dao.deleteByIds(ids)
+        }
         BackupManager.resetForTest()
     }
 
@@ -105,6 +114,20 @@ class BackupGateTest {
     /** 反向对照：门是开的就真会发，说明上面三条不是因为假实现没接上才"看起来没请求"。 */
     @Test
     fun enabledStillUploads() {
+        // 空库现在一律不上传（空清单会挤掉云端有内容的备份），所以先放一首进去，
+        // 这条用例要证的是"门开着"，不是"空库也能传"。
+        runBlocking {
+            AppDatabase.get(context).trackDao().upsertAll(
+                listOf(
+                    TrackEntity(
+                        id = -9002, platform = "bilibili", videoId = "BVgate", title = "门开着的证据",
+                        uploader = null, durationSec = 1.0, audioBytes = 10, audioFormat = "m4a",
+                        sourceUrl = "https://www.bilibili.com/video/BVgate", favorite = false,
+                        localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
+                    ),
+                ),
+            )
+        }
         start(BackupPrefs.State(enabled = true, lastHash = "old", lastAtMs = 0))
         BackupManager.backupNow()
         val deadline = System.currentTimeMillis() + 5_000

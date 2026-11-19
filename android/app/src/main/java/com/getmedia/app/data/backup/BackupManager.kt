@@ -239,7 +239,7 @@ object BackupManager {
 
     // ---------- 核心 ----------
 
-    private suspend fun runCheck(trigger: String, force: Boolean = false) {
+    private suspend fun runCheck(trigger: String, force: Boolean = false, allowEmpty: Boolean = false) {
         val p = prefs ?: return
         val c = context ?: return
         val api = api ?: return
@@ -261,6 +261,13 @@ object BackupManager {
                 appVersion = BuildConfig.VERSION_NAME,
                 nowSec = System.currentTimeMillis() / 1000,
             )
+
+            // 本地一首都没有：不上传，也不动 lastHash。
+            //
+            // 空清单本身是合法快照，但它没有任何恢复价值，却会占掉云端 3 份里的一份
+            // （够了 3 份就把最旧的挤掉）。新设备 / 重装后先登录的场景正好是空库，
+            // 这里必须挡住。用户明确点「立即备份」并确认后才走 allowEmpty。
+            if (!allowEmpty && snapshot.counts.tracks == 0) return
 
             if (!BackupRules.shouldUpload(stored, snapshot.fingerprint, System.currentTimeMillis(), force)) {
                 // 变过了但还没到窗口：先标脏，跨启动也能记住"欠一次"
