@@ -2,6 +2,7 @@ package com.getmedia.app.ui
 
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.ui.screen.CreatorBatchScreen
 import com.getmedia.app.ui.screen.ServerExtractPanel
 
@@ -16,7 +17,17 @@ val ownerGate: OwnerGate = object : OwnerGate {
     }
 
     @Composable
-    override fun ServerExtract(snackbar: SnackbarHostState) {
-        ServerExtractPanel(snackbar = snackbar)
+    override fun ServerExtract(
+        snackbar: SnackbarHostState,
+        onKindChange: (MediaKind) -> Unit,
+        onUseLocal: (String) -> Unit,
+        onGoLogin: () -> Unit,
+    ) {
+        ServerExtractPanel(
+            snackbar = snackbar,
+            onKindChange = onKindChange,
+            onUseLocal = onUseLocal,
+            onGoLogin = onGoLogin,
+        )
     }
 }

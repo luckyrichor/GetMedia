@@ -44,6 +44,7 @@ import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.repo.DiagnosticsStore
 import com.getmedia.app.data.repo.PendingNotice
 import com.getmedia.app.ui.formatDuration
+import com.getmedia.app.ui.LoginRequest
 import com.getmedia.app.ui.ownerGate
 import com.getmedia.app.ui.components.uiAccentContainer
 import com.getmedia.app.data.localextract.LinkScanner
@@ -205,6 +206,9 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
     var showCreator by rememberSaveable { mutableStateOf(false) }
     // 免费版没有服务器提取（ownerGate.serverExtract = false），开关不出现，永远是本机提取。
     var mode by rememberSaveable { mutableStateOf(ExtractMode.LOCAL) }
+    // 服务器面板自己管着音频/视频选择，切了会报上来；标题得跟着当前模式的那一份走。
+    var serverKind by rememberSaveable { mutableStateOf(MediaKind.AUDIO) }
+    val titleKind = if (mode == ExtractMode.SERVER) serverKind else vm.kind
 
     if (showCreator) {
         BackHandler { showCreator = false }
@@ -235,7 +239,7 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                if (vm.kind == MediaKind.VIDEO) "提取视频" else "提取音频",
+                if (titleKind == MediaKind.VIDEO) "提取视频" else "提取音频",
                 style = MaterialTheme.typography.headlineSmall,
                 // Scaffold 的容器是透明的，取不到 contentColorFor，标题会退回黑色；暗色下必须显式给色
                 color = MaterialTheme.colorScheme.onBackground,
@@ -248,7 +252,16 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
                 )
             }
             if (mode == ExtractMode.SERVER) {
-                ownerGate.ServerExtract(snackbar)
+                ownerGate.ServerExtract(
+                    snackbar = snackbar,
+                    onKindChange = { serverKind = it },
+                    // 服务器侧原因失败时的出路：切回本机模式，并把这条链接带进本机输入框（不自动提交）。
+                    onUseLocal = { url ->
+                        mode = ExtractMode.LOCAL
+                        vm.input = url
+                    },
+                    onGoLogin = { LoginRequest.request() },
+                )
             } else {
                 AreaAction(onClick = { showCreator = true }, tone = ActionTone.SYNC) {
                     Icon(Icons.Default.Person, null, Modifier.size(17.dp))

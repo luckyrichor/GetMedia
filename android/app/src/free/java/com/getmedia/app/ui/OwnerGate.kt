@@ -2,6 +2,7 @@ package com.getmedia.app.ui
 
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.ui.components.NotAvailableDialog
 
 /**
@@ -21,5 +22,10 @@ val ownerGate: OwnerGate = object : OwnerGate {
 
     /** 免费版不会渲染这一段（`serverExtract = false` 时提取页不出现开关），保持空实现。 */
     @Composable
-    override fun ServerExtract(snackbar: SnackbarHostState) = Unit
+    override fun ServerExtract(
+        snackbar: SnackbarHostState,
+        onKindChange: (MediaKind) -> Unit,
+        onUseLocal: (String) -> Unit,
+        onGoLogin: () -> Unit,
+    ) = Unit
 }

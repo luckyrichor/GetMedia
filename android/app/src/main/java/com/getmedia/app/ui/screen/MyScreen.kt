@@ -59,13 +59,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-fun MyScreen() {
+fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val tracks by AppDatabase.get(context).trackDao().observeAll().collectAsState(initial = emptyList())
     var dialog by remember { mutableStateOf<String?>(null) }
     var showAppearance by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf<String?>(null) }
+    // 提取页的"去登录"：进来就落在登录页，而不是让用户再找一次入口。
+    LaunchedEffect(openAuth) {
+        if (openAuth) {
+            page = "auth"
+            onAuthOpened()
+        }
+    }
     val session by com.getmedia.app.account.SessionStore.current.collectAsState()
     val placeholders = com.getmedia.app.placeholder.PlaceholderCatalog.items
     val background by com.getmedia.app.data.repo.BackgroundStore.state.collectAsState()

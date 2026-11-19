@@ -65,6 +65,11 @@ class MainActivity : ComponentActivity() {
                 var tab by remember { mutableStateOf(if (shared != null) Tab.EXTRACT else Tab.LIBRARY) }
                 var openCategories by remember { mutableStateOf(false) }
 
+                // 服务器提取失败后点"去登录"：把底部导航切到"我的"，登录页由 MyScreen 自己打开。
+                LaunchedEffect(com.getmedia.app.ui.LoginRequest.pending) {
+                    if (com.getmedia.app.ui.LoginRequest.pending) tab = Tab.MY
+                }
+
                 DisposableEffect(Unit) {
                     val listener = { newIntent: Intent ->
                         sharedText(newIntent)?.let { shared = it; tab = Tab.EXTRACT }
@@ -118,7 +123,10 @@ class MainActivity : ComponentActivity() {
                                     tab = Tab.EXTRACT
                                 })
                                 Tab.EXTRACT -> ExtractScreen(prefill = shared, onSharedConsumed = { shared = null })
-                                Tab.MY -> MyScreen()
+                                Tab.MY -> MyScreen(
+                                    openAuth = com.getmedia.app.ui.LoginRequest.pending,
+                                    onAuthOpened = { com.getmedia.app.ui.LoginRequest.consume() },
+                                )
                             }
                             Box(
                                 Modifier

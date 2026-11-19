@@ -39,6 +39,7 @@ import com.getmedia.app.data.repo.PendingNotice
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.serverextract.ServerExtractClient
 import com.getmedia.app.data.serverextract.ServerMediaException
+import com.getmedia.app.data.serverextract.ServerProblem
 import com.getmedia.app.data.serverextract.serverExtractClient
 import com.getmedia.app.ui.components.SectionCard
 import com.getmedia.app.ui.components.RowDivider
@@ -65,6 +66,8 @@ data class ServerTask(
     val message: String? = null,
     /** 服务器原文，只在展开的失败卡片里作小字展示。 */
     val detail: String? = null,
+    /** 失败分类。决定卡片上给哪个出路：去登录、改用本机提取，还是只能重试。 */
+    val problem: ServerProblem? = null,
 )
 
 /**
@@ -204,6 +207,7 @@ class ServerExtractViewModel(
                             status = ServerTaskStatus.FAILED,
                             message = message,
                             detail = (e as? ServerMediaException)?.detail?.takeIf { d -> d.isNotBlank() },
+                            problem = (e as? ServerMediaException)?.problem,
                         )
                     }
                     diag.record("提取失败：$message")
@@ -244,12 +248,16 @@ class ServerExtractViewModel(
         progress.value = value
     }
 
-    class Factory(private val context: Context) : ViewModelProvider.Factory {
+    class Factory(context: Context) : ViewModelProvider.Factory {
+        // ViewModel 比 Activity 活得久（旋转、进后台都还在），只能拿 application context，
+        // 否则这里捏着的 Activity 会让它没法回收。
+        private val app: Context = context.applicationContext
+
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
             val client = serverExtractClient(
-                repository = TrackRepository(context),
-                cacheDir = context.cacheDir,
+                repository = TrackRepository(app),
+                cacheDir = app.cacheDir,
             )
             val extractor = ServerExtractor { input, kind, onProgress ->
                 client.extract(
@@ -259,7 +267,7 @@ class ServerExtractViewModel(
                     onProgress = onProgress,
                 )
             }
-            val version = context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "未知版本"
+            val version = app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "未知版本"
             return ServerExtractViewModel(extractor, ServerDiagnostics.live(version)) as T
         }
     }
@@ -270,12 +278,20 @@ class ServerExtractViewModel(
  * 链接数量由用户粘贴决定，数量很小，普通 Column 足够，也不会和外层滚动打架。
  */
 @Composable
-fun ServerExtractPanel(snackbar: SnackbarHostState) {
+fun ServerExtractPanel(
+    snackbar: SnackbarHostState,
+    onKindChange: (MediaKind) -> Unit = {},
+    onUseLocal: (String) -> Unit = {},
+    onGoLogin: () -> Unit = {},
+) {
     val context = LocalContext.current
     val vm: ServerExtractViewModel = viewModel(factory = ServerExtractViewModel.Factory(context))
     val found = vm.links
     val progress by vm.progress.collectAsState()
     val runningIndex = vm.tasks.indexOfFirst { it.status == ServerTaskStatus.RUNNING }
+
+    // 提取页的标题跟着当前模式的音频/视频选择走，选择在面板里，所以要报上去。
+    LaunchedEffect(vm.kind) { onKindChange(vm.kind) }
 
     LaunchedEffect(Unit) {
         snapshotFlow { vm.notification.value }.collect { message ->
@@ -363,7 +379,7 @@ fun ServerExtractPanel(snackbar: SnackbarHostState) {
             )
         }
         Text(
-            "服务器只保留 1 天的临时副本，之后由它自己清理。提取中途可以离开这个页面，回来仍是同一个任务。",
+            "切换页面不会中断；离开 App 太久系统可能终止下载，再次提取可从已下载的部分续传",
             style = MaterialTheme.typography.bodySmall,
             color = uiMuted(),
             lineHeight = 18.sp,
@@ -422,9 +438,18 @@ fun ServerExtractPanel(snackbar: SnackbarHostState) {
                 color = uiMuted(),
             )
             failures.forEach { (index, task) ->
-                FailureCard(task = task, enabled = !vm.busy, onRetry = { vm.retry(index) })
+                FailureCard(
+                    task = task,
+                    enabled = !vm.busy,
+                    onRetry = { vm.retry(index) },
+                    onUseLocal = { onUseLocal(task.url) },
+                    onGoLogin = onGoLogin,
+                )
             }
         }
+
+        // 和本机提取共用一个页脚：debug 包能看到这一轮的诊断行，release 包里它是空实现。
+        ExtractionDiagnostics()
     }
 }
 
@@ -552,8 +577,39 @@ private fun ServerTaskRow(index: Int, task: ServerTask, progress: ServerExtractC
     }
 }
 
+/**
+ * 失败卡片上给出的出路。
+ *
+ * 单纯"重试"对有的失败没有意义：没登录，重试一百次还是没登录；源站拒绝或服务器存储不足，
+ * 换个解析路径（本机直连）才可能过去。
+ */
+internal enum class FailureAction {
+    /** 去"我的"页登录。 */
+    LOGIN,
+
+    /** 服务器侧原因：切回本机提取，并把这条链接带过去。 */
+    LOCAL,
+
+    /** 原地重试就够了（网络抖动、限流、链接本身写错）。 */
+    RETRY,
+}
+
+internal fun failureAction(problem: ServerProblem?): FailureAction = when (problem) {
+    ServerProblem.LOGIN_REQUIRED, ServerProblem.NOT_OWNER -> FailureAction.LOGIN
+    ServerProblem.UNAVAILABLE, ServerProblem.STORAGE_FULL, ServerProblem.SERVER,
+    ServerProblem.TIMEOUT, ServerProblem.JOB_GONE,
+    -> FailureAction.LOCAL
+    else -> FailureAction.RETRY
+}
+
 @Composable
-private fun FailureCard(task: ServerTask, enabled: Boolean, onRetry: () -> Unit) {
+private fun FailureCard(
+    task: ServerTask,
+    enabled: Boolean,
+    onRetry: () -> Unit,
+    onUseLocal: () -> Unit,
+    onGoLogin: () -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
             .border(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.22f), RoundedCornerShape(16.dp))
@@ -592,18 +648,50 @@ private fun FailureCard(task: ServerTask, enabled: Boolean, onRetry: () -> Unit)
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            OutlinedButton(
-                onClick = onRetry,
-                enabled = enabled,
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-                modifier = Modifier.height(34.dp),
-                shape = RoundedCornerShape(10.dp),
-            ) {
-                Icon(Icons.Default.Download, null, Modifier.size(14.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("重试这条", fontSize = 12.sp)
+        val action = failureAction(task.problem)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (action == FailureAction.LOCAL) {
+                SmallButton(onClick = onRetry, enabled = enabled, filled = false) {
+                    Icon(Icons.Default.Download, null, Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("重试这条", fontSize = 12.sp)
+                }
+            }
+            when (action) {
+                FailureAction.LOGIN -> SmallButton(onClick = onGoLogin, enabled = enabled, filled = true) {
+                    Text("去登录", fontSize = 12.sp)
+                }
+                FailureAction.LOCAL -> SmallButton(onClick = onUseLocal, enabled = enabled, filled = true) {
+                    Text("改用本机提取", fontSize = 12.sp)
+                }
+                FailureAction.RETRY -> SmallButton(onClick = onRetry, enabled = enabled, filled = false) {
+                    Icon(Icons.Default.Download, null, Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("重试这条", fontSize = 12.sp)
+                }
             }
         }
+    }
+}
+
+/** 卡片里的小按钮：高度压到 34dp，和失败卡片的密度对齐。 */
+@Composable
+private fun SmallButton(
+    onClick: () -> Unit,
+    enabled: Boolean,
+    filled: Boolean,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val padding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+    val modifier = Modifier.height(34.dp)
+    val shape = RoundedCornerShape(10.dp)
+    if (filled) {
+        Button(onClick = onClick, enabled = enabled, contentPadding = padding, modifier = modifier, shape = shape, content = content)
+    } else {
+        OutlinedButton(onClick = onClick, enabled = enabled, contentPadding = padding, modifier = modifier, shape = shape, content = content)
     }
 }

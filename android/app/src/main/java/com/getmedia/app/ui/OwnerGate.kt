@@ -2,6 +2,7 @@ package com.getmedia.app.ui
 
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import com.getmedia.app.data.local.MediaKind
 
 /**
  * 完整版能力接缝。
@@ -26,7 +27,16 @@ interface OwnerGate {
     /**
      * 服务器提取面板：输入、四段进度、队列与失败卡片都在实现里。
      * 调用方只负责把它放进提取页的滚动容器，并复用自己的 snackbar。
+     *
+     * @param onKindChange 面板里切了音频/视频要报上来，提取页的标题得跟着当前模式的选择走。
+     * @param onUseLocal 服务器侧原因失败时的出路：切回本机提取，并把这条链接带过去。
+     * @param onGoLogin 未登录、或账号无权时的出路：切到"我的"页打开登录。
      */
     @Composable
-    fun ServerExtract(snackbar: SnackbarHostState)
+    fun ServerExtract(
+        snackbar: SnackbarHostState,
+        onKindChange: (MediaKind) -> Unit,
+        onUseLocal: (String) -> Unit,
+        onGoLogin: () -> Unit,
+    )
 }
