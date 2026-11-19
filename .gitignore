@@ -66,3 +66,5 @@ __pycache__/
 # 邮件代理方案含本机代理端口、服务器部署路径与可直接执行的验证命令：只留本地
 /docs/smtp-proxy-design.md
 /docs/deploy-mail-proxy-2026-11-18.md
+# 上线清单含服务器路径、systemd/nginx/sqlite 命令与真机验收步骤：只留本地
+/docs/metadata-backup-golive.md

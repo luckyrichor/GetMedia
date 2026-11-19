@@ -88,6 +88,21 @@ sudo install -m 640 -o root -g getmedia /opt/getmedia/deploy/env/release.json.ex
 
 协议文本改版：改 `/etc/getmedia/legal/*.md` 即生效，**必须同时改文件首部的版本号**；同版本号文本被改，服务拒绝加载并发告警（方案 §4.7）。
 
+**协议升版要单独重装这两个文件**（仓库改完不会自动同步到服务器）：
+
+```bash
+sudo install -m 640 -o root -g getmedia /opt/getmedia/docs/legal/user-agreement.md  /etc/getmedia/legal/
+sudo install -m 640 -o root -g getmedia /opt/getmedia/docs/legal/privacy-policy.md  /etc/getmedia/legal/
+```
+
+`legal.current()` 每次请求都比对文件的 `(mtime, size)`，装上去下一次请求就热加载，**不用重启**；
+新版本登记进 `legal_versions` 后，所有已同意旧版的账号 `consent_required=true`，**老 App 会收到一次重新同意**，
+同意之前不上传曲库清单备份（`BackupManager.runCheck` 直接返回）。所以协议升版要跟版本发布一起排期，
+不要在上线高峰前单独发。
+
+> 已发生过一次：隐私说明 v2（2026-11-18）新增「云端备份」一节。漏装的话服务端仍按 v1 判定，
+> 用户在 App 里同意的是 v1 文本，而 App 已经在上传清单——等于新版行为没有对应披露。**发版前先确认这两个文件是 v2。**
+
 ## 3. 服务、快照定时器、管理命令
 
 ```bash
@@ -140,7 +155,17 @@ sudo sh /opt/getmedia/deploy/bin/verify-deploy.sh after /root/gm-before.txt
 **回退**：删除那一行 include，`sudo nginx -t && sudo systemctl reload nginx`。GetAudio、GetVideo 不受影响。
 （`getmedia-http.conf` 可以保留；它只定义以 `gm_` 开头的变量与 zone，不影响其他项目。）
 
-## 5. 上线前准备期（注册暂关）
+## 5. 发布顺序与上线前准备期（注册暂关）
+
+**顺序：先服务端，再发 App。**
+
+| 顺序 | 后果 |
+|---|---|
+| 先服务端（推荐） | 备份/恢复五条路由先就绪，新 App 一发出去就能用；老 App 这时只会被要求重新同意一次协议（文本来自服务端，旧 APK 也能正常渲染），本机功能不受影响 |
+| 先发 App | 备份接口 404 → 卡片显示"服务器暂不支持"并静默跳过；服务端上线后自愈，**能跑，但白白空转一段时间** |
+
+两个方向都不会坏（客户端每次从 `GET /v2/legal` 取文本，不用 APK 里写死的版本），差别只在上线即用还是空转。
+唯一会 409 `legal_outdated` 的是"拉到文本之后、点同意之前服务端又换了版本"那个毫秒级窗口，同意页会重新拉一次文本。
 
 `registration_open` 默认关闭，陌生人此时进不来。
 
