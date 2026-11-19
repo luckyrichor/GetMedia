@@ -189,6 +189,28 @@ object BackupManager {
         return runCatching { AppDatabase.get(c).trackDao().allNow().size }.getOrDefault(0)
     }
 
+    /**
+     * 删掉云端的一份备份。误传的空清单只能靠这个清掉——
+     * 「删除云端备份」是全部删除，代价太大。
+     *
+     * 删的若正是"上次备份"（`lastId`），顺手把 id 清空，设置页才不会显示云端还有东西；
+     * `lastHash` 不动：同 [deleteCloud]，用户刚删掉的东西不该在下一个窗口被自动传回来。
+     */
+    fun deleteOne(backupId: String, onDone: (Result<Boolean>) -> Unit) {
+        val api = api ?: return onDone(Result.failure(IllegalStateException("未初始化")))
+        val p = prefs ?: return onDone(Result.failure(IllegalStateException("未初始化")))
+        val login = sessionNow()?.loginName
+            ?: return onDone(Result.failure(IllegalStateException("未登录")))
+        scope.launch {
+            val result = runCatching { api.delete(backupId) }
+            result.onSuccess {
+                p.update(login) { s -> if (s.lastId == backupId) s.copy(lastId = null) else s }
+                publish()
+            }
+            withContext(Dispatchers.Main) { onDone(result) }
+        }
+    }
+
     fun deleteCloud(onDone: (Result<Int>) -> Unit) {
         val api = api ?: return
         val p = prefs ?: return

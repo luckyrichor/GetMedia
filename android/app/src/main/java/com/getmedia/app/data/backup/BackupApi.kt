@@ -30,6 +30,9 @@ interface BackupTransport {
     suspend fun upload(body: ByteArray, appVersion: String, device: String): BackupUpload
     suspend fun list(): List<BackupItem>
     suspend fun download(backupId: String): BackupPayload
+
+    /** 删单份；返回是否真删掉了（服务端 404 会抛 [ApiException]，这里不会走到）。 */
+    suspend fun delete(backupId: String): Boolean
     suspend fun deleteAll(): Int
 }
 
@@ -94,6 +97,13 @@ class BackupApi(
             }
             BackupPayload(bytes, response.header("X-Backup-Sha256"))
         }
+    }
+
+    /** 删除单份备份。服务端对"不存在 / 不是自己的"都回 404，由调用方显示失败。 */
+    override suspend fun delete(backupId: String): Boolean = withContext(Dispatchers.IO) {
+        val url = (base + PATH + "/" + backupId).toHttpUrl()
+        val request = authorized(Request.Builder().url(url).delete())
+        JSONObject(execute(request)).optInt("deleted") > 0
     }
 
     /** 删除该账号的全部云端备份，返回删掉的份数。 */

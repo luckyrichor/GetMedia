@@ -59,6 +59,7 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
     val state = injected ?: live
     var confirmDelete by remember { mutableStateOf(false) }
     var restoreOpen by remember { mutableStateOf(false) }
+    var manageOpen by remember { mutableStateOf(false) }
 
     SectionTitle("数据备份")
     SectionCard {
@@ -124,6 +125,13 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
                     Text("从云端备份恢复", fontSize = 13.sp)
                 }
             }
+            TextButton(
+                onClick = { manageOpen = true },
+                enabled = !state.busy,
+                modifier = Modifier.padding(start = 4.dp),
+            ) {
+                Text("管理云端备份（可单份删除）", fontSize = 13.sp)
+            }
             AreaButton(
                 onClick = { confirmDelete = true },
                 enabled = !state.busy,
@@ -144,6 +152,8 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
     }
 
     if (restoreOpen) RestoreFlow(onClose = { restoreOpen = false })
+
+    if (manageOpen) CloudBackupsDialog(onClose = { manageOpen = false })
 
     // 空库点「立即备份」：先说清楚代价再传。服务器每账号只留 3 份，
     // 一份空清单挤掉的可能是唯一一份有内容的备份。

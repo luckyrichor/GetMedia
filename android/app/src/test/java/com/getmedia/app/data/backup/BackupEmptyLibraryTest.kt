@@ -46,6 +46,7 @@ class BackupEmptyLibraryTest {
         }
 
         override suspend fun download(backupId: String): BackupPayload = BackupPayload(ByteArray(0), null)
+        override suspend fun delete(backupId: String): Boolean = true
         override suspend fun deleteAll(): Int = 0
     }
 

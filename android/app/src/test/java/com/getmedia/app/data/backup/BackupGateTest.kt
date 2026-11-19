@@ -44,6 +44,11 @@ class BackupGateTest {
             return BackupPayload(ByteArray(0), null)
         }
 
+        override suspend fun delete(backupId: String): Boolean {
+            calls.incrementAndGet()
+            return true
+        }
+
         override suspend fun deleteAll(): Int {
             calls.incrementAndGet()
             return 0

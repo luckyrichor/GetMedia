@@ -151,4 +151,22 @@ class BackupApiTest {
         val error = assertThrows(ApiException::class.java) { runBlocking { api.download("bkp_x") } }
         assertEquals(404, error.status)
     }
+
+    /** 单份删除走 `DELETE /account/metadata-backups/{id}`，不能把全部删掉。 */
+    @Test fun deleteOneHitsTheIdPath() = runBlocking {
+        server.enqueue(json("""{"deleted":1}"""))
+
+        assertTrue(api.delete("bkp_a"))
+
+        val req = server.takeRequest()
+        assertEquals("DELETE", req.method)
+        assertEquals("/getmedia/api/account/metadata-backups/bkp_a", req.path)
+        assertEquals("tok-123", req.getHeader("X-GetMedia-Session"))
+    }
+
+    @Test fun deleteOneMissingIs404() {
+        server.enqueue(json("""{"detail":"备份不存在","code":"backup_not_found"}""", 404))
+        val error = assertThrows(ApiException::class.java) { runBlocking { api.delete("bkp_gone") } }
+        assertEquals(404, error.status)
+    }
 }

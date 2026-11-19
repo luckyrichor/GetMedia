@@ -199,4 +199,36 @@ class BackupCardRenderTest {
         rule.onNodeWithText("空备份", substring = true).performClick()
         org.junit.Assert.assertTrue("空备份不应可被选中", picked.isEmpty())
     }
+
+    /** 管理云端备份：每份一行、每行一个删除；空备份也要标出来。 */
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun cloudBackupListHasPerItemDelete() {
+        val deleted = mutableListOf<String>()
+        val items = cloud + BackupItem("bkp_empty", 12, 0, 1_763_600_000, "Redmi K70")
+        rule.setContent {
+            GetMediaTheme(darkTheme = false) {
+                Box(Modifier.width(360.dp).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    androidx.compose.material3.Surface(
+                        Modifier.padding(16.dp),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                    ) {
+                        Column(Modifier.padding(20.dp)) {
+                            Text("云端备份", style = MaterialTheme.typography.titleLarge)
+                            androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
+                            CloudBackupsContent(items, false, null, null) { deleted += it.id }
+                        }
+                    }
+                }
+            }
+        }
+        saveShot("backup-cloud-list")
+
+        rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("空备份", substring = true).assertIsDisplayed()
+        rule.onAllNodesWithText("删除").assertCountEquals(items.size)
+
+        rule.onAllNodesWithText("删除")[0].performClick()
+        org.junit.Assert.assertEquals(listOf("bkp_new"), deleted)
+    }
 }

@@ -33,6 +33,7 @@ class BackupThrottleTest {
 
         override suspend fun list(): List<BackupItem> = emptyList()
         override suspend fun download(backupId: String): BackupPayload = BackupPayload(ByteArray(0), null)
+        override suspend fun delete(backupId: String): Boolean = false
         override suspend fun deleteAll(): Int = 0
     }
 
