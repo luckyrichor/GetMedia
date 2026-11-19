@@ -83,8 +83,11 @@ object ExportPlan {
         if (bytes <= 0L) 0L else (bytes * (100 + MARGIN_PERCENT) + 99) / 100
 
     /**
-     * 空间判定。`available <= 0` 视为"provider 给不出"（云盘常见），走 [SpaceVerdict.UNKNOWN]，
-     * 由确认页提示"无法预估，仍需继续？"，而不是当成"空间不足"直接拦死。
+     * 空间判定。`available <= 0` 视为"provider 给不出"（云盘常见），走 [SpaceVerdict.UNKNOWN]。
+     *
+     * UNKNOWN **不拦**：确认页只显示"无法确认剩余空间，导出时若空间不足会自动中止"，
+     * 不禁用"开始导出"，也不再弹二次确认（`docs/export-plan.md` §5.3）。
+     * 真的写到一半空间不足时由 [ExportWriter.Outcome.noSpace] 让整批中止。
      */
     fun spaceCheck(required: Long, available: Long): SpaceVerdict = when {
         available <= 0L -> SpaceVerdict.UNKNOWN
@@ -127,7 +130,9 @@ object ExportPlan {
     }
 
     /**
-     * 生成待写清单：分类与命名都确定，但**不去重名**——重名要查目标目录，属于写入阶段（节点 C）。
+     * 生成待写清单：分类与命名都确定，同名只在**同一份清单内**去重。
+     * 与目标目录里已有文件的重名要查目录，落在写入阶段——[ExportWriter.write] 取
+     * `childNames(dir)` 后交给 [ExportNaming.uniqueName] 加序号，这里不查、也不预留序号。
      */
     fun items(
         tracks: List<ExportTrack>,

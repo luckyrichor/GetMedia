@@ -1,6 +1,7 @@
 package com.getmedia.app.ui.screen
 
 import android.Manifest
+import android.net.Uri
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,7 +32,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,10 +45,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.getmedia.app.data.export.ExportNaming
 import com.getmedia.app.data.export.ExportPlan
+import com.getmedia.app.data.export.ExportController
 import com.getmedia.app.data.export.ExportPrefs
 import com.getmedia.app.data.export.ExportSession
 import com.getmedia.app.data.export.ExportTrack
-import com.getmedia.app.data.export.ExportWriter
 import com.getmedia.app.data.export.SafExportTarget
 import com.getmedia.app.data.export.SafGrants
 import com.getmedia.app.ui.components.uiAccentContainer
@@ -56,30 +56,34 @@ import com.getmedia.app.ui.components.uiMuted
 import com.getmedia.app.ui.formatSize
 import com.getmedia.app.ui.ownerGate
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * 导出确认页（节点 B）：分类计数 → 选目录 → 文件夹名 → 高级选项 → 空间三态 → 开始导出。
+ * 导出确认页（节点 B）+ 进度与摘要（节点 C）。
  *
- * 一屏之内同时承担"确认 → 进度 → 摘要"三个阶段，因为节点 B 不启前台服务：
- * 导出在页面自己的协程里跑，进度就地显示；节点 C 把执行体换成 `ExportService` 后，
- * 这里只剩确认与展示。
+ * 执行体是 [ExportService]：本文件只收集参数、把目录交给 [ExportController]，然后观察它推过来的状态。
+ * 因此页面被关掉不影响导出——进度还在通知里，重进这个页面能接回同一份会话。
  *
  * 三条硬约束都落在这个文件里：
- * 1. 目录必须持久化授权成功才开始（一次性授权进不了后台）；
+ * 1. 目录必须持久化授权成功才开始（一次性授权进不了后台服务）；
  * 2. 空间**查不到**时只提示"无法确认剩余空间"，不拦；只有算出"明确不足"才禁用开始；
  * 3. 本机缺文件的那一块只经 `ownerGate.ExportMissingNotice` 渲染，main 不持有那句文案。
  */
 @Composable
-fun ExportSheet(tracks: List<ExportTrack>, onDismiss: () -> Unit) {
+fun ExportSheet(
+    tracks: List<ExportTrack>,
+    onDismiss: () -> Unit,
+    /** 仅测试用：预置一个"已授权、已探测"的目录，跳过 SAF 交互，用来拍 320 dp 窄屏的版式。 */
+    preview: ExportPreview? = null,
+) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
 
-    val rememberedTree = remember { ExportPrefs.lastTree(context) }
-    var tree by remember { mutableStateOf(rememberedTree?.takeIf { SafGrants.isPersisted(context, it) }) }
-    var treeLost by remember { mutableStateOf(rememberedTree != null && tree == null) }
+    val rememberedTree = remember { preview?.tree ?: ExportPrefs.lastTree(context) }
+    var tree by remember {
+        mutableStateOf(preview?.tree ?: rememberedTree?.takeIf { SafGrants.isPersisted(context, it) })
+    }
+    var treeLost by remember { mutableStateOf(preview == null && rememberedTree != null && tree == null) }
     var folder by remember { mutableStateOf(ExportPrefs.lastFolder(context) ?: ExportPrefs.defaultFolder()) }
     var byType by remember { mutableStateOf(ExportPrefs.byType(context)) }
     var byUploader by remember { mutableStateOf(ExportPrefs.byUploader(context)) }
@@ -89,11 +93,10 @@ fun ExportSheet(tracks: List<ExportTrack>, onDismiss: () -> Unit) {
     var useExisting by remember { mutableStateOf(false) }
     var skipIds by remember { mutableStateOf(emptySet<Long>()) }
     var notice by remember { mutableStateOf<String?>(null) }
-    var session by remember { mutableStateOf<ExportSession?>(null) }
-    var runState by remember { mutableStateOf<ExportSession.State?>(null) }
     val folderFocus = remember { FocusRequester() }
 
-    LaunchedEffect(session) { session?.state?.collect { runState = it } }
+    // 会话与状态住在 ExportController 里：重进这个页面能接回正在跑的导出
+    val runState = ExportController.state
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -131,12 +134,14 @@ fun ExportSheet(tracks: List<ExportTrack>, onDismiss: () -> Unit) {
         ExportNaming.sanitize(it, ExportNaming.MAX_FOLDER_CHARS, ExportNaming.MAX_FOLDER_BYTES)
     }
 
-    var rootNames by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var available by remember { mutableStateOf<Long?>(null) }
-    var leftovers by remember { mutableStateOf(0) }
+    var rootNames by remember { mutableStateOf(preview?.rootNames ?: emptySet()) }
+    var available by remember { mutableStateOf(preview?.available) }
+    var leftovers by remember { mutableStateOf(preview?.leftovers ?: 0) }
     val dirPaths = remember(items) { items.map { it.dirs }.distinct() }
 
     LaunchedEffect(tree, dirPaths) {
+        // 预览模式已经喂过探测结果，不再碰真实 provider
+        if (preview != null) return@LaunchedEffect
         val uri = tree ?: return@LaunchedEffect
         available = null
         val probe = withContext(Dispatchers.IO) {
@@ -163,30 +168,25 @@ fun ExportSheet(tracks: List<ExportTrack>, onDismiss: () -> Unit) {
 
     fun start() {
         val uri = tree ?: return
-        if (!SafGrants.isPersisted(context, uri)) {
+        if (preview == null && !SafGrants.isPersisted(context, uri)) {
             tree = null
             treeLost = true
             notice = "目录授权已失效，请重新选择"
             return
         }
-        // 通知权限只在第一次点开始时问一次；拒绝不改流程
+        // 通知权限只在第一次点开始时问一次；拒绝不改流程（服务照跑，只是通知看不见）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !ExportPrefs.notifyAsked(context)) {
             ExportPrefs.markNotifyAsked(context)
             notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         ExportPrefs.remember(context, uri, folder.trim(), byType, byUploader, withUploader, withDate)
-        val fresh = ExportSession(items, ExportWriter(SafExportTarget(context.contentResolver, uri)))
-        session = fresh
-        runState = ExportSession.State.Running(items.size, 0, 0, "")
-        scope.launch { fresh.run() }
+        if (!ExportController.start(context, items, uri)) {
+            notice = "已有导出在进行中"
+        }
     }
 
     fun retryFailed() {
-        val current = session ?: return
-        val ids = current.retryIds
-        if (ids.isEmpty()) return
-        runState = ExportSession.State.Running(ids.size, 0, 0, "")
-        scope.launch { current.run(ids) }
+        if (!ExportController.retry(context)) notice = "没有可重试的项"
     }
 
     val running = runState is ExportSession.State.Running
@@ -205,7 +205,8 @@ fun ExportSheet(tracks: List<ExportTrack>, onDismiss: () -> Unit) {
                 if (st.failed > 0) append(" · 失败 ${st.failed}")
             }
         },
-        onDismiss = { if (running) session?.cancel() else onDismiss() },
+        // 关掉浮层不打断导出：服务和通知还在跑，重进这个页面能接回同一份会话
+        onDismiss = onDismiss,
         confirmText = when {
             running -> "取消导出"
             settled -> "完成"
@@ -217,8 +218,11 @@ fun ExportSheet(tracks: List<ExportTrack>, onDismiss: () -> Unit) {
         },
         onConfirm = {
             when {
-                running -> session?.cancel()
-                settled -> onDismiss()
+                running -> ExportController.cancel()
+                settled -> {
+                    ExportController.clear()
+                    onDismiss()
+                }
                 else -> start()
             }
         },
@@ -228,13 +232,13 @@ fun ExportSheet(tracks: List<ExportTrack>, onDismiss: () -> Unit) {
             is ExportSession.State.Finished -> SummaryBody(
                 results = st.results,
                 interrupted = null,
-                retryCount = session?.retryIds?.size ?: 0,
+                retryCount = ExportController.session?.retryIds?.size ?: 0,
                 onRetry = ::retryFailed,
             )
             is ExportSession.State.Interrupted -> SummaryBody(
                 results = st.results,
                 interrupted = st,
-                retryCount = session?.retryIds?.size ?: 0,
+                retryCount = ExportController.session?.retryIds?.size ?: 0,
                 onRetry = ::retryFailed,
             )
             else -> {
@@ -377,6 +381,20 @@ fun ExportSheet(tracks: List<ExportTrack>, onDismiss: () -> Unit) {
 }
 
 private data class Probe(val names: Set<String>, val available: Long, val leftovers: Int)
+
+/**
+ * 仅测试用：确认页的预置状态。
+ *
+ * JVM 里搭不出真实的 SAF provider（也没有持久化授权），但 320 dp 窄屏 + 200% 字体这种版式问题
+ * 必须能自动化。传入它以后，页面不再探测真实目录，也不读本机偏好。
+ */
+data class ExportPreview(
+    val tree: Uri,
+    /** 目标可用字节；null 表示 provider 查不到（"无法确认剩余空间"那一态）。 */
+    val available: Long? = null,
+    val rootNames: Set<String> = emptySet(),
+    val leftovers: Int = 0,
+)
 
 @Composable
 private fun RunningBody(st: ExportSession.State.Running) {

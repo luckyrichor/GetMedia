@@ -162,6 +162,18 @@ class ExportWriterTest {
     }
 
     @Test
+    fun cancelledWriteDeletesThePartAndIsNotAFailure() {
+        val target = FakeTarget(cancelOnWrite = true)
+        val outcome = ExportWriter(target).write(item(), source(10), stop = { true })
+
+        assertTrue("取消不算失败", outcome.reason == null)
+        assertTrue("取消要能被会话认出来", outcome.cancelled)
+        assertFalse(outcome.ok)
+        assertTrue("半成品必须删掉，目录里不留东西", target.present().isEmpty())
+        assertEquals(1, target.deleted.size)
+    }
+
+    @Test
     fun mimeComesFromExtension() {
         val target = FakeTarget()
         ExportWriter(target).write(item(title = "片", format = "webm"), source(4))
@@ -176,6 +188,8 @@ class ExportWriterTest {
         private val shortWrite: Boolean = false,
         private val securityOnCreate: Boolean = false,
         private val noSpaceOnWrite: Boolean = false,
+        /** 写循环里的检查点返回 true：模拟用户点了取消。 */
+        private val cancelOnWrite: Boolean = false,
     ) : ExportTarget {
 
         val created = mutableListOf<String>()
@@ -208,9 +222,13 @@ class ExportWriterTest {
             return FakeDoc(name)
         }
 
-        override fun write(doc: ExportTarget.Doc, source: File): Long {
+        override fun write(doc: ExportTarget.Doc, source: File, stop: () -> Boolean): Long {
             writes += 1
             val handle = doc as FakeDoc
+            if (cancelOnWrite && stop()) {
+                files.remove(handle.name)
+                throw WriteCancelled()
+            }
             if (failOnWrite > 0 && writes == failOnWrite) {
                 files.remove(handle.name)
                 throw IOException("write failed")

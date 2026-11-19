@@ -14,12 +14,31 @@ import kotlin.math.sin
 /** Uses only synthetic negative IDs and fixture files; never deletes a user's tracks. */
 class BatchDeleteInstrumentation : Instrumentation() {
     private var mode = "test"
-    override fun onCreate(arguments: Bundle?) { super.onCreate(arguments); mode = arguments?.getString("mode") ?: "test"; start() }
+    private var count = 24
+    private var megabytes = 16
+    override fun onCreate(arguments: Bundle?) {
+        super.onCreate(arguments)
+        mode = arguments?.getString("mode") ?: "test"
+        count = arguments?.getString("count")?.toIntOrNull() ?: 24
+        megabytes = arguments?.getString("mb")?.toIntOrNull() ?: 16
+        start()
+    }
     override fun onStart() {
         val report = Bundle()
         try {
             runBlocking {
                 val context = targetContext
+                // 批量导出的端到端素材：只铺/清 -9100xxxx 区间的合成行，供真机手工跑导出
+                if (mode == "seedExport" || mode == "cleanExport") {
+                    val db = AppDatabase.get(context)
+                    withContext(Dispatchers.IO) {
+                        if (mode == "seedExport") ExportFixtures.seed(context, db, count, megabytes)
+                        else ExportFixtures.clean(context, db, count)
+                    }
+                    val left = ExportFixtures.ids(count).count { db.trackDao().byId(it) != null }
+                    report.putString("stream", "Export fixtures $mode done, tracks=$left\n")
+                    return@runBlocking
+                }
                 if (mode == "diagnostics") {
                     // 这里只验手机直提取：服务器提取页在 full 源码集，androidTest 要为 free 一起编译，
                     // 引用它会把这个类拖进 free 的测试编译单元。

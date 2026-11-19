@@ -29,8 +29,14 @@ interface ExportTarget {
     /** 在 [dir] 下建一个空文件；失败抛 [IOException]。 */
     fun createDocument(dir: Dir, mimeType: String, name: String): Doc
 
-    /** 把 [source] 全量写进 [doc]，返回实际写入字节数。 */
-    fun write(doc: Doc, source: File): Long
+    /**
+     * 把 [source] 全量写进 [doc]，返回实际写入字节数。
+     *
+     * [stop] 在每个缓冲块之间被问一次：为真就抛 [WriteCancelled]（用户取消 / 到时限 / 被中断）。
+     * 为什么要在这里开口子：SAF 的写是一次阻塞 `copyTo`，不插检查点的话大文件要整份写完
+     * 才会响应取消，用户点"取消"后看到几十秒没反应，临时文件也一直躺着。
+     */
+    fun write(doc: Doc, source: File, stop: () -> Boolean = { false }): Long
 
     /**
      * 改名。provider 不支持（`renameDocument` 返回 null）或抛异常都返回 `false`，
@@ -44,3 +50,11 @@ interface ExportTarget {
     /** 目标可用字节数；查不到返回 -1（云盘常见），由调用方按"无法确认"处理。 */
     fun availableBytes(): Long
 }
+
+/**
+ * 写入中途被叫停。
+ *
+ * 继承 [IOException] 是为了让"写不进去"的 catch 也能兜住它；[ExportWriter] 会先单独捕获这个类型，
+ * 走"删掉半成品、不记失败"的路径——取消不是失败，不该出现在摘要的失败列表里。
+ */
+class WriteCancelled : IOException("write cancelled")

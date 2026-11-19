@@ -36,8 +36,12 @@ class ExportSessionTest {
     private fun item(id: Long, file: File?): ExportPlan.Item =
         ExportPlan.Item(track = track(id, file), dirs = emptyList(), fileName = "曲目 $id.m4a")
 
-    private fun newSession(items: List<ExportPlan.Item>, target: FakeTarget): ExportSession =
-        ExportSession(items, ExportWriter(target), io = Dispatchers.Unconfined)
+    private fun newSession(
+        items: List<ExportPlan.Item>,
+        target: FakeTarget,
+        clock: () -> Long = { 0L },
+    ): ExportSession =
+        ExportSession(items, ExportWriter(target), io = Dispatchers.Unconfined, clock = clock)
 
     @Test
     fun systemTimeoutLeavesInterruptedStateWithRetry() = runBlocking {
@@ -53,9 +57,11 @@ class ExportSessionTest {
         state as ExportSession.State.Interrupted
         assertEquals(ExportSession.Reason.SYSTEM_TIMEOUT, state.reason)
         assertEquals("导出被系统中断，可重试失败项", state.reason.text)
-        assertEquals(1, state.results.count { it.status == ExportSession.Status.DONE })
-        assertEquals(2, state.notRun)
-        assertEquals(setOf(2L, 3L), session.retryIds)
+        // 中断发生在第一项写到一半：这一项不算完成，进"未执行"等重试
+        assertEquals(0, state.results.count { it.status == ExportSession.Status.DONE })
+        assertEquals(3, state.notRun)
+        assertEquals(setOf(1L, 2L, 3L), session.retryIds)
+        assertTrue("被中断的项不能留下半成品", target.present().isEmpty())
         // 被中断的项不能记成失败，否则摘要会骗人
         assertTrue(state.results.none { it.status == ExportSession.Status.FAILED })
     }
@@ -71,7 +77,8 @@ class ExportSessionTest {
         val state = session.state.value as ExportSession.State.Interrupted
         assertEquals(ExportSession.Reason.USER_CANCEL, state.reason)
         assertEquals("已取消导出", state.reason.text)
-        assertEquals(setOf(2L), session.retryIds)
+        assertEquals(setOf(1L, 2L), session.retryIds)
+        assertTrue("取消时当前项的半成品必须删掉", target.present().isEmpty())
     }
 
     @Test
@@ -136,6 +143,76 @@ class ExportSessionTest {
         assertTrue(state.results.single().rewritten)
     }
 
+    @Test
+    fun timeLimitStopsWithItsOwnWording() = runBlocking {
+        var now = 0L
+        lateinit var session: ExportSession
+        val target = FakeTarget(onWrite = { nth -> if (nth == 2) now = 10_000L })
+        session = newSession(
+            listOf(item(1L, source("a.m4a")), item(2L, source("b.m4a")), item(3L, source("c.m4a"))),
+            target,
+            clock = { now },
+        )
+
+        session.run(deadlineMs = 5_000L)
+
+        val state = session.state.value as ExportSession.State.Interrupted
+        assertEquals(ExportSession.Reason.TIME_LIMIT, state.reason)
+        assertEquals("导出时间过长，已主动收尾，可重试失败项", state.reason.text)
+        assertEquals(1, state.results.count { it.status == ExportSession.Status.DONE })
+        assertEquals(setOf(2L, 3L), session.retryIds)
+        assertEquals("第 2 项的临时文件要删掉，只留第 1 项的成品", setOf("曲目 1.m4a"), target.present())
+    }
+
+    /**
+     * 三条收尾路径（通知取消 / Android 15 onTimeout / 5 小时自保护）留下的东西必须一模一样：
+     * 已完成项保留、当前项不记结果、剩余项进重试、目标目录里不留半成品。
+     * 区别只允许在 [ExportSession.Reason] 的文案上。
+     */
+    @Test
+    fun allStopPathsLeaveTheSameShape() = runBlocking {
+        suspend fun shape(reason: ExportSession.Reason): Triple<List<Pair<Long, ExportSession.Status>>, Int, Set<String>> {
+            var now = 0L
+            lateinit var session: ExportSession
+            val target = FakeTarget(
+                onWrite = { nth ->
+                    if (nth == 2) {
+                        when (reason) {
+                            ExportSession.Reason.USER_CANCEL -> session.cancel()
+                            ExportSession.Reason.SYSTEM_TIMEOUT -> session.interrupt(reason)
+                            ExportSession.Reason.TIME_LIMIT -> now = 9_999L
+                            ExportSession.Reason.ABORTED -> Unit
+                        }
+                    }
+                },
+            )
+            val tag = reason.name.lowercase()
+            session = newSession(
+                listOf(item(1L, source("a-$tag.m4a")), item(2L, source("b-$tag.m4a")), item(3L, source("c-$tag.m4a"))),
+                target,
+                clock = { now },
+            )
+
+            session.run(deadlineMs = if (reason == ExportSession.Reason.TIME_LIMIT) 5_000L else null)
+
+            val state = session.state.value as ExportSession.State.Interrupted
+            assertEquals(reason, state.reason)
+            assertTrue("停止路径不该产生失败项：${state.results}", state.results.none { it.status == ExportSession.Status.FAILED })
+            return Triple(state.results.map { it.id to it.status }, state.notRun, target.present())
+        }
+
+        val cancelled = shape(ExportSession.Reason.USER_CANCEL)
+        val timedOut = shape(ExportSession.Reason.SYSTEM_TIMEOUT)
+        val selfLimited = shape(ExportSession.Reason.TIME_LIMIT)
+
+        assertEquals(cancelled, timedOut)
+        assertEquals(cancelled, selfLimited)
+        // 具体长什么样也要钉住，否则三条一起错也会"一致地通过"
+        assertEquals(listOf(1L to ExportSession.Status.DONE), cancelled.first)
+        assertEquals(2, cancelled.second)
+        assertEquals(setOf("曲目 1.m4a"), cancelled.third)
+    }
+
     /** 只记调用次数与成败的假目标。 */
     private class FakeTarget(
         private val renameSupported: Boolean = true,
@@ -155,10 +232,17 @@ class ExportSessionTest {
             return FakeDoc(name)
         }
 
-        override fun write(doc: ExportTarget.Doc, source: File): Long {
+        override fun write(doc: ExportTarget.Doc, source: File, stop: () -> Boolean): Long {
             writes += 1
             onWrite(writes)
             val handle = doc as FakeDoc
+            // 检查点放在"已经写了一点"之后：模拟真实写循环里每 64 KiB 问一次，
+            // 这样取消发生在这一项中途，而不是"刚好写完"
+            files[handle.name] = 0L
+            if (stop()) {
+                files.remove(handle.name)
+                throw WriteCancelled()
+            }
             if (writes == noSpaceOnWrite) {
                 files.remove(handle.name)
                 throw IOException("ENOSPC (No space left on device)")
@@ -179,6 +263,9 @@ class ExportSessionTest {
         }
 
         override fun availableBytes(): Long = -1L
+
+        /** 目标里剩下的文件：用来断言"半成品没有落下"。 */
+        fun present(): Set<String> = files.keys.toSet()
     }
 
     private object FakeDir : ExportTarget.Dir

@@ -6,6 +6,9 @@
     <!-- 后台播放要前台服务，否则息屏就被杀 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 批量导出：dataSync 前台服务（API 34 起该类型必须单独申请）+ 写文件时保持 CPU 不睡 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
@@ -43,5 +46,15 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!--
+            批量导出：前台服务 + 通知里的取消。
+            dataSync 在 Android 15 上有 6 小时/24 小时限额，到点系统回调 onTimeout，
+            ExportService 里已实现（置 Interrupted 后 stopSelf）。
+        -->
+        <service
+            android:name=".data.export.ExportService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

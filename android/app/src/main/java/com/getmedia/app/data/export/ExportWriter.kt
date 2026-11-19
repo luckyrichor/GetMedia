@@ -29,6 +29,8 @@ class ExportWriter(
      * @property rewritten 走了"按最终名直接重写"的降级路径。
      * @property noSpace 空间不足：这类失败没有继续跑的意义，整批中止。
      * @property abort 授权失效：后面每一项都会以同样方式失败，同样中止整批。
+     * @property cancelled 写到一半被叫停（取消 / 到时限 / 被中断）。**不算失败**：半成品已删，
+     *   这一项要留在"未执行"里等重试。
      */
     data class Outcome(
         val fileName: String?,
@@ -37,6 +39,7 @@ class ExportWriter(
         val rewritten: Boolean = false,
         val noSpace: Boolean = false,
         val abort: Boolean = false,
+        val cancelled: Boolean = false,
     ) {
         val ok: Boolean get() = reason == null && fileName != null
     }
@@ -44,7 +47,11 @@ class ExportWriter(
     /** 写不完整（字节数与源文件对不上）：provider 谎报成功、或写到一半断流。 */
     private class IncompleteWriteException : Exception()
 
-    fun write(item: ExportPlan.Item, source: File): Outcome {
+    /**
+     * @param stop 每个缓冲块之间问一次；为真就中止并删掉半成品。
+     *   服务层（节点 C）用它响应通知里的「取消」、系统超时与 5 小时时限。
+     */
+    fun write(item: ExportPlan.Item, source: File, stop: () -> Boolean = { false }): Outcome {
         if (!source.isFile) return Outcome(null, 0, ExportPlan.REASON_MISSING_LOCAL)
         val length = source.length()
         val mimeType = ExportPlan.mimeOf(item.fileName.substringAfterLast('.', ""), item.track.mediaType)
@@ -68,7 +75,7 @@ class ExportWriter(
                 ?: return Outcome(null, 0, REASON_TOO_MANY)
 
             temp = target.createDocument(dir, mimeType, tempName())
-            val written = target.write(temp, source)
+            val written = target.write(temp, source, stop)
             if (written != length) throw IncompleteWriteException()
 
             if (target.rename(temp, name)) {
@@ -81,12 +88,16 @@ class ExportWriter(
             renameUnsupported = true
             val rewritten = target.createDocument(dir, mimeType, name)
             finalDoc = rewritten
-            val bytes = target.write(rewritten, source)
+            val bytes = target.write(rewritten, source, stop)
             if (bytes != length) throw IncompleteWriteException()
             target.delete(temp)
             temp = null
             finalDoc = null
             return Outcome(name, bytes, rewritten = true)
+        } catch (e: WriteCancelled) {
+            // 取消不是失败：半成品必须清掉，界面上不出现这一项（进"未执行"，可重试）
+            cleanup(temp, finalDoc)
+            return Outcome(null, 0, cancelled = true)
         } catch (e: IncompleteWriteException) {
             cleanup(temp, finalDoc)
             return Outcome(null, 0, if (renameUnsupported) REASON_RENAME_FALLBACK else REASON_INCOMPLETE)

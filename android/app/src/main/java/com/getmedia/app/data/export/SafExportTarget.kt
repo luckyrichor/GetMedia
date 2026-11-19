@@ -45,7 +45,7 @@ class SafExportTarget(
     override fun createDocument(dir: ExportTarget.Dir, mimeType: String, name: String): ExportTarget.Doc =
         DocHandle(create((dir as DirHandle).uri, mimeType, name))
 
-    override fun write(doc: ExportTarget.Doc, source: File): Long {
+    override fun write(doc: ExportTarget.Doc, source: File, stop: () -> Boolean): Long {
         val uri = (doc as DocHandle).uri
         val out = try {
             resolver.openOutputStream(uri, "w")
@@ -55,7 +55,21 @@ class SafExportTarget(
             throw IOException(e.message ?: "无法写入目标文件", e)
         } ?: throw IOException("无法写入目标文件")
         out.use { sink ->
-            source.inputStream().use { input -> return input.copyTo(sink, BUFFER_BYTES) }
+            source.inputStream().use { input ->
+                // 手写循环而不是 copyTo：取消检查要落在这块 64 KiB 的边界上，
+                // 大视频才不至于"点了取消还要等整份写完"
+                val buffer = ByteArray(BUFFER_BYTES)
+                var total = 0L
+                while (true) {
+                    if (stop()) throw WriteCancelled()
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    sink.write(buffer, 0, read)
+                    total += read
+                }
+                sink.flush()
+                return total
+            }
         }
     }
 

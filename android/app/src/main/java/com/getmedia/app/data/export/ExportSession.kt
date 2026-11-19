@@ -19,6 +19,8 @@ class ExportSession(
     val items: List<ExportPlan.Item>,
     private val writer: ExportWriter,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** 单调墙钟（毫秒）；单测注入假时钟，用来验证 5 小时时限。 */
+    private val clock: () -> Long = { System.currentTimeMillis() },
 ) {
 
     enum class Status { DONE, FAILED, SKIPPED }
@@ -33,6 +35,9 @@ class ExportSession(
 
         /** Android 15 的 dataSync 前台服务到点被系统回调 `onTimeout`。 */
         SYSTEM_TIMEOUT("导出被系统中断，可重试失败项"),
+
+        /** 服务内自保护：单次导出跑满 5 小时主动收尾，不赌系统一定回调 `onTimeout`。 */
+        TIME_LIMIT("导出时间过长，已主动收尾，可重试失败项"),
 
         /** 空间不足、目标目录授权失效等：继续跑只会制造同样的失败。 */
         ABORTED("导出已中止，可重试失败项"),
@@ -86,7 +91,7 @@ class ExportSession(
             return out
         }
 
-    /** 用户取消。当前文件会写完再停（节点 C 由服务取消协程，能更早停）。 */
+    /** 用户取消。当前这一项写到一半会被叫停并删掉半成品（[ExportTarget.write] 的 `stop` 检查点）。 */
     fun cancel() = stop(Reason.USER_CANCEL)
 
     /**
@@ -113,8 +118,11 @@ class ExportSession(
      *
      * 空间不足会中止整批（剩余项记 [Status.SKIPPED]）：provider 说没地方了，
      * 后面每一项都会以同一种方式失败，只会把摘要刷满同样的文案。
+     *
+     * @param deadlineMs 到达这个时刻就按 [Reason.TIME_LIMIT] 收尾（服务传"启动时刻 + 5 小时"）。
+     *   检查点放在每个 64 KiB 块之间，所以正在写的大文件也会被及时叫停，不用等整份写完。
      */
-    suspend fun run(only: Set<Long>? = null) {
+    suspend fun run(only: Set<Long>? = null, deadlineMs: Long? = null) {
         stopReason = null
         // 重试时保留上一轮的结果：摘要要给"成功 9 · 失败 1"的全貌，而不是只剩重试的那一项
         if (only == null) results.clear()
@@ -126,16 +134,22 @@ class ExportSession(
 
         var skipReason: String? = null
         for (item in pending) {
-            if (stopReason != null) break
+            if (shouldStop(deadlineMs)) break
             val title = item.track.displayTitle
             val fileName = item.fileName
             _state.value = State.Running(total, doneCount, failedCount, fileName)
 
-            val outcome = if (item.track.localPath.isNullOrBlank()) {
-                ExportWriter.Outcome(null, 0, ExportPlan.REASON_MISSING_LOCAL)
-            } else {
-                withContext(io) { writer.write(item, File(item.track.localPath)) }
-            }
+            val outcome =
+                if (item.track.localPath.isNullOrBlank()) {
+                    ExportWriter.Outcome(null, 0, ExportPlan.REASON_MISSING_LOCAL)
+                } else {
+                    withContext(io) {
+                        writer.write(item, File(item.track.localPath)) { shouldStop(deadlineMs) }
+                    }
+                }
+
+            // 写到一半被叫停：半成品已删，这一项算"还没跑"，留给重试，不记失败
+            if (outcome.cancelled) break
 
             results[item.track.id] = Result(
                 id = item.track.id,
@@ -168,4 +182,18 @@ class ExportSession(
 
     /** 汇总用计数（摘要页与诊断都只记这几个数，不记路径）。 */
     fun counts(): Map<Status, Int> = results.values.groupingBy { it.status }.eachCount()
+
+    /**
+     * 该不该停：取消/中断置的 [stopReason] 优先，其次是时限。
+     *
+     * 会在 IO 线程上被调用（写循环里），所以只碰 `@Volatile` 字段与线程安全的 `StateFlow`。
+     */
+    private fun shouldStop(deadlineMs: Long?): Boolean {
+        if (stopReason != null) return true
+        if (deadlineMs != null && clock() >= deadlineMs) {
+            stop(Reason.TIME_LIMIT)
+            return true
+        }
+        return false
+    }
 }

@@ -312,10 +312,44 @@
   - 服务内仍保留自保护：跑满 5 小时主动收尾给摘要，不赌系统一定回调。
 - 通知权限（API 33+）被拒：前台服务照常运行，进度只在应用内显示；不因此阻断导出。
 
+**唤醒锁：要用，且必须带超时（C 阶段结论）**
+
+前台服务只影响进程优先级与回收，**不阻止 CPU 进入 suspend**。SAF 的写是同步 IO，
+屏幕一灭、又没有别的持锁者时，写循环会停在某个 64 KiB 块上等下一次唤醒——
+用户看到的是进度条不动、通知停在 7/12，而设备其实没死。所以写文件期间持一把
+`PARTIAL_WAKE_LOCK`（`WAKE_LOCK` 是 normal 权限，清单里声明即可）：
+
+- 名字 `getmedia:export`，`setReferenceCounted(false)`；
+- **超时取 5 小时自保护 + 1 分钟余量**：即使所有收尾路径都失效，这把锁也会自己到期，
+  不留下一个永久持锁的进程；
+- 释放在跑批协程的 `finally`（正常完成 / 取消 / 中断 / 异常都走到），`onDestroy` 再兜一次。
+
+**取消要能停在半路：写入插检查点**
+
+`ExportTarget.write(doc, source, stop)` 每写一块问一次 `stop`，为真抛 `WriteCancelled`。
+没有这个检查点，取消只能等当前大文件整份写完（几十秒到几分钟），临时文件也一直躺着。
+`ExportWriter` 先单独捕获 `WriteCancelled`：删掉临时文件、**不记失败**（这一项算"没跑"，
+留在 `retryIds` 里等重试）。
+
+**三条收尾路径最终状态一致**（通知取消 / `onTimeout` / 5 小时自保护）
+
+| 路径 | 触发 | 落到 |
+|---|---|---|
+| 通知「取消」 | `PendingIntent.getService` → `ExportService` 的 `ACTION_CANCEL` | `session.cancel()` → `Reason.USER_CANCEL` |
+| 系统超时 | Android 15 `Service.onTimeout(startId, fgsType)` | `session.interrupt(SYSTEM_TIMEOUT)` + `stopSelf()` |
+| 自保护 | `run(deadlineMs = 启动时刻 + 5 小时)`，每个 64 KiB 检查点比对 | `stop(TIME_LIMIT)`（会话内部，与服务同一条退出路径） |
+
+三者都进入同一个 `State.Interrupted`：已完成项保留、当前项半成品删掉、没跑到的进 `retryIds`，
+只有 `Reason` 的文案不同。一致性由 `ExportSessionTest.allStopPathsLeaveTheSameShape` 用同一套断言钉住。
+
 ### 5.5 状态与 UI 通信
 
-- 单例 `ExportController`：`StateFlow<ExportState>`（阶段、总数、已完成、失败列表、当前文件）。
-- 服务写入，UI 收集；页面销毁不影响。退出应用（进程结束）即结束，不恢复。
+- 单例 `ExportController` 持有**会话与状态**（Compose 的 `mutableStateOf`，界面读它即订阅）：
+  `session`、`state`、`pending`（服务取走即清）、`last`（重试用）。
+- 服务跑批，把会话的 `StateFlow` 收集进 `state`；确认页只读 `ExportController.state`，
+  不再自己起协程。因此**关掉页面不影响导出**，重进确认页能接回同一份会话。
+- 重试复用同一个会话（`items` 是同一份时 `attach` 不新建）：摘要里的"成功 N"不会被重来一遍冲掉。
+- 退出应用（进程结束）即结束，不恢复；用户目录里的 `~getmedia-…part` 只提示、不删。
 
 ### 5.6 「本机没有文件」整块：OwnerGate 接缝（不得编进 free）
 
@@ -461,17 +495,22 @@ python3 tools/scan_forbidden.py heavy /tmp/gm-free
 | 29 | 会话：系统超时中断 | `interrupt(SYSTEM_TIMEOUT)` → `Interrupted`、文案「导出被系统中断，可重试失败项」、未跑项可重试 |
 | 30 | 会话：取消 / 空间不足中止 | 取消文案为「已取消导出」；空间不足时剩余项记 `SKIPPED` 而不是 `FAILED` |
 | 31 | 会话：只重试未完成项 | 已成功项不被重写，结果表累加不丢上一轮 |
+| 32 | 写入：中途取消 | 临时文件被删、`cancelled = true`、`reason == null`（取消不算失败） |
+| 33 | 会话：5 小时时限 | `deadlineMs` 到点 → `Reason.TIME_LIMIT`，当前项半成品删掉，只留已完成项 |
+| 34 | 会话：三条路径一致 | 取消 / `SYSTEM_TIMEOUT` / `TIME_LIMIT` 的结果列表、`notRun`、`retryIds`、目录残留完全相同 |
 
 ### 9.2 Robolectric / 仪器测试
 
 | # | 用例 | 断言 |
 |---|---|---|
-| 14 | 确认页在 320 dp + 字体 200% | 「开始导出」可见可点，触控 ≥48 dp（与定时缺陷同一套约束）**未做**：B 用模拟器整链路代替，C 阶段补 |
-| 15 | 目录选择返回 | 授权写入、上次目录被记住 |
-| 16 | 中途取消 | 临时文档被删除、已完成项保留 |
-| 17 | 授权撤销 | 阻止开始并提示重选 |
-| 18 | 同名冲突 | 生成 `(2)` 而不是覆盖 |
-| 19 | 通知进度与取消 | 通知动作能停止服务 |
+| 14 | 确认页在 320 dp + 字体 200% | 「开始导出」可见可点、高 ≥48 dp，亮暗各一张（`ExportSheetLayoutTest`，**已做**） |
+| 15 | 目录选择返回 | 授权写入、上次目录被记住（真机链路覆盖，见 §12.2） |
+| 16 | 中途取消 | 临时文档被删除、已完成项保留（真机 1000 项覆盖，见 §13.3） |
+| 17 | 授权撤销 | 阻止开始并提示重选（`start()` 里先 `isPersisted` 再看） |
+| 18 | 同名冲突 | 生成 `(2)` 而不是覆盖（`ExportWriterTest`） |
+| 19 | 通知进度与取消 | 通知动作能停止服务（`ExportServiceTest.cancelActionFromNotificationStopsWithCancelWording`） |
+| 20 | 系统超时 | `onTimeout` → `Interrupted(SYSTEM_TIMEOUT)` + `stopSelf`（`ExportServiceTest`） |
+| 21 | 空启动 | 没有待跑请求时不进前台、直接停（`ExportServiceTest`） |
 
 ### 9.3 产物隔离（反编译扫描，节点 C 验收）
 
@@ -505,11 +544,16 @@ free/ui/OwnerGate.kt              空实现（不渲染、无文案）（B）
 full/ui/OwnerGate.kt              转发到 ExportMissingNoticeBody（B）
 full/ui/screen/ExportMissingNoticeBody.kt  full 专属的「N 项本机没有文件 + 跳过」（B）
 ui/screen/LibraryScreenV2.kt      多选顶栏改 FlowRow 并加「导出」、播放列表/类别两个入口、sheet 接线（B）
-data/export/ExportService.kt      dataSync 前台服务 + onTimeout + 通知（C，未做）
-AndroidManifest.xml               ExportService + FOREGROUND_SERVICE_DATA_SYNC（C，未做）
+data/export/ExportController.kt   会话与状态的唯一持有者（单例，页面只观察）（C）
+data/export/ExportService.kt      dataSync 前台服务 + onTimeout + 5 小时自保护 + 唤醒锁（C）
+data/export/ExportNotifications.kt 进度/结果通知 + 「取消」PendingIntent（C）
+AndroidManifest.xml               ExportService + FOREGROUND_SERVICE_DATA_SYNC + WAKE_LOCK（C）
 tools/forbidden-heavy.txt         加「本机没有文件」「ExportMissingNoticeBody」（B）
-test/.../ExportWriterTest.kt      9.1 的 24–28（B）
-test/.../ExportSessionTest.kt     9.1 的 29–31（B）
+test/.../ExportWriterTest.kt      9.1 的 24–28 + 取消清理（B/C）
+test/.../ExportSessionTest.kt     9.1 的 29–31 + 时限与三路径一致（B/C）
+test/.../ExportServiceTest.kt     9.2 的 15–17（C，Robolectric）
+test/.../ExportSheetLayoutTest.kt 9.2 的第 14 项：320 dp + 200%（C，Robolectric）
+androidTest/.../ExportFixtures.kt 端到端素材铺设（C，经 BatchDeleteInstrumentation 的 mode 驱动）
 ```
 
 交付顺序（A → B → C，每个节点单独交付，交付时给该节点的构建/测试证据）：
@@ -520,6 +564,7 @@ test/.../ExportSessionTest.kt     9.1 的 29–31（B）
   并**真的导出 1 项走通全链路**。
   **状态：已交付（2026-11-19）**，证据见 §12。
 - **C（服务与收口）**：`ExportService`（dataSync 前台服务）+ `onTimeout` + 通知 + 取消 + 重试失败项 + 9.3 复扫。
+  **状态：已交付（2026-11-19）**，证据见 §13。
 
 ## 11. 已确认的决定（2026-11-17）
 
@@ -592,11 +637,81 @@ test/.../ExportSessionTest.kt     9.1 的 29–31（B）
 | `scan_leaks.py --all` | 通过（473 文件） |
 | 产物隔离（§5.6） | `本机没有文件` free=0 / full=1；`ExportMissingNoticeBody` free=0 / full=34 |
 
-### 12.4 已知未做
+### 12.4 当时已知未做（均已在 C 阶段处理）
 
-- `androidTest` 源码集**当前编译不过**（`BatchDeleteInstrumentation` 调了已改名的 `submitViaServer`、
-  `FirstPlaybackInstrumentation` 的 `TrackEntity` 参数错位），是本次之前就有的旧账；B 的全链路因此改用
-  UI 操作 + sha256 取证，不依赖仪器测试。修这两处另开一次提交。
-- 9.2 第 14 项（320 dp + 字体 200% 的确认页）尚未补 Robolectric 用例，随 C 一起做。
-- 前台服务、通知、`onTimeout`、取消/重试的服务侧接线都在 C。
+- `androidTest` 源码集当时编译不过（`submitViaServer` 已改名、`TrackEntity` 参数错位）——
+  C 之前单独提交修掉（`5b191cd`），`compileFreeDebugAndroidTestKotlin` / full 同名任务都过。
+- 9.2 第 14 项（320 dp + 字体 200% 的确认页）—— C 补了 `ExportSheetLayoutTest`，见 §13.2。
+- 前台服务、通知、`onTimeout`、取消/重试的服务侧接线 —— 见 §13。
+
+---
+
+## 13. 节点 C 交付证据（2026-11-19）
+
+### 13.1 服务侧测试（Robolectric，`ExportServiceTest`）
+
+| 用例 | 钉住什么 |
+|---|---|
+| `onTimeoutInterruptsWithSystemWordingAndStopsService` | API 35 的 `onTimeout` 当场把状态置 `Interrupted(SYSTEM_TIMEOUT)`（文案「导出被系统中断，可重试失败项」），未跑项进 `retryIds`，并 `stopSelf()`——不给系统留一个不肯停的前台服务 |
+| `cancelActionFromNotificationStopsWithCancelWording` | 通知的 `ACTION_CANCEL` 回到服务后走 `session.cancel()`，文案「已取消导出」 |
+| `startWithoutPendingRequestDoesNotStartForeground` | 没有待跑请求时直接停掉，不挂空通知 |
+
+**三条路径最终状态一致**：`ExportSessionTest.allStopPathsLeaveTheSameShape` 用同一套断言跑
+`USER_CANCEL` / `SYSTEM_TIMEOUT` / `TIME_LIMIT` 三遍——结果列表、`notRun`、`retryIds`、目标目录里剩下的文件
+三者必须完全相同，并额外钉住"具体长什么样"（只留第 1 项成品、`notRun = 2`、目录里没有 `~getmedia-`），
+避免三条一起错也会"一致地通过"。
+
+**取消能停在半路**（`ExportWriterTest.cancelledWriteDeletesThePartAndIsNotAFailure`）：`stop` 返回 true 时
+临时文件被删、`Outcome.cancelled = true`、`reason == null`——取消不是失败。
+
+### 13.2 320 dp + 字体 200%（`ExportSheetLayoutTest`）
+
+模拟器改系统字号再截图容易漏，改用 Robolectric 一次跑亮暗两版，断言：
+
+- 「开始导出」**可见、可用、有点击动作、高度 ≥ 48 dp**；
+- 「无法确认剩余空间，导出时若空间不足会自动中止」与「上次导出留下 3 个临时文件」都在（滚动后可见）。
+
+截图：`docs/reports/export-c-2026-11-19/confirm-320dp-200-light.png`、`confirm-320dp-200-dark.png`。
+（测试里给 `ExportSheet` 传 `ExportPreview` 跳过 SAF 交互，否则 JVM 里拿不到持久化授权。）
+
+### 13.3 真机链路：1000 项批量导出，中途点通知「取消」
+
+环境：模拟器 `gm-p0-1`（Android 14 / API 34），free debug，素材由 `ExportFixtures` 铺 1000 项
+（500 音频 + 500 视频，各 1 MB，合计约 1020 MB），目标目录 `Download/GetMedia/C-verify`（已授权、空目录）。
+
+1. 列表详情 →「导出此列表」→ 确认页「音频 500 项 · 视频 500 项 · 共 1000 项，约 1020.0 MB」；
+2. 开始导出 → 下拉通知 →「正在导出 145/1000」+ 当前文件名（截图 `notify-running-1000.png`）；
+3. 展开通知点「取消」→ 通知变「导出已停止 / 已取消导出」（`notify-cancelled.png`）；
+4. 回到应用：摘要页「导出被中断 / 成功 191 · 失败 0 / 已取消导出 / 还有 809 项未执行 /
+   重试未完成项（809）」（`summary-interrupted.png`）。
+
+```
+目标目录成品数                    191
+目标目录 ~getmedia-*.part 残留      0
+191 + 809                         1000
+```
+
+三件事同时成立：**已完成的保留**（191 个成品）、**当前项的临时文件被删**（0 残留）、
+**没跑到的可重试**（809）。
+
+### 13.4 构建/测试/扫描
+
+| 项 | 结果 |
+|---|---|
+| `testFreeDebugUnitTest` | 255 passed（C 新增 8） |
+| `testFullDebugUnitTest` | 329 passed |
+| `lintFreeDebug` / `lintFullDebug` | 0 error / 26 warning（既有基线；新代码用 `@SuppressLint("InlinedApi")` 说明 `FOREGROUND_SERVICE_TYPE_DATA_SYNC` 是 API 29 常量） |
+| `scan_forbidden.py heavy`（源码 + free APK） | 通过 |
+| `scan_leaks.py --all` | 通过 |
+| 产物隔离（§5.6 复扫） | `本机没有文件` free=0 / full=1；`ExportMissingNoticeBody` free=0 / full=34 |
+
+C 新增的字符串（`导出被系统中断，可重试失败项`、`无法确认剩余空间`、`~getmedia-`）在两个风味里**都**有——
+导出是 main 的功能，不属于服务器接缝。
+
+### 13.5 已知未做
+
+- `targetSdk` 仍是 34，所以 Android 15 的 `dataSync` 限额当前不会真的回调 `onTimeout`；
+  方法已 override 且有测试，升级 `targetSdk` 时不用再改代码。
+- 进程被杀后不恢复队列、不删用户目录里的 `~getmedia-…part`（设计如此，见 §7）。
+- 9.4 的真机验收（用户手机）仍待用户完成。
 
