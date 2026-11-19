@@ -2,6 +2,7 @@ package com.getmedia.app.data.repo
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.getmedia.app.data.backup.BackupManager
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.CategoryEntity
 import com.getmedia.app.data.local.TrackEntity
@@ -29,14 +30,14 @@ class CategoryRepository(private val context: Context) {
             if (parent.kind == null) categories.update(parent.copy(kind = "CONTAINER"))
         }
         categories.insert(CategoryEntity(name = name.trim(), parentId = parentId))
-    }
+    }.also { BackupManager.noteWrite() }
 
     suspend fun rename(id: Long, name: String) = db.withTransaction {
         require(id != 1L) { "不能重命名系统类别" }
         require(name.isNotBlank()) { "类别名称不能为空" }
         val category = categories.byId(id) ?: error("类别不存在")
         categories.update(category.copy(name = name.trim()))
-    }
+    }.also { BackupManager.noteWrite() }
 
     suspend fun moveCategory(id: Long, parentId: Long?) = db.withTransaction {
         require(id != 1L) { "不能移动系统类别" }
@@ -52,7 +53,7 @@ class CategoryRepository(private val context: Context) {
             if (parent.kind == null) categories.update(parent.copy(kind = "CONTAINER"))
         }
         categories.update(category.copy(parentId = parentId))
-    }
+    }.also { BackupManager.noteWrite() }
 
     suspend fun moveTrack(trackId: Long, categoryId: Long) = db.withTransaction {
         require(tracks.byId(trackId) != null) { "音频不存在" }
@@ -60,7 +61,7 @@ class CategoryRepository(private val context: Context) {
         require(target.kind != "CONTAINER") { "目标类别装有子类别，不能放音频" }
         if (target.kind == null) categories.update(target.copy(kind = "LEAF"))
         tracks.move(trackId, categoryId, System.currentTimeMillis())
-    }
+    }.also { BackupManager.noteWrite() }
 
     suspend fun recordAccess(id: Long) = categories.recordAccess(id, System.currentTimeMillis())
 
@@ -90,6 +91,7 @@ class CategoryRepository(private val context: Context) {
         }
         withContext(NonCancellable + Dispatchers.Main) { PlayerHolder.removeTracks(context, deletedIds) }
         files.forEach(File::delete)
+        BackupManager.noteWrite()
         return count
     }
 

@@ -252,7 +252,13 @@ private fun ConsentPage(action: Action) {
         TextButton(onClick = { show = true }) { Text("查看协议全文") }
         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(agreed, { agreed = it }); Text("我已阅读并同意", style = MaterialTheme.typography.bodyMedium) }
         ErrorLine(action.error)
-        Button(onClick = { scope.launch { action.run { AccountService.consent(requireNotNull(legal)) } } }, enabled = agreed && legal != null && !action.busy, modifier = Modifier.fillMaxWidth()) { Text("同意并继续") }
+        Button(onClick = {
+            scope.launch {
+                // 失败多半是 409 legal_outdated：服务端文案在这之后又变了。
+                // 重新拉一份再让用户点一次，避免拿着旧哈希反复提交卡在同一个错上。
+                if (!action.run { AccountService.consent(requireNotNull(legal)) }) legal = AccountService.legal()
+            }
+        }, enabled = agreed && legal != null && !action.busy, modifier = Modifier.fillMaxWidth()) { Text("同意并继续") }
         TextButton(onClick = { scope.launch { AccountService.logout() } }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("不同意，退出登录") }
     }
     if (show) LegalDialog(legal) { show = false }

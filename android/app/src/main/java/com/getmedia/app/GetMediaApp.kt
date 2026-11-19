@@ -7,5 +7,6 @@ class GetMediaApp : Application() {
         super.onCreate()
         com.getmedia.app.data.repo.DiagnosticsStore.initialize(this)
         com.getmedia.app.account.AccountService.initialize(this)
+        com.getmedia.app.data.backup.BackupManager.initialize(this)
     }
 }

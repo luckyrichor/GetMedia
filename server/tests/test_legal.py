@@ -1,3 +1,4 @@
+import re
 import shutil
 
 import pytest
@@ -24,7 +25,10 @@ def test_legal_endpoint_shape(env):
     d = env.client.get("/v2/legal").json()["documents"]
     assert set(d) == {"user_agreement", "privacy_policy"}
     for v in d.values():
-        assert v["version"] == 1 and v["effective_date"] == "2026-10-30" and len(v["sha256"]) == 64 and "GetMedia" in v["text"]
+        # 版本号跟着 docs/legal 里的文件走（隐私说明 2026-11-18 因新增云端备份升到 v2），
+        # 这里只校验形状，避免每次改文案都要动测试。
+        assert v["version"] >= 1 and len(v["sha256"]) == 64 and "GetMedia" in v["text"]
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", v["effective_date"])
 
 
 def test_header_parse_failure_refuses_start(env):
@@ -63,9 +67,10 @@ def test_new_version_takes_effect_and_forces_reconsent(open_reg):
     env = open_reg
     t = register(env).json()["session"]["token"]
     assert env.client.get("/account/me", headers=hdr(t)).json()["consent_required"] is False
-    _bump(env, "privacy-policy.md", version=2, extra="\n新增条款\n")
+    current = env.client.get("/v2/legal").json()["documents"]["privacy_policy"]["version"]
+    _bump(env, "privacy-policy.md", version=current + 1, extra="\n新增条款\n")
     me = env.client.get("/account/me", headers=hdr(t)).json()
-    assert me["consent_required"] is True and me["legal_versions"]["privacy_policy"] == 2
+    assert me["consent_required"] is True and me["legal_versions"]["privacy_policy"] == current + 1
     env.clock.advance(301)
     assert login(env).json()["consent_required"] is True
     # 旧版本哈希注册 → legal_outdated；重新同意后恢复

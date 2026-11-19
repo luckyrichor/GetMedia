@@ -103,7 +103,13 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
     }
     PageColumn(Modifier.verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(14.dp))
-        Text("我的", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        // 外层 Surface 是透明色，contentColorFor 取不到，不显式指定在暗色下会是黑字黑底
+        Text(
+            "我的",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
         Text(
             "账号、外观、存储与诊断",
             style = MaterialTheme.typography.bodySmall,
@@ -142,6 +148,9 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
                 onClick = { dialog = "storage" },
             )
         }
+
+        // 云端只存清单（标题/类别/列表顺序），音频文件始终在本机。
+        BackupSection()
 
         SectionTitle("诊断与反馈")
         SectionCard {

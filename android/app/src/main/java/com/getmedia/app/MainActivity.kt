@@ -146,6 +146,32 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                        // 首次登录告知（设计 §8.3）：不是新的同意项，只是一次明确告知，每账号一次。
+                        val backupState by com.getmedia.app.data.backup.BackupManager.state.collectAsState()
+                        if (backupState.noticePending) {
+                            AlertDialog(
+                                onDismissRequest = { com.getmedia.app.data.backup.BackupManager.ackNotice() },
+                                title = { Text("曲库清单会备份到服务器") },
+                                text = {
+                                    Text(
+                                        "为便于重装或换机后恢复，GetMedia 会把你的曲库清单（标题、博主、类别、播放列表顺序等，" +
+                                            "不含音频文件和登录凭据）压缩后保存在服务器，每账号保留最近 3 份。" +
+                                            "可随时在「我的 → 数据备份」关闭，或删除云端备份。",
+                                    )
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = { com.getmedia.app.data.backup.BackupManager.ackNotice() }) {
+                                        Text("知道了")
+                                    }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = {
+                                        com.getmedia.app.data.backup.BackupManager.ackNotice()
+                                        tab = Tab.MY
+                                    }) { Text("去设置") }
+                                },
+                            )
+                        }
                         com.getmedia.app.ui.screen.AccountGates()
                     }
                 }
@@ -155,6 +181,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        // 曲库清单备份：进前台 5 秒后算一次指纹，之后每 10 分钟一次（设计 §5.3）。
+        com.getmedia.app.data.backup.BackupManager.onForeground()
         lifecycleScope.launch {
             // 联网失败一律静默：账号状态对一次、每天一次心跳，都不影响本地功能。
             try {
@@ -173,6 +201,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        // 用户改完就退出时也补一次检查；失败只落状态，不打扰。
+        com.getmedia.app.data.backup.BackupManager.onBackground()
         PlayerHolder.savePlayback(applicationContext, synchronous = true)
         super.onStop()
     }

@@ -2,6 +2,7 @@ package com.getmedia.app.data.repo
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.getmedia.app.data.backup.BackupManager
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.PlaylistEntity
 import com.getmedia.app.data.local.PlaylistItemEntity
@@ -17,7 +18,7 @@ class PlaylistRepository(context: Context) {
 
     suspend fun create(name: String): Long = db.withTransaction {
         dao.insert(PlaylistEntity(name = playlistName(name, dao.names())))
-    }
+    }.also { BackupManager.noteWrite() }
 
     suspend fun ensureDefault(): Long = db.withTransaction {
         dao.firstId() ?: dao.insert(PlaylistEntity(name = playlistName("", dao.names()), isDefault = true))
@@ -41,14 +42,18 @@ class PlaylistRepository(context: Context) {
         if (com.getmedia.app.player.queueReorderMoves(current, trackIds) == null) return@withTransaction false
         trackIds.forEachIndexed { index, trackId -> dao.setOrder(id, trackId, index) }
         true
-    }
+    }.also { BackupManager.noteWrite() }
 
-    suspend fun removeTrack(id: Long, trackId: Long) = dao.removeItem(id, trackId)
+    suspend fun removeTrack(id: Long, trackId: Long) {
+        dao.removeItem(id, trackId)
+        BackupManager.noteWrite()
+    }
 
     suspend fun rename(id: Long, name: String) {
         require(name.isNotBlank()) { "列表名称不能为空" }
         require(dao.byId(id) != null) { "播放列表不存在" }
         dao.rename(id, name.trim())
+        BackupManager.noteWrite()
     }
 
     suspend fun delete(id: Long) = db.withTransaction {
@@ -59,7 +64,7 @@ class PlaylistRepository(context: Context) {
             val replacement = dao.oldestId() ?: dao.insert(PlaylistEntity(name = playlistName("", dao.names()), isDefault = true))
             dao.markDefault(replacement)
         }
-    }
+    }.also { BackupManager.noteWrite() }
 
     suspend fun addTracks(playlistId: Long, trackIds: List<Long>) = db.withTransaction {
         require(dao.byId(playlistId) != null) { "播放列表不存在" }
@@ -70,7 +75,7 @@ class PlaylistRepository(context: Context) {
         dao.add(additions.mapIndexed { index, track ->
             PlaylistItemEntity(playlistId, track.id, orderIndex = start + index)
         })
-    }
+    }.also { BackupManager.noteWrite() }
 
     suspend fun addCategory(playlistId: Long, categoryId: Long) =
         addTracks(playlistId, categoryRepo.recursiveTracks(categoryId).map { it.id })

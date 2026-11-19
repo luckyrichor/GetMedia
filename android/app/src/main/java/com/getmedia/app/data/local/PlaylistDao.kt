@@ -26,6 +26,13 @@ interface PlaylistDao {
     @Query("SELECT * FROM playlist_items WHERE playlistId = :id ORDER BY orderIndex")
     suspend fun itemsNow(id: Long): List<PlaylistItemEntity>
 
+    /** 全量读取（备份快照用）：一次取完，避免按列表逐条查询。 */
+    @Query("SELECT * FROM playlists ORDER BY createdAt, id")
+    suspend fun allNow(): List<PlaylistEntity>
+
+    @Query("SELECT * FROM playlist_items")
+    suspend fun itemsAll(): List<PlaylistItemEntity>
+
     @Query("UPDATE playlist_items SET orderIndex = :position WHERE playlistId = :id AND trackId = :trackId")
     suspend fun setOrder(id: Long, trackId: Long, position: Int)
 

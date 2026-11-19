@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.room.withTransaction
+import com.getmedia.app.data.backup.BackupManager
 import com.getmedia.app.player.PlayerHolder
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.MediaKind
@@ -69,6 +70,7 @@ class TrackRepository(private val context: Context) {
         db.withTransaction {
             full.forEachIndexed { i, id -> trackDao.setSortIndex(id, i + 1L) }
         }
+        BackupManager.noteWrite()
     }
 
     suspend fun byId(id: Long): TrackEntity? = trackDao.byId(id)
@@ -79,6 +81,7 @@ class TrackRepository(private val context: Context) {
         withContext(Dispatchers.Main) {
             com.getmedia.app.player.PlayerHolder.rename(context, id, title.trim())
         }
+        BackupManager.noteWrite()
     }
 
     suspend fun remove(id: Long) { removeAll(setOf(id)) }
@@ -101,11 +104,15 @@ class TrackRepository(private val context: Context) {
                 }
             }
             withContext(Dispatchers.Main) { PlayerHolder.removeTracks(context, removed.map { it.id }.toSet()) }
+            BackupManager.noteWrite()
             removed.size
         }
     }
 
-    suspend fun setFavorite(id: Long, fav: Boolean) = trackDao.setFavorite(id, fav)
+    suspend fun setFavorite(id: Long, fav: Boolean) {
+        trackDao.setFavorite(id, fav)
+        BackupManager.noteWrite()
+    }
 
     // ---------- 提取 ----------
 
@@ -117,6 +124,8 @@ class TrackRepository(private val context: Context) {
                     withContext(Dispatchers.Main) { onDiagnostic(line) }
                 }.extract(text, kind)
                 trackDao.upsertLocal(extracted)
+                // 提取入库是清单变化的头号来源；只标脏，30 秒后统一算指纹
+                BackupManager.noteWrite()
                 extracted
             }
             withContext(Dispatchers.Main) { onDiagnostic("已加入本地媒体库") }
@@ -162,6 +171,7 @@ class TrackRepository(private val context: Context) {
                 updatedAtMs = now,
             )
             trackDao.upsertAll(listOf(record))
+            BackupManager.noteWrite()
             // 覆盖到同一行时，旧路径（例如本机剪辑副本）留着就是孤儿文件
             previousPath?.takeIf { it != dest.absolutePath }?.let { File(it).delete() }
             record
@@ -225,6 +235,7 @@ class TrackRepository(private val context: Context) {
                     updatedAtMs = now, addedAtMs = if (overwrite) original.addedAtMs else now,
                     favorite = if (overwrite) original.favorite else false)
                 try { trackDao.upsertAll(listOf(record)) } catch (e: Exception) { target.delete(); throw e }
+                BackupManager.noteWrite()
                 record
             }
             withContext(Dispatchers.Main) { PlayerHolder.edited(context, saved) }
@@ -282,6 +293,7 @@ class TrackRepository(private val context: Context) {
                         ))
                     }
                     added++
+                    BackupManager.noteWrite()
                 } finally {
                     staged.delete()
                 }

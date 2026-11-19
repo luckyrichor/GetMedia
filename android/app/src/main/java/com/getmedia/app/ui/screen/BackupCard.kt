@@ -1,0 +1,181 @@
+package com.getmedia.app.ui.screen
+
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.getmedia.app.data.backup.BackupManager
+import com.getmedia.app.data.backup.BackupPrefs
+import com.getmedia.app.ui.components.SectionCard
+import com.getmedia.app.ui.components.SectionTitle
+import com.getmedia.app.ui.components.uiAccentContainer
+import com.getmedia.app.ui.components.uiMuted
+import androidx.compose.runtime.collectAsState
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+/**
+ * 「我的 → 数据备份」（设计 §5.7）。
+ *
+ * 状态行是常驻的，不是一次性提示条：`blocked` 有值时重进设置页还在，
+ * 直到本地体积回落或内容修正后自动消失——用户不会"看了一眼就再也找不到原因"。
+ *
+ * [injected] 只给渲染测试用（Robolectric 截图）；正式界面传 null，跟 [BackupManager.state] 走。
+ */
+@Composable
+fun BackupSection(injected: BackupManager.UiState? = null) {
+    val context = LocalContext.current
+    val live by BackupManager.state.collectAsState()
+    val state = injected ?: live
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    SectionTitle("数据备份")
+    SectionCard {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(uiAccentContainer()),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Cloud, null, Modifier.size(19.dp), tint = MaterialTheme.colorScheme.primary)
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("曲库清单备份", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    statusText(state),
+                    fontSize = 12.sp,
+                    color = statusColor(state),
+                    lineHeight = 17.sp,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(
+                checked = state.enabled,
+                onCheckedChange = { BackupManager.setEnabled(it) },
+                enabled = state.loggedIn && state.blocked == null,
+            )
+        }
+
+        if (state.loggedIn) {
+            Text(
+                when {
+                    !state.enabled -> "已关闭自动备份。云端已有的备份仍保留，可以在这里删除。"
+                    state.blocked != null -> "自动备份已停止。清理到上限内或换一份能通过校验的数据后会自动恢复。"
+                    else -> "改动后自动备份，每账号保留最近 3 份；只传清单，不传音频文件。"
+                },
+                fontSize = 12.sp,
+                color = uiMuted(),
+                lineHeight = 17.sp,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                AreaButton(
+                    onClick = { BackupManager.backupNow() },
+                    enabled = state.enabled && state.blocked == null && !state.busy,
+                    modifier = Modifier.weight(1f),
+                    tone = ActionTone.CONFIRM,
+                ) {
+                    Text(if (state.busy) "正在备份…" else "立即备份", fontSize = 13.sp)
+                }
+                AreaButton(
+                    onClick = { confirmDelete = true },
+                    enabled = !state.busy,
+                    modifier = Modifier.weight(1f),
+                    tone = ActionTone.DESTRUCTIVE,
+                ) {
+                    Text("删除云端备份", fontSize = 13.sp)
+                }
+            }
+        } else {
+            Text(
+                "登录后可用备份：重装或换机时把曲库清单恢复回来。",
+                fontSize = 12.sp,
+                color = uiMuted(),
+                lineHeight = 17.sp,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+            )
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除云端备份？") },
+            text = { Text("会删掉这个账号在服务器上的全部备份（最多 3 份）。本机媒体库和文件不受影响；下次改动后若自动备份仍开启，会重新生成一份。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    BackupManager.deleteCloud { result ->
+                        val message = result.fold(
+                            onSuccess = { if (it > 0) "已删除云端备份" else "云端没有备份" },
+                            onFailure = { "删除失败，请稍后重试" },
+                        )
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
+        )
+    }
+}
+
+private fun statusText(state: BackupManager.UiState): String = when {
+    !state.loggedIn -> "登录后可用备份"
+    state.blocked == BackupPrefs.BLOCKED_TOO_LARGE -> "备份已停用：库太大（超过 512 KiB）"
+    state.blocked == BackupPrefs.BLOCKED_INVALID -> "备份已停用：上次上传的内容不合规"
+    state.unsupported -> "服务器暂不支持备份，稍后会自动再试"
+    state.busy -> "正在备份…"
+    state.dirty && state.lastAtMs > 0 -> "上次备份失败，将在下次打开时重试"
+    state.lastAtMs > 0 -> "上次备份：${state.lastTracks} 首 · ${formatBackupTime(state.lastAtMs)}"
+    else -> "还没备份过"
+}
+
+@Composable
+private fun statusColor(state: BackupManager.UiState) = when {
+    state.blocked != null -> MaterialTheme.colorScheme.error
+    state.unsupported -> MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+    state.dirty -> MaterialTheme.colorScheme.tertiary
+    else -> uiMuted()
+}
+
+private val timeFormat = DateTimeFormatter.ofPattern("M月d日 HH:mm")
+
+private fun formatBackupTime(ms: Long): String =
+    Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).format(timeFormat)
