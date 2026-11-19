@@ -110,7 +110,9 @@ class BackupEmptyLibraryTest {
         Thread.sleep(600)
 
         assertEquals("空库不应发出上传", 0, uploads.get())
-        assertEquals("不应顺带去拉云端列表", 0, listed.get())
+        // 登录后要问一次"云端有没有可恢复的备份"（见 BackupRestoreDecisionTest），
+        // 这是唯一允许的那次读；落成"以本机为准"之后就不再查了。
+        assertTrue("空库只允许一次决策查询", listed.get() <= 1)
         assertNull("空库上传被拦后不能写 lastHash", BackupPrefs(context).read("u1").lastHash)
     }
 

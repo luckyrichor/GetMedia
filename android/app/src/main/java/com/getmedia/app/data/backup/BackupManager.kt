@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import androidx.annotation.VisibleForTesting
 import com.getmedia.app.BuildConfig
+import com.getmedia.app.account.ApiException
 import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.localextract.DirectExtractor
@@ -54,6 +55,16 @@ object BackupManager {
         val noticePending: Boolean = false,
         /** 本地库为空时点了「立即备份」：等用户确认"空清单也要传"。 */
         val emptyConfirmPending: Boolean = false,
+        /**
+         * 云端有内容备份、用户还没决定是否恢复。为真时**自动备份暂停**，
+         * 设置页常驻一条提示与「去处理」入口（见 [BackupCard]）。
+         */
+        val restoreDecisionPending: Boolean = false,
+        /** 该弹决策弹窗了。用户点「稍后」之后仍 pending，只是不再弹（入口还在横幅上）。 */
+        val restoreAskVisible: Boolean = false,
+        /** 云端那份最新备份的条数与时间，弹窗与横幅要显示。 */
+        val restoreCloudTracks: Int = 0,
+        val restoreCloudAtMs: Long = 0,
     )
 
     private var context: Context? = null
@@ -73,6 +84,26 @@ object BackupManager {
     private var debounce: Job? = null
     private var redownload: RedownloadRunner? = null
 
+    /** 决策闸的结论。暂停与"本轮先不传"在界面上不一样，所以分开。 */
+    private enum class Decision { Allow, Paused, Deferred }
+
+    /**
+     * 决策查询的会话内缓存。**不落盘**：查询失败时下一次进前台要重查，
+     * 所以 [onForeground] 会清掉它；落盘会让一次网络抖动变成永久状态。
+     */
+    private var decisionLogin: String? = null
+    private var decisionOutcome: Decision = Decision.Allow
+    private val decisionLock = AtomicBoolean(false)
+
+    /** 云端最新的那份有内容的备份：等用户选「恢复 / 用本机内容 / 稍后」。 */
+    private var pendingCloudBackup: BackupItem? = null
+
+    /** 用户点过「稍后」：横幅还在，弹窗先不弹。只在本会话内有效。 */
+    private var decisionSnoozed: Boolean = false
+
+    /** 上一次发布状态时的账号；换账号要清掉内存里的决策，避免串到别人身上。 */
+    private var publishedLogin: String? = null
+
     fun initialize(context: Context) {
         if (this.context != null) return
         val app = context.applicationContext
@@ -89,8 +120,14 @@ object BackupManager {
         debounce?.cancel(); debounce = null
         context = null; prefs = null; api = null; redownload = null
         sessionOverride = null; transportOverride = null
+        decisionLogin = null; decisionOutcome = Decision.Allow
+        pendingCloudBackup = null; decisionSnoozed = false; publishedLogin = null
         _state.value = UiState()
     }
+
+    /** 只给单测：会话换成另一个账号时，真实环境靠 [SessionStore.current] 的收集回调走到 [publish]。 */
+    @VisibleForTesting
+    internal fun publishForTest() = publish()
 
     private fun sessionNow(): SessionStore.Session? = sessionOverride ?: SessionStore.current.value
 
@@ -110,6 +147,8 @@ object BackupManager {
     // ---------- 生命周期 ----------
 
     fun onForeground() {
+        // 上一次查询失败（网络）时既没传也没落决策，进前台重新查一次。
+        decisionLogin = null
         if (gate() == null) return
         scope.launch {
             delay(BackupRules.FOREGROUND_DELAY_MS)
@@ -205,6 +244,11 @@ object BackupManager {
             val result = runCatching { api.delete(backupId) }
             result.onSuccess {
                 p.update(login) { s -> if (s.lastId == backupId) s.copy(lastId = null) else s }
+                // 删掉的正是"等用户决定要不要恢复"的那份：弹窗与横幅不能再指着它。
+                if (pendingCloudBackup?.id == backupId) {
+                    clearPendingDecision()
+                    decisionLogin = null
+                }
                 publish()
             }
             withContext(Dispatchers.Main) { onDone(result) }
@@ -220,6 +264,9 @@ object BackupManager {
             result.onSuccess {
                 // 只清 id，不动 last_hash：用户刚删掉的东西不该在下一个窗口被自动传回来。
                 p.update(login) { s -> s.copy(lastId = null) }
+                // 云端都删空了，"要不要恢复"这个问题也就不存在了；下次检查会自行落成"以本机为准"。
+                clearPendingDecision()
+                decisionLogin = null
                 publish()
             }
             withContext(Dispatchers.Main) { onDone(result) }
@@ -231,6 +278,116 @@ object BackupManager {
         val login = sessionNow()?.loginName ?: return
         p.update(login) { it.copy(noticeShown = true) }
         publish()
+    }
+
+    // ---------- 登录后的恢复决策 ----------
+
+    /**
+     * 云端有备份、用户还没说要不要恢复时，自动备份先停。
+     *
+     * 只挡"本地为空"不够：重装后用户先随手加了一两首，本机 2 首、云端 128 首，
+     * 指纹一变就会上传；服务端每账号只留 3 份，几轮下来有内容的备份全被"一两首"挤掉。
+     * 所以第一次登录（该账号还没决策过）先问一句，用户选了才继续。
+     *
+     * 三种结论：
+     * - [Decision.Allow]：不用问（云端没有有内容的备份 / 已经决策过 / 服务端没这套接口），照常往下走；
+     * - [Decision.Paused]：云端有内容备份，等用户选（上传暂停，但界面照常可用）；
+     * - [Decision.Deferred]：这一轮查不动（网络失败、并发），**本轮不上传也不落决策**，下次进前台再查。
+     *
+     * 只在用户已同意隐私说明之后调用——`consentRequired` 时 [gate] 早就拦住了。
+     */
+    private suspend fun resolveRestoreDecision(login: String, manual: Boolean): Decision {
+        val p = prefs ?: return Decision.Allow
+        val api = api ?: return Decision.Allow
+
+        // 用户点「立即备份」= 明确要用本机这份，不再问。是决策，不是绕过。
+        if (manual) {
+            p.update(login) { it.copy(restoreDecision = BackupPrefs.RESTORE_KEEP_LOCAL) }
+            clearPendingDecision()
+            DiagnosticsStore.event("数据备份", "用户点「立即备份」，按本机内容继续，不再询问恢复", true)
+            return Decision.Allow
+        }
+
+        pendingCloudBackup?.let { return Decision.Paused }
+        if (decisionLogin == login) return decisionOutcome
+        // 另一个检查正在查：这一轮先不传，等它落下结论。
+        if (!decisionLock.compareAndSet(false, true)) return Decision.Deferred
+
+        return try {
+            val items = api.list()
+            val newest = items.filter { it.tracks > 0 }.maxByOrNull { it.createdAt }
+            decisionLogin = login
+            if (newest != null) {
+                pendingCloudBackup = newest
+                decisionSnoozed = false
+                decisionOutcome = Decision.Paused
+                DiagnosticsStore.event(
+                    "数据备份",
+                    "云端有 ${newest.tracks} 首的备份，等用户决定恢复还是以本机为准；自动备份暂停",
+                    true,
+                )
+                Decision.Paused
+            } else {
+                // 云端没有可恢复的东西（空列表，或只有空备份）：不必打扰用户。
+                p.update(login) { it.copy(restoreDecision = BackupPrefs.RESTORE_KEEP_LOCAL) }
+                clearPendingDecision()
+                decisionOutcome = Decision.Allow
+                Decision.Allow
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            decisionLogin = login
+            if (error is ApiException && error.status == 404) {
+                // 服务端还没有这套接口：按既有规则静默（上传侧同样落到 unsupported），
+                // 不弹窗、不落决策，部署后自愈。
+                p.update(login) { it.copy(unsupported = true) }
+                decisionOutcome = Decision.Allow
+                Decision.Allow
+            } else {
+                // 网络或服务端故障：保守处理，这一轮不上传、不落决策。
+                decisionOutcome = Decision.Deferred
+                DiagnosticsStore.event(
+                    "数据备份",
+                    "读取云端备份失败（${error.message ?: "网络不可用"}），本轮不上传，下次进前台再查",
+                    false,
+                )
+                Decision.Deferred
+            }
+        } finally {
+            decisionLock.set(false)
+        }
+    }
+
+    /** 用户选「用本机内容」：以本机为准，立刻解禁并传一份，让云端反映这次决定。 */
+    fun keepLocalNow() {
+        val p = prefs ?: return
+        val login = sessionNow()?.loginName ?: return
+        p.update(login) { it.copy(restoreDecision = BackupPrefs.RESTORE_KEEP_LOCAL) }
+        clearPendingDecision()
+        decisionLogin = login
+        decisionOutcome = Decision.Allow
+        DiagnosticsStore.event("数据备份", "用户选择以本机为准，自动备份恢复", true)
+        publish()
+        if (gate() == null) return
+        scope.launch { runCheck("恢复决策：用本机内容", force = true) }
+    }
+
+    /** 用户选「稍后」：弹窗收起，但决策没做，自动备份仍然暂停（横幅上有「去处理」）。 */
+    fun snoozeRestoreDecision() {
+        decisionSnoozed = true
+        publish()
+    }
+
+    /** 横幅上的「去处理」：把弹窗叫回来。 */
+    fun showRestoreDecision() {
+        decisionSnoozed = false
+        publish()
+    }
+
+    private fun clearPendingDecision() {
+        pendingCloudBackup = null
+        decisionSnoozed = false
     }
 
     // ---------- 恢复 ----------
@@ -250,11 +407,17 @@ object BackupManager {
         val api = api ?: return Result.failure(IllegalStateException("未初始化"))
         val c = context ?: return Result.failure(IllegalStateException("未初始化"))
         val session = sessionNow() ?: return Result.failure(IllegalStateException("未登录"))
-        return runCatching {
+        val result = runCatching {
             val payload = api.download(backupId)
             val snapshot = SnapshotReader.read(payload.gzip, payload.sha256)
             val result = RestoreService(AppDatabase.get(c)).restore(snapshot)
-            prefs?.update(session.loginName) { it.copy(dirty = true) }
+            // 恢复成功即决策：以云端那份为准，自动备份随即解禁（同设置页入口与新弹窗）。
+            prefs?.update(session.loginName) {
+                it.copy(dirty = true, restoreDecision = BackupPrefs.RESTORE_RESTORED)
+            }
+            clearPendingDecision()
+            decisionLogin = session.loginName
+            decisionOutcome = Decision.Allow
             DiagnosticsStore.event(
                 "数据备份",
                 "已恢复：新增 ${result.addedTracks} 首，跳过 ${result.skippedTracks} 首（本地已有）",
@@ -262,6 +425,9 @@ object BackupManager {
             )
             result
         }
+        // 决策与「暂停」标志都变了，界面要立刻知道（横幅与弹窗都靠它）。
+        if (result.isSuccess) publish()
+        return result
     }
 
     /** "全部重新下载"的进度源；第一次用时才建（避免启动时就打开数据库）。 */
@@ -298,9 +464,22 @@ object BackupManager {
         val session = sessionNow() ?: return publish()
         // 新版协议还没重新同意：先不上传，等用户看过条款。
         if (session.consentRequired) return
+
+        // 登录后先决定"云端那份要不要恢复"，再谈上传（设计 §5.3 最后一行）。
+        // 用户没选之前一律不传：本机零星几首会把云端有内容的备份挤掉。
+        val before = p.read(session.loginName)
+        if (!before.enabled || before.blocked != null) return
+        if (before.restoreDecision == BackupPrefs.RESTORE_UNKNOWN) {
+            when (resolveRestoreDecision(session.loginName, manual = force)) {
+                Decision.Paused, Decision.Deferred -> return publish()
+                Decision.Allow -> Unit
+            }
+        }
+
         if (!busy.compareAndSet(false, true)) return
 
         try {
+            // 决策可能刚落地（例如上面查完发现云端是空的），重新读一次。
             val stored = p.read(session.loginName)
             if (!stored.enabled || stored.blocked != null) return
 
@@ -392,8 +571,20 @@ object BackupManager {
         val p = prefs ?: return
         val session = sessionNow()
         if (session == null) {
+            // 退出登录：内存里的决策与"等用户选"的备份一律清掉，不能跟着走到别人身上。
+            publishedLogin = null
+            clearPendingDecision()
+            decisionLogin = null
+            decisionOutcome = Decision.Allow
             _state.value = UiState(loggedIn = false, busy = _state.value.busy)
             return
+        }
+        if (publishedLogin != session.loginName) {
+            // 换账号：同一个 App 进程里 A 的待决策不能弹在 B 的界面上。
+            publishedLogin = session.loginName
+            clearPendingDecision()
+            decisionLogin = null
+            decisionOutcome = Decision.Allow
         }
         val stored = p.read(session.loginName)
         val now = System.currentTimeMillis()
@@ -403,6 +594,8 @@ object BackupManager {
         } else {
             stored
         }
+        // 待重新同意协议时既不问也不显示：恢复决策要在同意之后（同首次登录告知）。
+        val pending = pendingCloudBackup.takeIf { !session.consentRequired }
         _state.value = UiState(
             loggedIn = true,
             enabled = s.enabled,
@@ -416,6 +609,14 @@ object BackupManager {
             throttleUntilMs = s.throttleUntilMs,
             noticePending = !s.noticeShown && !session.consentRequired,
             emptyConfirmPending = _state.value.emptyConfirmPending,
+            restoreDecisionPending = pending != null,
+            restoreAskVisible = pending != null && !decisionSnoozed,
+            restoreCloudTracks = pending?.tracks ?: 0,
+            restoreCloudAtMs = normalizeMs(pending?.createdAt ?: 0),
         )
     }
+
+    /** 服务端 `created_at` 是秒；兼容一下已经是毫秒的情况。 */
+    private fun normalizeMs(value: Long): Long =
+        if (value in 1..9_999_999_999L) value * 1000 else value
 }

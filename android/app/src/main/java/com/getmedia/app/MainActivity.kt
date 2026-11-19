@@ -64,6 +64,8 @@ class MainActivity : ComponentActivity() {
                 var shared by remember { mutableStateOf(sharedText(intent)) }
                 var tab by remember { mutableStateOf(if (shared != null) Tab.EXTRACT else Tab.LIBRARY) }
                 var openCategories by remember { mutableStateOf(false) }
+                // 决策弹窗里点「恢复」→ 打开恢复流程（与设置页入口同一套 RestoreFlow）。
+                var restoreFromDecision by remember { mutableStateOf(false) }
 
                 // 服务器提取失败后点"去登录"：把底部导航切到"我的"，登录页由 MyScreen 自己打开。
                 LaunchedEffect(com.getmedia.app.ui.LoginRequest.pending) {
@@ -171,6 +173,27 @@ class MainActivity : ComponentActivity() {
                                     }) { Text("去设置") }
                                 },
                             )
+                        }
+                        // 登录后发现云端有备份：问一次"恢复还是以本机为准"。
+                        // 排在告知**之后**——两个弹窗不叠在一起，先告知、关掉再问（设计 §5.5）。
+                        if (!backupState.noticePending && backupState.restoreAskVisible) {
+                            androidx.compose.ui.window.Dialog(
+                                onDismissRequest = { com.getmedia.app.data.backup.BackupManager.snoozeRestoreDecision() },
+                            ) {
+                                com.getmedia.app.ui.screen.RestoreDecisionSheet(
+                                    cloudTracks = backupState.restoreCloudTracks,
+                                    cloudAtMs = backupState.restoreCloudAtMs,
+                                    onRestore = {
+                                        com.getmedia.app.data.backup.BackupManager.snoozeRestoreDecision()
+                                        restoreFromDecision = true
+                                    },
+                                    onKeepLocal = { com.getmedia.app.data.backup.BackupManager.keepLocalNow() },
+                                    onLater = { com.getmedia.app.data.backup.BackupManager.snoozeRestoreDecision() },
+                                )
+                            }
+                        }
+                        if (restoreFromDecision) {
+                            com.getmedia.app.ui.screen.RestoreFlow(onClose = { restoreFromDecision = false })
                         }
                         com.getmedia.app.ui.screen.AccountGates()
                     }

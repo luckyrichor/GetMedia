@@ -33,6 +33,14 @@ class BackupPrefs(context: Context) {
          * 上次成功的 `lastAtMs` / `lastTracks` 一律不动，只多一行提示。
          */
         val throttleUntilMs: Long = 0,
+        /**
+         * 登录后"云端有备份，要不要恢复"的决策（见 [BackupManager] 的决策闸）：
+         * [RESTORE_UNKNOWN] 还没决定 / [RESTORE_RESTORED] 已恢复 / [RESTORE_KEEP_LOCAL] 以本机为准。
+         *
+         * 按登录名前缀存（同其它键），换账号不会串。未决定时自动备份暂停——
+         * 本机寥寥几首传上去，会把云端有内容的备份顶掉。
+         */
+        val restoreDecision: String = RESTORE_UNKNOWN,
     )
 
     fun read(account: String): State = State(
@@ -46,6 +54,8 @@ class BackupPrefs(context: Context) {
         blocked = prefs.getString(key(account, "blocked"), null),
         unsupported = prefs.getBoolean(key(account, "unsupported"), false),
         throttleUntilMs = prefs.getLong(key(account, "throttle_until"), 0),
+        restoreDecision = prefs.getString(key(account, "restore_decision"), RESTORE_UNKNOWN)
+            ?: RESTORE_UNKNOWN,
     )
 
     fun write(account: String, state: State) {
@@ -60,6 +70,7 @@ class BackupPrefs(context: Context) {
             .putString(key(account, "blocked"), state.blocked)
             .putBoolean(key(account, "unsupported"), state.unsupported)
             .putLong(key(account, "throttle_until"), state.throttleUntilMs)
+            .putString(key(account, "restore_decision"), state.restoreDecision)
             .apply()
     }
 
@@ -75,5 +86,14 @@ class BackupPrefs(context: Context) {
 
         /** 服务端 422：客户端组装出了它不接受的内容。 */
         const val BLOCKED_INVALID = "invalid"
+
+        /** 还没决定"云端有备份要不要恢复"：自动备份暂停，等一次性决策。 */
+        const val RESTORE_UNKNOWN = "unknown"
+
+        /** 用户从云端恢复过（设置页入口或登录弹窗）：以云端那份为准，随后照常自动备份。 */
+        const val RESTORE_RESTORED = "restored"
+
+        /** 用户选了"用本机内容"，或云端本来就没有有内容的备份：以本机为准。 */
+        const val RESTORE_KEEP_LOCAL = "keep_local"
     }
 }
