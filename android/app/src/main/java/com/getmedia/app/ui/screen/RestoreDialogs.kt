@@ -62,7 +62,8 @@ internal fun RestoreFlow(onClose: () -> Unit) {
         loading = true; error = null
         scope.launch {
             BackupManager.listCloud()
-                .onSuccess { items = it; if (it.size == 1) selected = it.first() }
+                // 只有一份且不是空备份时才默认选中；空备份选了也没东西可恢复。
+                .onSuccess { items = it; if (it.size == 1 && it.first().tracks > 0) selected = it.first() }
                 .onFailure { error = it.message ?: "读取失败，请稍后再试" }
             loading = false
         }
@@ -157,6 +158,7 @@ internal fun RestoreFlow(onClose: () -> Unit) {
             onDismiss = onClose,
             onConfirm = {
                 val target = selected ?: return@BackupPickerDialog
+                if (target.tracks <= 0) return@BackupPickerDialog
                 working = true
                 scope.launch {
                     BackupManager.restoreNow(target.id)
@@ -198,26 +200,44 @@ internal fun BackupPickerContent(
 ) {
     Column(Modifier.verticalScroll(rememberScrollState())) {
         items.forEach { item ->
+            // 0 首的备份是"空清单"：恢复它不会补回任何条目，却容易被当成"有一份备份"。
+            // 标出来并禁选，避免用户把它当成正常备份点下去。
+            val empty = item.tracks <= 0
             Row(
-                Modifier.fillMaxWidth().clickable { onSelect(item) }.padding(vertical = 8.dp),
+                Modifier.fillMaxWidth()
+                    .clickable(enabled = !empty) { onSelect(item) }
+                    .padding(vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RadioButton(selected = selected?.id == item.id, onClick = { onSelect(item) })
+                RadioButton(
+                    selected = selected?.id == item.id,
+                    onClick = { onSelect(item) },
+                    enabled = !empty,
+                )
                 Column(Modifier.padding(start = 4.dp)) {
                     Text(
-                        "${item.tracks} 首 · ${backupTime(item.createdAt)}",
+                        if (empty) "空备份 · ${backupTime(item.createdAt)}"
+                        else "${item.tracks} 首 · ${backupTime(item.createdAt)}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
+                        color = if (empty) uiMuted() else MaterialTheme.colorScheme.onSurface,
                     )
                     if (item.device.isNotBlank()) {
                         Text(item.device, fontSize = 12.sp, color = uiMuted())
+                    }
+                    if (empty) {
+                        Text("上传时本地没有条目，恢复不会带回内容", fontSize = 12.sp, color = uiMuted())
                     }
                 }
             }
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            "恢复只补本地缺少的条目，已有的标题、类别、收藏和播放列表不会被动到。",
+            if (items.isNotEmpty() && items.all { it.tracks <= 0 }) {
+                "云端只有空备份，没有可恢复的内容。"
+            } else {
+                "恢复只补本地缺少的条目，已有的标题、类别、收藏和播放列表不会被动到。"
+            },
             fontSize = 12.sp, color = uiMuted(), lineHeight = 17.sp,
         )
     }

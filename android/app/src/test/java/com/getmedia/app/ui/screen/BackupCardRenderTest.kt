@@ -18,6 +18,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.getmedia.app.data.backup.BackupItem
@@ -167,5 +168,35 @@ class BackupCardRenderTest {
         renderPicker(dark = true)
         saveShot("restore-dark-picker")
         rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
+    }
+
+    /** 0 首的备份要标成「空备份」并且点不动——它能被选中就会让人以为"恢复了一份备份"。 */
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun pickerMarksEmptyBackupAndIgnoresTap() {
+        val picked = mutableListOf<BackupItem>()
+        val withEmpty = cloud + BackupItem("bkp_empty", 12, 0, 1_763_600_000, "Redmi K70")
+        rule.setContent {
+            GetMediaTheme(darkTheme = false) {
+                Box(Modifier.width(360.dp).fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    androidx.compose.material3.Surface(
+                        Modifier.padding(16.dp),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
+                    ) {
+                        Column(Modifier.padding(20.dp)) {
+                            Text("选择要恢复的备份", style = MaterialTheme.typography.titleLarge)
+                            androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
+                            BackupPickerContent(withEmpty, null) { picked += it }
+                        }
+                    }
+                }
+            }
+        }
+        saveShot("restore-picker-empty")
+
+        rule.onNodeWithText("空备份", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("上传时本地没有条目", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("空备份", substring = true).performClick()
+        org.junit.Assert.assertTrue("空备份不应可被选中", picked.isEmpty())
     }
 }
