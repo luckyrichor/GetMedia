@@ -5,6 +5,9 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.getmedia.app.account.ApiException
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.TrackEntity
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,6 +45,20 @@ class BackupThrottleTest {
             loginName = "u1", token = "tok", expiresAt = 0, deviceId = null, consentRequired = false,
         )
         BackupManager.resetForTest()
+        // 空库现在一律不上传（`BackupEmptyLibraryTest`），这条用例要验的是 429 的处理，
+        // 所以先放一首，让请求真的发出去。
+        runBlocking {
+            AppDatabase.get(context).trackDao().upsertAll(
+                listOf(
+                    TrackEntity(
+                        id = -9003, platform = "bilibili", videoId = "BVthrottle", title = "限频用",
+                        uploader = null, durationSec = 1.0, audioBytes = 10, audioFormat = "m4a",
+                        sourceUrl = "https://www.bilibili.com/video/BVthrottle", favorite = false,
+                        localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
+                    ),
+                ),
+            )
+        }
         prefs = BackupPrefs(context)
         prefs.write(session.loginName, state)
         BackupManager.transportOverride = RateLimitedTransport()
@@ -58,6 +75,11 @@ class BackupThrottleTest {
 
     @After
     fun tearDown() {
+        runBlocking {
+            val dao = AppDatabase.get(context).trackDao()
+            val ids = dao.allNow().map { it.id }
+            if (ids.isNotEmpty()) dao.deleteByIds(ids)
+        }
         BackupManager.resetForTest()
     }
 
