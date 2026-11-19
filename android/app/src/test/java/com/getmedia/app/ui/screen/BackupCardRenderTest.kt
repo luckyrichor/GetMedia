@@ -14,7 +14,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -94,6 +96,15 @@ class BackupCardRenderTest {
         render(normal.copy(blocked = BackupPrefs.BLOCKED_TOO_LARGE))
         saveShot("backup-light-blocked")
         rule.onNodeWithText("备份已停用：库太大（超过 512 KiB）").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun throttledShowsWaitHintInsteadOfFailure() {
+        render(normal.copy(throttleUntilMs = System.currentTimeMillis() + 600_000))
+        saveShot("backup-light-throttled")
+        rule.onNodeWithText("刚备份过，请 10 分钟后再试").assertIsDisplayed()
+        rule.onAllNodesWithText("上次备份失败", substring = true).assertCountEquals(0)
     }
 
     @Test

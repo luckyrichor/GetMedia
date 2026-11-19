@@ -28,6 +28,11 @@ class BackupPrefs(context: Context) {
         val blocked: String? = null,
         /** 上次上传遇到 404（服务端还没有这套接口）。只影响显示，不阻止下次重试。 */
         val unsupported: Boolean = false,
+        /**
+         * 被服务端限频到什么时候（ms）；0 表示没有。**这不是失败**：
+         * 上次成功的 `lastAtMs` / `lastTracks` 一律不动，只多一行提示。
+         */
+        val throttleUntilMs: Long = 0,
     )
 
     fun read(account: String): State = State(
@@ -40,6 +45,7 @@ class BackupPrefs(context: Context) {
         noticeShown = prefs.getBoolean(key(account, "notice_shown"), false),
         blocked = prefs.getString(key(account, "blocked"), null),
         unsupported = prefs.getBoolean(key(account, "unsupported"), false),
+        throttleUntilMs = prefs.getLong(key(account, "throttle_until"), 0),
     )
 
     fun write(account: String, state: State) {
@@ -53,6 +59,7 @@ class BackupPrefs(context: Context) {
             .putBoolean(key(account, "notice_shown"), state.noticeShown)
             .putString(key(account, "blocked"), state.blocked)
             .putBoolean(key(account, "unsupported"), state.unsupported)
+            .putLong(key(account, "throttle_until"), state.throttleUntilMs)
             .apply()
     }
 

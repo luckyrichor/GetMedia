@@ -48,6 +48,8 @@ object BackupManager {
         val blocked: String? = null,
         val unsupported: Boolean = false,
         val busy: Boolean = false,
+        /** 被服务端限频到什么时候（ms）；>0 且未过期时状态行显示"刚备份过"。 */
+        val throttleUntilMs: Long = 0,
         /** 首次登录的告知还没弹过。 */
         val noticePending: Boolean = false,
     )
@@ -307,8 +309,11 @@ object BackupManager {
                     // 服务端还没有这套接口：静默，下次照常再试（部署后自愈）
                     BackupOutcome.Unsupported -> p.update(session.loginName) { it.copy(unsupported = true) }
 
-                    // 限频与网络失败：留着脏标记，等下一个窗口
-                    BackupOutcome.RateLimited -> p.update(session.loginName) { it.copy(dirty = true) }
+                    // 限频：不是失败。上一次成功的记录（时间/条数/id）一律不动，
+                    // 只记一个"到点之前别再说失败"的时间点，供设置页显示。
+                    BackupOutcome.RateLimited -> p.update(session.loginName) {
+                        it.copy(throttleUntilMs = System.currentTimeMillis() + BackupRules.WINDOW_MS)
+                    }
                     is BackupOutcome.Failed -> p.update(session.loginName) { it.copy(dirty = true) }
 
                     // 会话失效交给账号模块；已完成不会从这里出来
@@ -331,7 +336,14 @@ object BackupManager {
             _state.value = UiState(loggedIn = false, busy = _state.value.busy)
             return
         }
-        val s = p.read(session.loginName)
+        val stored = p.read(session.loginName)
+        val now = System.currentTimeMillis()
+        // 限频窗口已过就清掉提示，否则状态行会一直停在"刚备份过"。
+        val s = if (stored.throttleUntilMs in 1 until now) {
+            p.update(session.loginName) { it.copy(throttleUntilMs = 0) }
+        } else {
+            stored
+        }
         _state.value = UiState(
             loggedIn = true,
             enabled = s.enabled,
@@ -342,6 +354,7 @@ object BackupManager {
             blocked = s.blocked,
             unsupported = s.unsupported,
             busy = _state.value.busy,
+            throttleUntilMs = s.throttleUntilMs,
             noticePending = !s.noticeShown && !session.consentRequired,
         )
     }

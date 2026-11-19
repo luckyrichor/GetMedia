@@ -173,6 +173,8 @@ private fun statusText(state: BackupManager.UiState): String = when {
     state.blocked == BackupPrefs.BLOCKED_INVALID -> "备份已停用：上次上传的内容不合规"
     state.unsupported -> "服务器暂不支持备份，稍后会自动再试"
     state.busy -> "正在备份…"
+    // 限频不是失败：上一次成功的记录还在，这里只提示"等一会儿"，不覆盖上次时间
+    state.throttleUntilMs > 0 -> "刚备份过，请 10 分钟后再试"
     state.dirty && state.lastAtMs > 0 -> "上次备份失败，将在下次打开时重试"
     state.lastAtMs > 0 -> "上次备份：${state.lastTracks} 首 · ${formatBackupTime(state.lastAtMs)}"
     else -> "还没备份过"
@@ -182,6 +184,7 @@ private fun statusText(state: BackupManager.UiState): String = when {
 private fun statusColor(state: BackupManager.UiState) = when {
     state.blocked != null -> MaterialTheme.colorScheme.error
     state.unsupported -> MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+    state.throttleUntilMs > 0 -> uiMuted()
     state.dirty -> MaterialTheme.colorScheme.tertiary
     else -> uiMuted()
 }
