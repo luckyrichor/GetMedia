@@ -92,6 +92,10 @@ object ExportController {
     /** 摘要页点"完成"：清掉状态，下次打开确认页从干净的开始。 */
     fun clear() {
         if (running) return
+        reset()
+    }
+
+    private fun reset() {
         watcher?.cancel()
         watcher = null
         session = null
@@ -129,13 +133,19 @@ object ExportController {
      *
      * 服务侧的 `onTimeout` 与通知取消只依赖"当前会话"，不需要真的写文件，
      * 装上假目标的会话就能验证这两条入口。
+     *
+     * @param displayState 界面要显示的进度。界面读的是 [state]（由服务的 watcher 推上来），
+     *   测试里没有服务，就把它直接摆成 Running，省得为了"看到进度"去起一个真线程。
      */
-    internal fun installForTest(target: ExportSession) {
+    internal fun installForTest(target: ExportSession, displayState: ExportSession.State? = null) {
         watcher?.cancel()
         watcher = null
         session = target
-        state = target.state.value
+        state = displayState ?: target.state.value
         pending = null
         last = null
     }
+
+    /** 单测用：界面可能停在 Running 上（[installForTest] 摆进去的），清场时不该被 `running` 拦住。 */
+    internal fun forceClearForTest() = reset()
 }

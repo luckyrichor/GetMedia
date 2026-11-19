@@ -61,6 +61,9 @@ internal fun MusicSheet(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 24.dp),
             shape = RoundedCornerShape(26.dp),
             color = uiCardColor(),
+            // uiCardColor() 不在配色方案里，contentColorFor 会给 Unspecified，正文会退回黑色——
+            // 深色模式下「正在写入」「高级」这些没显式给色的文字就看不见了。
+            contentColor = MaterialTheme.colorScheme.onSurface,
             tonalElevation = 0.dp,
             shadowElevation = 18.dp,
         ) {
