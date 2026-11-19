@@ -28,4 +28,8 @@ val ownerGate: OwnerGate = object : OwnerGate {
         onUseLocal: (String) -> Unit,
         onGoLogin: () -> Unit,
     ) = Unit
+
+    /** 免费版没有服务器库，也就不存在"本机缺文件还能补下载"这件事：不渲染、无文案。 */
+    @Composable
+    override fun ExportMissingNotice(missingCount: Int, onSkip: () -> Unit) = Unit
 }

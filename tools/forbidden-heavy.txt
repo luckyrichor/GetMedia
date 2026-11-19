@@ -51,3 +51,7 @@ re:(?i)owner[-_ ]?(page|route|panel|dashboard)
 从服务器提取
 服务器提取中
 服务器地址
+
+# 导出确认页里「N 项本机没有文件」整块：只有 full 有服务器库，free 产物里不得出现这句与实现类名
+本机没有文件
+ExportMissingNoticeBody

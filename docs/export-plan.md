@@ -1,9 +1,10 @@
 # 批量导出方案（音频 / 视频，可新建文件夹）
 
 **状态：已确认（2026-11-17），按 A → B → C 三个节点推进，每个节点单独交付**
+**进度**：A 已交付（2026-11-17）／**B 已交付（2026-11-19）**／C 待做
 **范围**：仅 Android `main`（free 与 full 共用）。不涉及服务端、不涉及网页。
 **前提**：本机功能，不申请「管理所有文件」，不依赖旧存储权限，不转码。
-**已定的 6 个决定**：见 §11（整表导出、子文件夹两项、只加序号、记住上次目录、日期写「入库日期」、不做导出清单）。
+**已定的 13 个决定**：见 §11（原有 7 条 + B 阶段补定的 6 条）。
 
 ---
 
@@ -81,16 +82,20 @@
 │                                                            │
 │ ▸ 高级（默认收起）                                         │
 │   ☐ 按类型分子文件夹（音频/、视频/）                       │
-│   ☐ 文件名带博主名       ☐ 文件名带入库日期                │
+│   ☐ 按博主分子文件夹   ☐ 文件名带博主名                    │
+│   ☐ 文件名带入库日期                                       │
 │                                                            │
-│ ⚠ 其中 2 项尚未下载到本机   [先下载再导出] [跳过这 2 项]   │  ← full 专属，OwnerGate 接缝（§5.6）
-│ ⚠ 目标可用空间不足（需 486 MB，可用 120 MB）               │  ← 预估不足时阻止开始
+│ ⚠ 上次导出留下 3 个临时文件（~getmedia-…part），可手动删除 │  ← 只提示，不替用户删
+│ ⚠ 其中 2 项本机没有文件        [跳过这 2 项]               │  ← full 专属，只有跳过（§5.6）
+│ ⓘ 无法确认剩余空间，导出时若空间不足会自动中止             │  ← 查不到额度时只提示，不拦
+│ ⚠ 目标可用空间不足（需 486 MB，可用 120 MB）               │  ← 只有算出来明确不足才禁用开始
 │                                                            │
 │                              [取消]      [开始导出]        │
 └────────────────────────────────────────────────────────────┘
 ```
 
-「先下载再导出」这个动作本身也在 full 实现（走 full 的远程仓库），`main` 只拿到回调。
+「先下载再导出」**本期不做**：full 里也只给「跳过这 N 项」，不摆一个按了会失败的按钮。
+补下载再导出记进 `docs/p0-2-sync-design.md` §17，等按需下载落地后再接回这一段。
 
 ### 1.5 进度
 
@@ -267,17 +272,25 @@
 
 - 全流式，不整文件读进内存；不先复制到 app 私有目录（源文件本来就在私有目录）。
 - 临时名以 `~` 开头且带 `.part`：用户中途看目录一眼就知道是半成品，且不会撞上正常文件名。
-- **rename 降级**：部分云盘 provider 的 `renameDocument` 返回 null。此时降级为「按最终名直接创建 → 写完校验 → 失败则 delete」，并把该项标注为「目标不支持改名，已直接写入」。降级只在 owner 目录（非共享目录）尝试。
+- **rename 降级（唯一触发条件：`rename` 返回 false 或抛非 `SecurityException` 异常）**：
+  在同一目录按**最终名**重新 `createDocument` → 重新写一遍 → 校验字节数 → 删掉临时文件。
+  重写也失败则**两个半成品都删掉**，该项记「目标目录不支持改名，直接写入也失败」。
+  `SecurityException` 不走降级：授权没了，在只读目录里重写一次只会再失败一次，直接中止整批。
+  实现见 `data/export/ExportWriter.kt`，假 sink 模拟"不支持改名"的用例见 `ExportWriterTest`。
 - 目标目录被撤销授权（`SecurityException`/`FileNotFoundException`）→ 立即中止整批（不是逐项失败）：继续跑只会制造 N 条同样的失败。
 
 ### 5.3 空间预估
 
 - 需求侧：选中项 `audioBytes`（空则用文件实际长度）求和，加上 2% 余量。
 - 目标侧：`DocumentsContract` 查 `COLUMN_AVAILABLE_BYTES`。
-- 三种结果：
+- 三种结果（**"无法判断"这一态必须真实存在**，不能退化成二值）：
   - 可用 ≥ 需求 → 放行。
-  - 可用 < 需求 → 阻止开始，给出「需 X，可用 Y」。
-  - 提供商返回 -1/0（云盘常见）→ 提示「无法预估目标空间，仍需继续？」确认后放行，运行中遇到 `ENOSPC` 记该文件失败并中止整批（空间类失败没有继续的意义）。
+  - 可用 < 需求 → 禁用「开始导出」，给出「需 X，可用 Y」。
+  - 提供商返回 -1/0（云盘常见）→ 只显示「无法确认剩余空间，导出时若空间不足会自动中止」，**不拦**、不再弹二次确认；
+    运行中遇到 `ENOSPC` 记该文件失败并中止整批（空间类失败没有继续的意义，§5.5 的 `Outcome.noSpace`）。
+- 实测：Android 14 模拟器的 `ExternalStorageProvider` 对 `Root.COLUMN_AVAILABLE_BYTES` 就返回 -1，
+  所以这条不是理论分支，是默认会走到的路径（截图见 `docs/reports/export-b-2026-11-19/sheet-confirm.png`）。
+- 列名在 `DocumentsContract.Root` 里，`Document` 没有同名常量；`Document` 只有 `COLUMN_SIZE`。
 
 ### 5.4 前台服务
 
@@ -287,7 +300,16 @@
 - 单线程串行：云盘 provider 并发写容易 429/写冲突，且逐项串行才能给出准确的"第几项"。
 - 通知节流 500 ms（每项都刷新会让通知栏狂闪）；进度用 `setProgress(total, done, false)` + 小字当前文件名。
 - 通知「取消」→ `stopSelf()` + job cancel。
-- Android 15+ 的 `dataSync` 6 小时/24 小时限额：导出远达不到，但服务内仍加自保护（超过 5 小时自动收尾并给摘要），避免被系统 `onTimeout` 直接杀掉丢状态。
+- **Android 15 前台服务超时（必须在 C 落地）**：`dataSync` 类型在 Android 15 上有 6 小时/24 小时限额，
+  到点系统回调 `Service.onTimeout(startId, fgsType)`；不处理就会崩。做法：
+  `override fun onTimeout(...)` → `session.interrupt(Reason.SYSTEM_TIMEOUT)`（立刻把状态置为 `Interrupted`、
+  文案「导出被系统中断，可重试失败项」）→ `stopSelf()`。
+  - **targetSdk 现状**：`targetSdk = 34`、`minSdk = 26`。系统限额只对 targetSdk ≥ 35 的应用生效，
+    所以当前装上不会真的回调；但 `onTimeout` 是 API 35 新增方法，**`compileSdk` 已从 34 升到 35**
+    （AGP 8.3.2 下编译通过，运行时行为不变），C 阶段才能 override。
+  - 状态机与文案在 B 就已经就位并有测试（`ExportSessionTest.systemTimeoutLeavesInterruptedStateWithRetry`），
+    C 的 `onTimeout` 只是把这两步接起来。
+  - 服务内仍保留自保护：跑满 5 小时主动收尾给摘要，不赌系统一定回调。
 - 通知权限（API 33+）被拒：前台服务照常运行，进度只在应用内显示；不因此阻断导出。
 
 ### 5.5 状态与 UI 通信
@@ -295,67 +317,69 @@
 - 单例 `ExportController`：`StateFlow<ExportState>`（阶段、总数、已完成、失败列表、当前文件）。
 - 服务写入，UI 收集；页面销毁不影响。退出应用（进程结束）即结束，不恢复。
 
-### 5.6 「服务器库未下载」整块：OwnerGate 接缝（不得编进 free）
+### 5.6 「本机没有文件」整块：OwnerGate 接缝（不得编进 free）
 
-这一行是**服务器库能力**，只允许通过 `OwnerGate` 接缝出现在 full。做法与现有 `batchExtract` 完全一致：
+这一行只对 full 有意义（免费版没有服务器库，也没有补下载这件事），所以整块走 `OwnerGate` 接缝，
+做法与现有 `batchExtract` 一致——**main 里不出现这句文案，free 的实现是空函数**：
 
 ```kotlin
-// main/ui/OwnerGate.kt —— 只声明，不实现；main 里没有任何服务器库文案与调用
+// main/ui/OwnerGate.kt —— 只声明，不实现
 interface OwnerGate {
-    val batchExtract: Boolean
-    @Composable fun BatchExtract(onBack: () -> Unit)
+    // ……既有成员
 
     /**
-     * 导出确认页里的「N 项尚未下载到本机」整块（提示 + 先下载再导出 / 跳过）。
-     * free：空实现，不渲染任何东西、不持有任何文案；
-     * full：查服务器库与本地文件、显示文案、执行下载。
-     * 下载完成或跳过时回调，父级据此调整本次导出的选择集。
+     * 导出确认页里「其中 N 项在本机找不到文件」整块。
+     * free：空实现，不渲染、不持有任何文案；
+     * full：显示条数并给「跳过这 N 项」——本期只做跳过，不做"先下载再导出"。
      */
-    @Composable fun ExportServerNotice(
-        selectedIds: List<Long>,
-        onResolved: (skipIds: Set<Long>) -> Unit,
-    )
+    @Composable fun ExportMissingNotice(missingCount: Int, onSkip: () -> Unit)
 }
 ```
 
 ```kotlin
 // free/ui/OwnerGate.kt —— 空实现，不 import 任何 data/creator、data/remote 类
-@Composable override fun ExportServerNotice(selectedIds: List<Long>, onResolved: (Set<Long>) -> Unit) = Unit
+@Composable override fun ExportMissingNotice(missingCount: Int, onSkip: () -> Unit) = Unit
 
 // full/ui/OwnerGate.kt —— 转发到 full 源码集里的真实实现
-@Composable override fun ExportServerNotice(selectedIds: List<Long>, onResolved: (Set<Long>) -> Unit) =
-    ExportServerNoticeBody(selectedIds, onResolved)   // 该类/函数只存在于 full
+@Composable override fun ExportMissingNotice(missingCount: Int, onSkip: () -> Unit) =
+    ExportMissingNoticeBody(missingCount, onSkip)   // 该类/函数只存在于 full
 ```
 
 约束（实现时逐条守）：
 
-1. `main` 里**不出现**「尚未下载到本机」「先下载再导出」这两句文案，也不出现服务器库仓库类；确认页只调用接缝方法。
+1. `main` 里**不出现**「本机没有文件」这句文案（连注释都不写，扫描是按子串命中源码的），也不出现服务器库仓库类。
 2. free 的接缝实现是空函数体，**没有文案、没有服务器调用**；它允许被调用，但不渲染、不产生副作用。
-3. full 的实现里才允许出现文案、服务器库查询与「先下载」动作（下载走 full 的远程仓库）。
-4. free 的导出流程因此永远是"本机文件 → 目标目录"，不依赖网络。
+3. full 的实现里才允许出现文案；本期 full 也只有「跳过这 N 项」，按钮不会失败。
+4. free 的导出流程因此永远是"本机文件 → 目标目录"，不依赖网络；本机文件缺失的条目在摘要里记失败。
 
-**产物验证（反编译扫描，节点 C 的验收项）**
+**产物验证（反编译扫描，节点 B 已做一次，节点 C 再跑一次）**
 
 ```sh
-# 1) 两个风味各出一版 release（free 需要本机 ~/.android-keys/getmedia.properties）
-sh android/gradlew -p android assembleFreeRelease assembleFullRelease
+# 1) 两个风味各出一版（debug 即可看清字符串；release 用来做最终交付）
+sh android/gradlew -p android assembleFreeDebug assembleFullDebug
 
-# 2) 解压 dex 与资源
+# 2) 解压 dex
 rm -rf /tmp/gm-free /tmp/gm-full
-unzip -q -o android/app/build/outputs/apk/free/release/*.apk -d /tmp/gm-free
-unzip -q -o android/app/build/outputs/apk/full/release/*.apk -d /tmp/gm-full
+unzip -q -o android/app/build/outputs/apk/free/debug/app-free-debug.apk -d /tmp/gm-free
+unzip -q -o android/app/build/outputs/apk/full/debug/app-full-debug.apk -d /tmp/gm-full
 
-# 3) 文案与 full 实现的标记串：free 必须 0 命中，full 必须命中
-count() { grep -ac "$1" "$2"/classes*.dex 2>/dev/null | awk -F: '{n+=$NF} END{print n+0}'; }
-for s in "尚未下载到本机" "先下载再导出" "ExportServerNoticeBody"; do
-  printf '%-26s free=%s full=%s\n' "$s" "$(count "$s" /tmp/gm-free)" "$(count "$s" /tmp/gm-full)"
-done
+# 3) 按字节计数（macOS 的 grep -c 对二进制会漏，别用它数中文串）
+python3 - <<'EOF'
+import glob
+for flavor in ("free", "full"):
+    for mark in ("本机没有文件", "ExportMissingNoticeBody"):
+        n = sum(open(f, "rb").read().count(mark.encode()) for f in glob.glob(f"/tmp/gm-{flavor}/classes*.dex"))
+        print(flavor, mark, n)
+EOF
 
-# 4) 既有重型词表（把上面两句加进 tools/forbidden-heavy.txt 后，这一步同时守住源码与产物）
+# 4) 既有重型词表（这两项已加进 tools/forbidden-heavy.txt，同时守住源码与产物）
+python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free web/public-app web/shared
 python3 tools/scan_forbidden.py heavy /tmp/gm-free
 ```
 
-判定：第 3 步 free 三列全为 0、full 全 ≥1；第 4 步通过。`OwnerGate` 的**方法名**本身会出现在 free 的 dex 里（接口在 `main`），这是允许的——接口声明不是实现；被禁止的是文案、服务器类与真实实现。
+**2026-11-19 实测**：`本机没有文件` free=0 / full=1，`ExportMissingNoticeBody` free=0 / full=34；
+源码与 APK 的 heavy 扫描均通过。`OwnerGate` 的**方法名**本身会出现在 free 的 dex 里（接口在 `main`），
+这是允许的——接口声明不是实现。
 
 ### 5.7 不做什么
 
@@ -378,7 +402,7 @@ python3 tools/scan_forbidden.py heavy /tmp/gm-free
 | 12–12L（31–32） | 无差异 | — |
 | 13（33） | `POST_NOTIFICATIONS` 运行时权限（应用已声明）；拒绝后通知不可见 | 权限被拒时改走应用内进度，不阻断 |
 | 14（34） | 前台服务必须声明类型 + `FOREGROUND_SERVICE_DATA_SYNC`，否则 `startForeground` 直接抛异常 | 清单声明 + `ServiceCompat.startForeground` 显式传类型 |
-| 15+（35+） | `dataSync` 前台服务 6 小时/24 小时限额 | 服务内 5 小时自保护；本期 targetSdk 34 不触发系统限制 |
+| 15+（35+） | `dataSync` 前台服务 6 小时/24 小时限额，到点回调 `Service.onTimeout` | `compileSdk` 已升 35、C 阶段实现 `onTimeout`（置 `Interrupted` + `stopSelf`）；`targetSdk` 仍 34，所以当前不会真被系统回调；服务内另有 5 小时自保护 |
 
 另：`DocumentsContract` 的 `createDocument/renameDocument/deleteDocument` 自 API 21 起可用；`DocumentFile` 只是薄封装，重命名一律用 `DocumentsContract.renameDocument`（`DocumentFile.renameTo` 在部分 provider 上直接返回 false）。
 `COLUMN_AVAILABLE_BYTES` 自 API 21 存在，但很多 provider 返回 -1，所以按 5.3 的三态处理。
@@ -393,9 +417,10 @@ python3 tools/scan_forbidden.py heavy /tmp/gm-free
 | 目标目录只读 / 云盘受限 | 首项即失败 | 中止整批，提示换目录 |
 | 授权被撤销 | 首项抛 `SecurityException` | 中止，提示「目录授权已失效，请重新选择」 |
 | 空间不足 | 预估阶段或运行中 | 预估不足则拦在确认页；运行中不足则中止并给已完成数 |
-| 同名冲突 | 自动加序号 | 序号用尽 → 该项失败 |
+| 同名冲突 | 自动加序号 | 序号用尽 → 该项失败（「目标目录里同名文件过多」） |
+| provider 不支持改名 | 降级为按最终名重写一遍 | 重写成功照常完成，摘要注明「已直接写入」；重写失败两个半成品都删 |
 | 用户取消 | 停止，删当前临时文件 | 已完成文件保留，摘要标「已取消」 |
-| 进程被杀 | 服务停止，临时文件残留 | 临时名可辨认；下次进入不自动清理用户目录（不越权删用户文件） |
+| 进程被杀 | 服务停止，临时文件残留 | 临时名可辨认（`~getmedia-…part`）；**不删**用户目录里的东西，下次进确认页只提示「上次导出留下 N 个临时文件」并给出个数 |
 | 单文件 > 2 GB | SAF 与 FAT32 目标可能失败 | 记该项失败并给原因；不拆分文件 |
 | 横竖屏 / 息屏 / 切页 | 进度不丢 | 状态在单例 + 服务，页面无状态依赖 |
 
@@ -428,12 +453,20 @@ python3 tools/scan_forbidden.py heavy /tmp/gm-free
 | 11 | MIME 映射 | m4a→`audio/mp4`、mp4→`video/mp4`、未知→`application/octet-stream` |
 | 12 | 失败归类 | `SecurityException` → 「目录授权已失效」；`IOException(ENOSPC)` → 「空间不足」；文案内无路径 |
 | 13 | 整名字节上限 | 300 字标题 + 300 字博主 + 日期 + 8 字符扩展名：整名 ≤ 240 字节，且博主/日期/扩展名都还在；再叠 ` (999)` 后 ≤ 255 |
+| 24 | 写入：临时名 → 改名 | 成功后只剩最终名，`~getmedia-…part` 不存在，未走降级 |
+| 25 | 写入：改名不被支持 | 降级按最终名重写，`rewritten = true`，临时文件被删 |
+| 26 | 写入：重写也失败 | 两个半成品都删掉，原因「目标目录不支持改名，直接写入也失败」，目录里不留东西 |
+| 27 | 写入：字节数对不上 | 记「写入不完整，已删除半成品」并删临时文件 |
+| 28 | 写入：空间不足 / 授权失效 | `noSpace` / `abort` 置位，为整批中止提供依据 |
+| 29 | 会话：系统超时中断 | `interrupt(SYSTEM_TIMEOUT)` → `Interrupted`、文案「导出被系统中断，可重试失败项」、未跑项可重试 |
+| 30 | 会话：取消 / 空间不足中止 | 取消文案为「已取消导出」；空间不足时剩余项记 `SKIPPED` 而不是 `FAILED` |
+| 31 | 会话：只重试未完成项 | 已成功项不被重写，结果表累加不丢上一轮 |
 
 ### 9.2 Robolectric / 仪器测试
 
 | # | 用例 | 断言 |
 |---|---|---|
-| 14 | 确认页在 320 dp + 字体 200% | 「开始导出」可见可点，触控 ≥48 dp（与定时缺陷同一套约束） |
+| 14 | 确认页在 320 dp + 字体 200% | 「开始导出」可见可点，触控 ≥48 dp（与定时缺陷同一套约束）**未做**：B 用模拟器整链路代替，C 阶段补 |
 | 15 | 目录选择返回 | 授权写入、上次目录被记住 |
 | 16 | 中途取消 | 临时文档被删除、已完成项保留 |
 | 17 | 授权撤销 | 阻止开始并提示重选 |
@@ -455,34 +488,38 @@ SD 卡目录、USB OTG、云盘目录（受限时的提示）、Download 子目�
 
 ---
 
-## 10. 改动文件（预估）
+## 10. 改动文件
 
 ```
-data/export/ExportNaming.kt      文件名清洗/截断/保留名/序号/子目录（纯函数，全部单测）
-data/export/ExportPlan.kt        选择集分类、总大小、空间预估、失败归类（纯函数）
-data/export/SafWriter.kt         createDocument/rename/delete/列子项/可用空间
-data/export/ExportService.kt     前台服务（dataSync），串行执行与通知
-data/export/ExportController.kt  StateFlow 状态、启动/取消/重试
-ui/screen/ExportSheet.kt         确认页 + 进度 + 摘要（只调用 OwnerGate 接缝，不含服务器文案）
-ui/screen/LibraryScreenV2.kt     多选顶栏加「导出」（改 FlowRow）、列表/类别入口、sheet 接线
-ui/OwnerGate.kt                  main：接口加 ExportServerNotice 声明
-free/ui/OwnerGate.kt             空实现（不渲染、无文案）
-full/ui/OwnerGate.kt             真实实现（文案 + 服务器库查询 + 先下载）
-AndroidManifest.xml              ExportService + FOREGROUND_SERVICE_DATA_SYNC
-tools/forbidden-heavy.txt        加「尚未下载到本机」「先下载再导出」两句
-test/.../ExportNamingTest.kt     9.1 的 1–7、10、13（含扩展名与整名上限）
-test/.../ExportPlanTest.kt       9.1 的 8、9、11、12
+data/export/ExportTrack.kt        导出用快照（A，纯数据）
+data/export/ExportNaming.kt       文件名清洗/截断/保留名/序号/子目录（A，纯函数）
+data/export/ExportPlan.kt         分类计数、大小估算、空间三态、MIME、失败归类（A，纯函数）
+data/export/ExportTarget.kt       目标写入口（接口，B；无 Android 类型，便于假实现）
+data/export/ExportWriter.kt       单项写出：临时名→改名→降级重写→清理（B）
+data/export/SafExportTarget.kt    SAF 实现 + 目录授权（persist/判定/只留 5 个/显示名）（B）
+data/export/ExportPrefs.kt        上次目录、文件夹名、四个开关、通知是否问过（B）
+data/export/ExportSession.kt      状态机：串行/取消/中断/中止/只重试未完成（B）
+ui/screen/ExportSheet.kt          确认页 + 应用内进度 + 摘要（只经 OwnerGate 取服务器文案）（B）
+ui/OwnerGate.kt                   main：加 ExportMissingNotice 声明（B）
+free/ui/OwnerGate.kt              空实现（不渲染、无文案）（B）
+full/ui/OwnerGate.kt              转发到 ExportMissingNoticeBody（B）
+full/ui/screen/ExportMissingNoticeBody.kt  full 专属的「N 项本机没有文件 + 跳过」（B）
+ui/screen/LibraryScreenV2.kt      多选顶栏改 FlowRow 并加「导出」、播放列表/类别两个入口、sheet 接线（B）
+data/export/ExportService.kt      dataSync 前台服务 + onTimeout + 通知（C，未做）
+AndroidManifest.xml               ExportService + FOREGROUND_SERVICE_DATA_SYNC（C，未做）
+tools/forbidden-heavy.txt         加「本机没有文件」「ExportMissingNoticeBody」（B）
+test/.../ExportWriterTest.kt      9.1 的 24–28（B）
+test/.../ExportSessionTest.kt     9.1 的 29–31（B）
 ```
 
-交付顺序（已确认：A → B → C，每个节点单独交付，交付时给该节点的构建/测试证据）：
+交付顺序（A → B → C，每个节点单独交付，交付时给该节点的构建/测试证据）：
 
-- **A（纯逻辑，无 UI）**：`ExportNaming` + `ExportPlan` + 9.1 全部单测。交付物：代码 + 13 项编号用例 + 一次 `testFreeDebugUnitTest` 结果。
-  **状态：已交付（2026-11-17，含第 13 项整名上限）**。`data/export/ExportTrack.kt`、`ExportNaming.kt`、
-  `ExportPlan.kt` + 两个测试类（16 个方法，覆盖 9.1 的 1–13），13 个编号用例全过。
-- **B（确认页与目录）**：`ExportSheet` 确认页 + SAF 目录选择 + 授权持久化 + 上次目录记忆 + 文件夹名/重名提示（导出 1 项走通全链路，进度先用应用内简单态）。
-- **C（服务与收口）**：`ExportService`（dataSync 前台服务）+ 通知 + 取消 + 摘要 + 重试失败项 + OwnerGate 接缝与产物隔离验证（9.3）。
-
----
+- **A（纯逻辑，无 UI）**：`ExportNaming` + `ExportPlan` + 9.1 的 1–13。
+  **状态：已交付（2026-11-17）**，13 个编号用例全过。
+- **B（确认页与目录）**：SAF 选目录 + 授权持久化 + 上次目录记忆 + 文件夹名/重名提示 + 应用内进度与摘要，
+  并**真的导出 1 项走通全链路**。
+  **状态：已交付（2026-11-19）**，证据见 §12。
+- **C（服务与收口）**：`ExportService`（dataSync 前台服务）+ `onTimeout` + 通知 + 取消 + 重试失败项 + 9.3 复扫。
 
 ## 11. 已确认的决定（2026-11-17）
 
@@ -494,6 +531,72 @@ test/.../ExportPlanTest.kt       9.1 的 8、9、11、12
 | 4 | **记住上次目录**（持久化授权只留最近 5 个） | §5.1 |
 | 5 | 文件名日期取**入库日期**，界面文案写「入库日期」 | §4.2 |
 | 6 | **不做导出清单** | §5.7 |
-| 7 | 「尚未下载到本机 / 先下载再导出」只经 `OwnerGate` 进 full，用反编译扫描验证 | §5.6 / §9.3 |
+| 7 | 服务器相关的导出提示只经 `OwnerGate` 进 full，用反编译扫描验证 | §5.6 / §9.3 |
+
+### 11.1 B 阶段补定的 6 条（2026-11-19）
+
+| # | 决定 | 落地位置 |
+|---|---|---|
+| 8 | B、C **分两个提交**，各自附本节点的证据 | 交付顺序 §10 |
+| 9 | full 里**只做「跳过这 N 项」**，不摆会失败的「先下载再导出」；补下载导出记进 P0-2 待办 | §1.4 / §5.6 / p0-2 §17 |
+| 10 | 通知权限在**首次点「开始导出」时问一次**，拒绝不影响导出 | §5.4 |
+| 11 | 进程被杀：**只提示、不删**用户目录里的临时文件，提示里带残留个数 | §7 |
+| 12 | Android 15 `dataSync` 超时：**必须实现 `onTimeout`**（停服务、置 `Interrupted`、通知写「导出被系统中断，可重试失败项」）；`compileSdk` 升 35 才有这个方法 | §5.4 / §6 |
+| 13 | 空间**三态**：「查不到」要真实存在——只显示「无法确认剩余空间」，不拦；运行中不足再中止 | §5.3 |
 
 无待确认项。开工顺序 A → B → C，每个节点单独交付并附证据。
+
+---
+
+## 12. 节点 B 交付证据（2026-11-19）
+
+环境：模拟器 `gm-p0-1`（Android 14 / API 34 / arm64），free debug 包 `com.getmedia.app`。
+
+### 12.1 导出 1 项走通全链路（sha256 一致）
+
+1. `adb push` 一个 3 秒 440 Hz WAV 到 `/sdcard/Download/导出验证.wav`（264 644 B）；
+2. 应用内「导入」→ Downloads → 选中文档 → 曲库出现「导出验证 0:03」（源文件落进私有目录 `files/audio/-343607218361811487.audio`）；
+3. 「类别 → 播放列表 → 列表1 → 加入列表 → 按文件选择 → 勾选 → 加入列表」；
+4. 点新增的「**导出此列表**」→ 确认页 → 选择目录（DocumentsUI 根目录被系统禁用，提示语正好命中）
+   → `Download/GetMedia` → 使用此文件夹 → 允许；
+5. 开始导出 → 通知权限弹一次（点允许）→ 摘要页「导出完成 · 成功 1 · 失败 0」。
+
+```
+源文件  files/audio/-343607218361811487.audio
+        9ac65f904e08798169d0465a013cc8aababed84f0d16d3d43f51147d63f780d1   264644 B
+导出文件 /sdcard/Download/GetMedia/2026-11 导出/导出验证.wav
+        9ac65f904e08798169d0465a013cc8aababed84f0d16d3d43f51147d63f780d1   264644 B
+```
+
+导出后目标目录里**只有**这一个文件，没有 `~getmedia-…part` 残留（临时名被成功改名）。
+
+### 12.2 同一次跑动顺带验证到的四件事
+
+| 项 | 实测结果 |
+|---|---|
+| 目录授权持久化 + 记住上次目录 | 杀掉进程、`install -r` 覆盖安装后重进确认页，保存位置仍是「内部存储/Download/GetMedia」 |
+| 文件夹名记忆 | 自动带出上次的「2026-11 导出」 |
+| 重名提示 | 第二次进入即出现「该目录下已有同名文件夹 + [使用已有] [改名]」，未静默合并 |
+| 空间"查不到"态 | 该 provider 返回 -1 → 显示「无法确认剩余空间」，**开始导出仍可点**（截图里可见） |
+
+截图：`docs/reports/export-b-2026-11-19/sheet-confirm.png`（确认页）、`sheet-done.png`（摘要页）。
+
+### 12.3 构建/测试/扫描
+
+| 项 | 结果 |
+|---|---|
+| `testFreeDebugUnitTest` | 247 passed（B 新增 18：`ExportWriterTest` 12 + `ExportSessionTest` 6） |
+| `testFullDebugUnitTest` | 321 passed |
+| `lintFreeDebug` | 0 error / 26 warning（既有基线） |
+| `scan_forbidden.py heavy`（源码 + free APK） | 通过 |
+| `scan_leaks.py --all` | 通过（473 文件） |
+| 产物隔离（§5.6） | `本机没有文件` free=0 / full=1；`ExportMissingNoticeBody` free=0 / full=34 |
+
+### 12.4 已知未做
+
+- `androidTest` 源码集**当前编译不过**（`BatchDeleteInstrumentation` 调了已改名的 `submitViaServer`、
+  `FirstPlaybackInstrumentation` 的 `TrackEntity` 参数错位），是本次之前就有的旧账；B 的全链路因此改用
+  UI 操作 + sha256 取证，不依赖仪器测试。修这两处另开一次提交。
+- 9.2 第 14 项（320 dp + 字体 200% 的确认页）尚未补 Robolectric 用例，随 C 一起做。
+- 前台服务、通知、`onTimeout`、取消/重试的服务侧接线都在 C。
+

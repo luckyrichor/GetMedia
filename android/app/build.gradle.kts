@@ -112,7 +112,7 @@ val ownerServerBase: String = if (serverBase.endsWith("/api")) {
 
 android {
     namespace = "com.getmedia.app"
-    compileSdk = 34
+    compileSdk = 35
 
     signingConfigs {
         if (releaseSigning != null) {

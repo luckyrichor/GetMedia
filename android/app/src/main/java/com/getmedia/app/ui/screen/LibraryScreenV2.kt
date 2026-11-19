@@ -41,6 +41,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import com.getmedia.app.data.export.ExportTrack
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -328,7 +330,7 @@ internal object LibraryToolbarTags {
     fun option(field: SortField): String = "sort-option-${field.name}"
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {}) {
     val context = LocalContext.current
@@ -367,6 +369,8 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
     var editText by remember { mutableStateOf("") }
     var selectedParent by remember { mutableStateOf<Long?>(null) }
     var exportTrack by remember { mutableStateOf<TrackEntity?>(null) }
+    // 批量导出：进入确认页前先把选择集拍成快照（ExportTrack），之后的库变化不影响本次
+    var exportTracks by remember { mutableStateOf<List<ExportTrack>?>(null) }
     var playlistId by remember { mutableStateOf<Long?>(null) }
     val selectedListName = playlists.firstOrNull { it.id == playlistId }?.name ?: "播放列表"
     var deletePlaylistId by remember { mutableStateOf<Long?>(null) }
@@ -476,14 +480,28 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                 }
             }
             if (selecting) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).regionFrame().padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val visibleIds = visibleTracks.map { it.id }.toSet()
-                    Checkbox(checked = visibleIds.isNotEmpty() && batchIds.containsAll(visibleIds), enabled = !deleting,
-                        onCheckedChange = { batchIds = if (it) visibleIds else emptySet() })
-                    Text("全选 · 已选 ${batchIds.size}", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                    AreaButton(onClick = { confirmBatchDelete = true }, enabled = batchIds.isNotEmpty() && !deleting, tone = ActionTone.DESTRUCTIVE) { Text("删除") }
-                    TextButton(onClick = { exitSelection() }, enabled = !deleting) { Text("取消") }
+                // 顶栏按 FlowRow 排：320 dp + 字体 200% 时「导出 / 删除」换到第二行，不压缩按钮宽度
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).regionFrame().padding(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val visibleIds = visibleTracks.map { it.id }.toSet()
+                        Checkbox(checked = visibleIds.isNotEmpty() && batchIds.containsAll(visibleIds), enabled = !deleting,
+                            onCheckedChange = { batchIds = if (it) visibleIds else emptySet() })
+                        Text("全选 · 已选 ${batchIds.size}", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                        TextButton(onClick = { exitSelection() }, enabled = !deleting) { Text("取消") }
+                    }
+                    FlowRow(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        AreaButton(
+                            onClick = {
+                                exportTracks = visibleTracks.filter { it.id in batchIds }.map(ExportTrack::of)
+                            },
+                            enabled = batchIds.isNotEmpty() && !deleting,
+                        ) { Text("导出") }
+                        AreaButton(onClick = { confirmBatchDelete = true }, enabled = batchIds.isNotEmpty() && !deleting, tone = ActionTone.DESTRUCTIVE) { Text("删除") }
+                    }
                 }
             }
             if (section == 0) {
@@ -615,6 +633,15 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                         if (parent?.kind != "LEAF") {
                             SheetPill("新建子类别", Icons.Default.Add, { dialog = "newCategory"; editText = ""; selectedParent = categoryId }, primary = true)
                         }
+                        // 整表导出：类别递归全部作品，不在 sheet 里再造多选（export-plan §1.3）
+                        SheetPill("导出此类", Icons.Default.Download, {
+                            val id = categoryId
+                            if (id != null) scope.launch {
+                                runCatching { categoryRepo.recursiveTracks(id) }
+                                    .onSuccess { list -> exportTracks = list.map(ExportTrack::of) }
+                                    .onFailure { notice = it.message ?: "读取类别失败" }
+                            }
+                        })
                         Spacer(Modifier.weight(1f))
                     }
                 }
@@ -875,6 +902,11 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                         queueItems(entries.mapNotNull { entry -> libraryTracks.firstOrNull { it.id == entry.trackId } }, true, playlistId)
                         dialog = null
                     })
+                    SheetPill("导出此列表", Icons.Default.Download, {
+                        exportTracks = entries.mapNotNull { entry -> libraryTracks.firstOrNull { it.id == entry.trackId } }
+                            .map(ExportTrack::of)
+                        dialog = null
+                    })
                 }
                 entries.forEach { entry ->
                     val track = libraryTracks.firstOrNull { it.id == entry.trackId }
@@ -956,6 +988,9 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                 )
             }
         }
+    }
+    exportTracks?.let { tracks ->
+        ExportSheet(tracks = tracks, onDismiss = { exportTracks = null })
     }
 }
 

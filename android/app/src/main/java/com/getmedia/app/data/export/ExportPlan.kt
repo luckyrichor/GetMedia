@@ -117,8 +117,11 @@ object ExportPlan {
         else -> "导出失败"
     }
 
-    /** ENOSPC 在不同 provider 上的表现不同：有的给 errno 字符串，有的只给英文描述。 */
-    private fun isNoSpace(error: Throwable): Boolean {
+    /**
+     * ENOSPC 在不同 provider 上的表现不同：有的给 errno 字符串，有的只给英文描述。
+     * 公开给 [ExportWriter] 判"这一项是空间不足"——那类失败要中止整批，不能逐项重试。
+     */
+    fun isNoSpace(error: Throwable): Boolean {
         val text = error.message.orEmpty().lowercase(Locale.ROOT)
         return text.contains("enospc") || text.contains("no space left") || text.contains("空间不足")
     }
