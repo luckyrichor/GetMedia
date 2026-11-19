@@ -63,3 +63,5 @@ __pycache__/
 /docs/p0-1-extract-design.md
 /docs/p0-2-sync-design.md
 /docs/metadata-backup-design.md
+# 邮件代理方案含本机代理端口、服务器部署路径与可直接执行的验证命令：只留本地
+/docs/smtp-proxy-design.md
