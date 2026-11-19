@@ -144,12 +144,12 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
                 Icons.Rounded.Storage,
                 "存储空间",
                 value = "${bytes / 1024 / 1024} MB",
-                subtitle = "${tracks.size} 首音频保存在本机",
+                subtitle = "${tracks.size} 个条目保存在本机",
                 onClick = { dialog = "storage" },
             )
         }
 
-        // 云端只存清单（标题/类别/列表顺序），音频文件始终在本机。
+        // 云端只存清单（标题/类别/列表顺序），媒体文件始终在本机。
         BackupSection()
 
         SectionTitle("诊断与反馈")
@@ -190,7 +190,7 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
         Spacer(Modifier.height(24.dp))
     }
     when (dialog) {
-        "storage" -> InfoDialog("存储空间", "本机已保存 ${tracks.size} 首音频，约 ${bytes / 1024 / 1024} MB。") { dialog = null }
+        "storage" -> InfoDialog("存储空间", "本机已保存 ${tracks.size} 个条目，约 ${bytes / 1024 / 1024} MB。") { dialog = null }
         "about" -> InfoDialog("GetMedia $version", "分享链接提取音频，分类、播放和管理均可在本机完成。") { dialog = null }
     }
 }

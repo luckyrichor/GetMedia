@@ -96,7 +96,7 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
                 when {
                     !state.enabled -> "已关闭自动备份。云端已有的备份仍保留，可以在这里删除。"
                     state.blocked != null -> "自动备份已停止。清理到上限内或换一份能通过校验的数据后会自动恢复。"
-                    else -> "改动后自动备份，每账号保留最近 3 份；只传清单，不传音频文件。"
+                    else -> "改动后自动备份，每账号保留最近 3 份；只传清单，不传媒体文件。"
                 },
                 fontSize = 12.sp,
                 color = uiMuted(),

@@ -346,7 +346,7 @@ private fun QueueRow(
             ) {
                 Icon(
                     if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    if (playing) "暂停第${index + 1}个音频" else "播放第${index + 1}个音频",
+                    if (playing) "暂停第${index + 1}项" else "播放第${index + 1}项",
                     Modifier.size(18.dp),
                     tint = if (current) colors.onPrimary else colors.primary,
                 )

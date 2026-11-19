@@ -361,7 +361,7 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
                             vm.busy && vm.batchTotal > 0 -> "正在批量提取 ${vm.batchIndex}/${vm.batchTotal}"
                             vm.busy -> "正在提取…"
                             found.size > 1 -> "批量提取 ${found.size} 条"
-                            else -> "提取音频"
+                            else -> if (vm.kind == MediaKind.VIDEO) "提取视频" else "提取音频"
                         },
                         style = MaterialTheme.typography.titleSmall,
                     )
@@ -378,7 +378,7 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
                     Text(
                         when {
                             vm.batchTotal > 0 -> vm.batchCurrent.ifBlank { "准备中…" }
-                            else -> "手机正在解析并下载音频"
+                            else -> if (vm.kind == MediaKind.VIDEO) "手机正在解析并下载视频" else "手机正在解析并下载音频"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = uiMuted(),

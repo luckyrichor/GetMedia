@@ -91,7 +91,7 @@ internal fun RestoreFlow(onClose: () -> Unit) {
                         if (r.addedTracks > 0) {
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                "新增的条目还没有音频文件，先标为「待下载」；点「全部重新下载」会逐条重新提取。",
+                                "新增的条目还没有本地文件，先标为「待下载」；点「全部重新下载」会逐条重新提取。",
                                 fontSize = 13.sp, color = uiMuted(),
                             )
                         }

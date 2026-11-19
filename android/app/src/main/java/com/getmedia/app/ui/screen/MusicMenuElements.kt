@@ -106,7 +106,7 @@ internal fun NewMusicPlaylist(onClick: () -> Unit) {
             }
             Column(Modifier.weight(1f)) {
                 Text("新建列表", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = accent)
-                Text("收藏喜欢的音频", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("收藏喜欢的内容", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Icon(Icons.Default.ChevronRight, null, Modifier.size(18.dp), tint = accent)
         }
@@ -138,7 +138,7 @@ internal fun MusicPlaylistCard(
                 Column(Modifier.weight(1f)) {
                     Text(name, fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold,
                         maxLines = 2, overflow = TextOverflow.Ellipsis, color = colors.onSurface)
-                    Text("$count 首音频", fontSize = 12.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 3.dp))
+                    Text("$count 项", fontSize = 12.sp, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 3.dp))
                 }
                 if (current) Surface(color = accent.copy(alpha = 0.1f), shape = RoundedCornerShape(6.dp)) {
                     Text("当前播放", Modifier.padding(horizontal = 7.dp, vertical = 5.dp), fontSize = 11.sp,

@@ -422,7 +422,7 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
         }
     }
     LaunchedEffect(notice) { notice?.let { snackbar.showSnackbar(it); notice = null } }
-    fun operate(block: suspend () -> Unit) { scope.launch { runCatching { DiagnosticsStore.operation("音频库操作", block) }.onFailure { notice = it.message ?: "操作失败" } } }
+    fun operate(block: suspend () -> Unit) { scope.launch { runCatching { DiagnosticsStore.operation("媒体库操作", block) }.onFailure { notice = it.message ?: "操作失败" } } }
     fun queueItems(tracks: List<TrackEntity>, play: Boolean, sourceId: Long? = null) = operate {
         val ready = mutableListOf<PlayerHolder.QueueItem>()
         for (track in tracks) {
@@ -430,14 +430,14 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                 ?: trackRepo.download(track).getOrThrow().absolutePath
             ready += PlayerHolder.QueueItem(track, path)
         }
-        if (ready.isEmpty()) notice = "类别内没有音频"
+        if (ready.isEmpty()) notice = "这里还没有可播放的内容"
         else if (play) {
             if (sourceId == null) PlayerHolder.playSelection(context, ready)
             else PlayerHolder.playAll(context, ready, sourceId)
         }
         else {
             val count = PlayerHolder.append(context, ready)
-            notice = if (count == 0) "音频已在播放列表中" else "已加入 $count 个音频"
+            notice = if (count == 0) "都已在播放列表中" else "已加入 ${MediaWording.counted(tracks.map { it.mediaType }, count)}"
         }
     }
     fun targetTracks(item: LibraryTarget) = operate {
@@ -650,11 +650,12 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                     items(children, key = { "c${it.id}" }) { cat ->
                         val subCount = allCategories.count { it.parentId == cat.id }
                         val container = subCount > 0 || cat.kind == "CONTAINER"
-                        val count = if (container) subCount else libraryTracks.count { it.localCategoryId == cat.id }
+                        val inCat = libraryTracks.filter { it.localCategoryId == cat.id }
+                        val count = if (container) subCount else inCat.size
                         Box(Modifier.padding(horizontal = 12.dp, vertical = 5.dp)) {
                             CategoryCard(
                                 name = cat.name,
-                                countText = if (container) "$count 个类别" else "$count 首音频",
+                                countText = if (container) "$count 个类别" else MediaWording.categoryCount(inCat.map { it.mediaType }, count),
                                 icon = if (container) Icons.Default.Folder else Icons.Default.FolderOpen,
                                 container = container,
                                 onOpen = { exitSelection(); categoryId = cat.id; operate { categoryRepo.recordAccess(cat.id) } },
@@ -673,22 +674,27 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
         }
     }
 
-    if (confirmBatchDelete) AlertDialog(
-        onDismissRequest = { if (!deleting) confirmBatchDelete = false }, title = { Text("删除 ${batchIds.size} 个音频？") },
-        text = { Text("将删除手机上的音频文件，并从所有播放列表及正在播放的队列中移除。") },
-        confirmButton = { AreaButton(onClick = {
+    // 多选可能跨类型（类别页把音视频放在一起），文案按**实际选中的条目**取词，不跟顶部开关走
+    val batchKinds = visibleTracks.filter { it.id in batchIds }.map { it.mediaType }
+    if (confirmBatchDelete) BatchDeleteDialog(
+        count = batchIds.size,
+        kinds = batchKinds,
+        deleting = deleting,
+        onConfirm = {
             val ids = batchIds.toSet()
+            // 删完会清空选中，先留住类型：否则删完的提示只能按空集合算成"项"
+            val kinds = batchKinds
             deleting = true
             scope.launch {
                 try {
                     val count = DiagnosticsStore.operation("批量删除") { trackRepo.removeAll(ids) }
                     exitSelection()
-                    notice = "已删除 $count 个音频"
+                    notice = MediaWording.batchDeleteDone(kinds, count)
                 } catch (error: Exception) { notice = ErrorText.humanMessage(error) }
                 finally { deleting = false; confirmBatchDelete = false }
             }
-        }, enabled = !deleting, tone = ActionTone.DESTRUCTIVE) { Text(if (deleting) "删除中…" else "删除") } },
-        dismissButton = { TextButton(onClick = { confirmBatchDelete = false }, enabled = !deleting) { Text("取消") } },
+        },
+        onDismiss = { confirmBatchDelete = false },
     )
 
     editTrack?.let { track -> AudioEditScreen(track, onClose = { editTrack = null }, onSaved = { editTrack = null; notice = "剪辑已保存" }) }
@@ -709,8 +715,9 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                     it.track.durationSec?.takeIf { s -> s > 0 }?.let { s -> formatDuration(s) },
                     platformLabel(it.track.platform),
                 ).joinToString("  ·  ")
-            } ?: category?.let {
-                if (it.kind == "CONTAINER") "包含子类别的分类" else "分类下的音频"
+            } ?: category?.let { cat ->
+                if (cat.kind == "CONTAINER") "包含子类别的分类"
+                else MediaWording.categorySubtitle(libraryTracks.filter { it.localCategoryId == cat.id }.map { it.mediaType })
             },
             confirmText = "完成",
             onConfirm = { target = null },
@@ -773,7 +780,7 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                 }
             }
             if (item is LibraryTarget.Audio) {
-                SheetGroup("音频") {
+                SheetGroup(MediaWording.noun(listOf(item.track.mediaType))) {
                     // 剪辑只处理音频；视频暂不支持剪辑（见 docs/reports/wp5b-summary.md）。
                     if (item.track.mediaType != MediaKind.VIDEO.name) {
                         SheetRow(
@@ -830,17 +837,28 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
             } } }) { Text("移动") } }, dismissButton = { AreaButton(onClick = { dialog = null; target = null }) { Text("取消") } })
         "delete" -> {
             val item = target
-            var count by remember(item) { mutableIntStateOf(0) }
-            LaunchedEffect(item) { if (item is LibraryTarget.Category) count = categoryRepo.recursiveTracks(item.category.id).size }
+            // 文案要按将被删除的这批条目的实际类型取词：类别里可能同时有音频和视频
+            var doomed by remember(item) { mutableStateOf(if (item is LibraryTarget.Audio) listOf(item.track) else emptyList()) }
+            LaunchedEffect(item) {
+                if (item is LibraryTarget.Category) doomed = categoryRepo.recursiveTracks(item.category.id)
+            }
             AlertDialog(onDismissRequest = { dialog = null; target = null }, title = { Text("确认删除") },
-                text = { Text(if (item is LibraryTarget.Category) "删除该类别将同时删除其中的 $count 首音频，是否继续？" else "删除这首音频？") },
+                text = {
+                    Text(
+                        if (item is LibraryTarget.Category) {
+                            "删除该类别将同时删除其中的 ${MediaWording.categoryCount(doomed.map { it.mediaType }, doomed.size)}，是否继续？"
+                        } else {
+                            MediaWording.deleteOneQuestion(doomed.map { it.mediaType })
+                        },
+                    )
+                },
                 confirmButton = { AreaButton(onClick = { dialog = null; target = null; operate { when (item) { is LibraryTarget.Audio -> trackRepo.remove(item.track.id); is LibraryTarget.Category -> categoryRepo.delete(item.category.id); else -> Unit } } }, tone = ActionTone.DESTRUCTIVE) { Text("删除") } },
                 dismissButton = { AreaButton(onClick = { dialog = null; target = null }) { Text("取消") } })
         }
         "deletePlaylist" -> {
             val list = playlists.firstOrNull { it.id == deletePlaylistId }
             AlertDialog(onDismissRequest = { dialog = "playlists" }, title = { Text("删除播放列表？") },
-                text = { Text("删除「${list?.name.orEmpty()}」及其列表记录，音频库中的文件会保留。" +
+                text = { Text("删除「${list?.name.orEmpty()}」及其列表记录，媒体库中的文件会保留。" +
                     if (list?.id == currentPlaylistId) "当前列表的播放会停止。" else "") },
                 confirmButton = { TextButton(onClick = {
                     val id = deletePlaylistId
@@ -895,7 +913,7 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                         onDelete = { deletePlaylistId = list.id; dialog = "deletePlaylist" })
                 }
             } else if (dialog == "playlistEdit") {
-                SheetPill("添加音频或类别", Icons.Default.Add, { selectedTracks = emptySet(); selectedCategories = emptySet(); dialog = "playlistPick" }, primary = true)
+                SheetPill("添加条目或类别", Icons.Default.Add, { selectedTracks = emptySet(); selectedCategories = emptySet(); dialog = "playlistPick" }, primary = true)
                 val entries by playlistRepo.items(playlistId ?: -1L).collectAsState(initial = emptyList())
                 if (entries.isNotEmpty()) {
                     SheetPill("播放此列表", Icons.Default.PlayArrow, {
@@ -922,7 +940,7 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                                     listOfNotNull(
                                         track.uploader?.takeIf { it.isNotBlank() },
                                         track.durationSec?.takeIf { it > 0 }?.let { formatDuration(it) },
-                                    ).joinToString("  ·  ").ifBlank { "音频" },
+                                    ).joinToString("  ·  ").ifBlank { MediaWording.noun(listOf(track.mediaType)) },
                                     fontSize = 11.sp, color = uiMuted(), maxLines = 1,
                                 )
                             }
@@ -946,7 +964,7 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                 } else {
                     OutlinedTextField(
                         playlistSearch, { playlistSearch = it },
-                        placeholder = { Text("搜索音频名称", fontSize = 14.sp) },
+                        placeholder = { Text("搜索名称", fontSize = 14.sp) },
                         singleLine = true,
                         shape = RoundedCornerShape(14.dp),
                         colors = OutlinedTextFieldDefaults.colors(
@@ -994,6 +1012,33 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
     }
 }
 
+/**
+ * 批量删除的确认弹窗。
+ *
+ * 单独拆出来是为了能在 Robolectric 里直接渲染三种情况（只选音频 / 只选视频 / 混选），
+ * 不必把整个媒体库连带数据库一起搭起来。文案全部经 [MediaWording] 取词。
+ */
+@Composable
+internal fun BatchDeleteDialog(
+    count: Int,
+    kinds: List<String?>,
+    deleting: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!deleting) onDismiss() },
+        title = { Text(MediaWording.batchDeleteTitle(kinds, count)) },
+        text = { Text(MediaWording.batchDeleteBody(kinds)) },
+        confirmButton = {
+            AreaButton(onClick = onConfirm, enabled = !deleting, tone = ActionTone.DESTRUCTIVE) {
+                Text(if (deleting) "删除中…" else "删除")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !deleting) { Text("取消") } },
+    )
+}
+
 private fun categoryPath(category: CategoryEntity, all: List<CategoryEntity>): String {
     val names = mutableListOf(category.name)
     var parentId = category.parentId
@@ -1026,7 +1071,7 @@ private fun EmptyCategory() {
             color = MaterialTheme.colorScheme.onSurface,
         )
         Text(
-            "新建类别给音频分组，比如「睡前」「通勤」\n也可以长按音频，用「移动到…」放进来",
+            "新建类别给条目分组，比如「睡前」「通勤」\n也可以长按条目，用「移动到…」放进来",
             style = MaterialTheme.typography.bodySmall,
             color = uiMuted(),
             textAlign = TextAlign.Center,
@@ -1321,7 +1366,7 @@ private fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () -
                 enabled = selectionEnabled,
                 onClick = { if (selecting) onSelect() },
                 onLongClick = if (longPressSelects) onSelect else null,
-                onLongClickLabel = if (longPressSelects) "选择音频" else null,
+                onLongClickLabel = if (longPressSelects) "选择${MediaWording.noun(listOf(track.mediaType))}" else null,
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1401,7 +1446,7 @@ private fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () -
         ) {
             Icon(
                 if (isCurrent && playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                if (isCurrent && playing) "暂停音频" else "播放音频",
+                if (isCurrent && playing) "暂停${MediaWording.noun(listOf(track.mediaType))}" else "播放${MediaWording.noun(listOf(track.mediaType))}",
                 Modifier.size(21.dp),
                 tint = if (isCurrent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.primary,
             )
@@ -1439,8 +1484,8 @@ internal fun TimerDialog(onClose: () -> Unit) {
         status?.let { Text("当前定时：$it", style = MaterialTheme.typography.titleSmall) }
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf(15L, 30L, 60L).forEach { value -> AreaButton(onClick = { minutes = value.toString() }, tone = ActionTone.TIMER) { Text(if (value == 60L) "1小时" else "${value}分钟") } } }
         OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit) }, label = { Text("自定义分钟") })
-        Row(verticalAlignment = Alignment.CenterVertically) { Switch(checked = finish, onCheckedChange = { finish = it }); Text("播完整个音频再停") }
-        Text(if (finish) "计时结束后，播放完当前音频再停止。" else "计时结束后立即停止播放。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) { Switch(checked = finish, onCheckedChange = { finish = it }); Text("播完整个内容再停") }
+        Text(if (finish) "计时结束后，播放完当前内容再停止。" else "计时结束后立即停止播放。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (status != null) AreaButton(onClick = { PlayerHolder.cancelTimer(); onClose() }, modifier = Modifier.fillMaxWidth(), tone = ActionTone.TIMER) { Text("取消定时播放") }
     } }, confirmButton = { AreaButton(onClick = { val duration = minutes.toLongOrNull(); if (duration != null && duration in 1..1440) { PlayerHolder.setTimer(context, duration, finish); onClose() } }, tone = ActionTone.TIMER) { Text("开始计时") } }, dismissButton = { AreaButton(onClick = onClose) { Text("关闭") } })
 }
