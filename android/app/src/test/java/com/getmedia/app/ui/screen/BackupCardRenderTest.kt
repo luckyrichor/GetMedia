@@ -127,6 +127,61 @@ class BackupCardRenderTest {
         rule.onNodeWithText("仍要上传").assertIsDisplayed()
     }
 
+    /** 恢复决策没做之前：卡片上常驻一条提示与「去处理」，不是只弹一次了事。 */
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun restorePausedBannerStaysWithEntry() {
+        render(normal.copy(lastTracks = 0, lastAtMs = 0, restoreDecisionPending = true, restoreCloudTracks = 128))
+        saveShot("backup-light-restore-paused")
+        rule.onNodeWithText("自动备份已暂停：等你决定是否恢复云端备份").assertIsDisplayed()
+        rule.onNodeWithText("云端有 128 首的备份", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("去处理").assertIsDisplayed()
+    }
+
+    // ---------- 恢复决策弹窗 ----------
+
+    private fun renderDecisionSheet(dark: Boolean) {
+        rule.setContent {
+            GetMediaTheme(darkTheme = dark) {
+                Box(
+                    Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
+                    contentAlignment = androidx.compose.ui.Alignment.Center,
+                ) {
+                    Box(Modifier.width(320.dp).padding(16.dp)) {
+                        RestoreDecisionSheet(
+                            cloudTracks = 128,
+                            cloudAtMs = 1_763_462_520_000,
+                            onRestore = {},
+                            onKeepLocal = {},
+                            onLater = {},
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun restoreDecisionLight() {
+        renderDecisionSheet(dark = false)
+        saveShot("restore-decision-light")
+        rule.onNodeWithText("云端已有曲库备份").assertIsDisplayed()
+        rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("恢复云端备份").assertIsDisplayed()
+        rule.onNodeWithText("用本机内容（不恢复）").assertIsDisplayed()
+        rule.onNodeWithText("稍后再说").assertIsDisplayed()
+    }
+
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun restoreDecisionDark() {
+        renderDecisionSheet(dark = true)
+        saveShot("restore-decision-dark")
+        rule.onNodeWithText("云端已有曲库备份").assertIsDisplayed()
+        rule.onNodeWithText("自动备份先暂停", substring = true).assertIsDisplayed()
+    }
+
     // ---------- 恢复：选一份备份 ----------
 
     private val cloud = listOf(

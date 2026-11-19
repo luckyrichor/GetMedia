@@ -97,6 +97,7 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
                 when {
                     !state.enabled -> "已关闭自动备份。云端已有的备份仍保留，可以在这里删除。"
                     state.blocked != null -> "自动备份已停止。清理到上限内或换一份能通过校验的数据后会自动恢复。"
+                    state.restoreDecisionPending -> "决定之前不会上传，云端那份不会被动到。"
                     else -> "改动后自动备份，每账号保留最近 3 份；只传清单，不传媒体文件。"
                 },
                 fontSize = 12.sp,
@@ -104,6 +105,30 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
                 lineHeight = 17.sp,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
             )
+            // 决策没做之前不能只弹一次了事：卡片上常驻一条，点「去处理」再把弹窗叫回来。
+            // 这就是"稍后"不会变成静默死锁的那条出口。
+            if (state.restoreDecisionPending) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 14.dp, end = 14.dp, top = 8.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(uiAccentContainer())
+                        .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        restorePausedHint(state.restoreCloudTracks),
+                        modifier = Modifier.weight(1f),
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    TextButton(onClick = { BackupManager.showRestoreDecision() }) {
+                        Text("去处理", fontSize = 13.sp)
+                    }
+                }
+            }
             Row(
                 Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -197,6 +222,8 @@ private fun statusText(state: BackupManager.UiState): String = when {
     !state.loggedIn -> "登录后可用备份"
     state.blocked == BackupPrefs.BLOCKED_TOO_LARGE -> "备份已停用：库太大（超过 512 KiB）"
     state.blocked == BackupPrefs.BLOCKED_INVALID -> "备份已停用：上次上传的内容不合规"
+    // 决策没做：状态行也要说"为什么停着"，不能只在下面挂一条提示
+    state.restoreDecisionPending -> "自动备份已暂停：等你决定是否恢复云端备份"
     state.unsupported -> "服务器暂不支持备份，稍后会自动再试"
     state.busy -> "正在备份…"
     // 限频不是失败：上一次成功的记录还在，这里只提示"等一会儿"，不覆盖上次时间
@@ -210,6 +237,7 @@ private fun statusText(state: BackupManager.UiState): String = when {
 private fun statusColor(state: BackupManager.UiState) = when {
     state.blocked != null -> MaterialTheme.colorScheme.error
     state.unsupported -> MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+    state.restoreDecisionPending -> MaterialTheme.colorScheme.tertiary
     state.throttleUntilMs > 0 -> uiMuted()
     state.dirty -> MaterialTheme.colorScheme.tertiary
     else -> uiMuted()
