@@ -52,6 +52,8 @@ object BackupManager {
         val throttleUntilMs: Long = 0,
         /** 首次登录的告知还没弹过。 */
         val noticePending: Boolean = false,
+        /** 本地库为空时点了「立即备份」：等用户确认"空清单也要传"。 */
+        val emptyConfirmPending: Boolean = false,
     )
 
     private var context: Context? = null
@@ -153,10 +155,38 @@ object BackupManager {
         if (enabled) scope.launch { runCheck("用户开启") }
     }
 
-    /** "立即备份"：跳过"指纹没变"与 10 分钟窗口，用户明确要求就传一份新的。 */
+    /**
+     * "立即备份"：跳过"指纹没变"与 10 分钟窗口，用户明确要求就传一份新的。
+     *
+     * 本地一首都没有时**不直接传**：空清单会占掉云端 3 份里的一份，可能把有内容的备份
+     * 挤掉。改成先置 [UiState.emptyConfirmPending]，由界面弹确认；确认后走
+     * [confirmEmptyBackup]（`allowEmpty = true`）。
+     */
     fun backupNow() {
         if (gate() == null) return
-        scope.launch { runCheck("立即备份", force = true) }
+        scope.launch {
+            if (localTrackCount() == 0) {
+                _state.value = _state.value.copy(emptyConfirmPending = true)
+                return@launch
+            }
+            runCheck("立即备份", force = true)
+        }
+    }
+
+    /** 用户在确认框里点了"仍要上传"：空库这次放行。 */
+    fun confirmEmptyBackup() {
+        _state.value = _state.value.copy(emptyConfirmPending = false)
+        if (gate() == null) return
+        scope.launch { runCheck("立即备份（空库已确认）", force = true, allowEmpty = true) }
+    }
+
+    fun cancelEmptyConfirm() {
+        _state.value = _state.value.copy(emptyConfirmPending = false)
+    }
+
+    private suspend fun localTrackCount(): Int {
+        val c = context ?: return 0
+        return runCatching { AppDatabase.get(c).trackDao().allNow().size }.getOrDefault(0)
     }
 
     fun deleteCloud(onDone: (Result<Int>) -> Unit) {
@@ -363,6 +393,7 @@ object BackupManager {
             busy = _state.value.busy,
             throttleUntilMs = s.throttleUntilMs,
             noticePending = !s.noticeShown && !session.consentRequired,
+            emptyConfirmPending = _state.value.emptyConfirmPending,
         )
     }
 }

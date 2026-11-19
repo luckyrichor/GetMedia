@@ -9,7 +9,10 @@ import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.atomic.AtomicInteger
@@ -60,6 +63,13 @@ class BackupEmptyLibraryTest {
     private fun awaitUploads(timeoutMs: Long = 5_000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (uploads.get() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(50)
+    }
+
+    private fun awaitConfirmPending(timeoutMs: Long = 5_000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!BackupManager.state.value.emptyConfirmPending && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50)
+        }
     }
 
     private fun seedTrack() = runBlocking {
@@ -114,5 +124,52 @@ class BackupEmptyLibraryTest {
 
         assertEquals("有内容时应当上传", 1, uploads.get())
         assertEquals(1, BackupPrefs(context).read("u1").lastTracks)
+    }
+
+    // ---------- 手动「立即备份」：空库先确认 ----------
+
+    @Test
+    fun manualBackupAsksBeforeUploadingEmptyLibrary() {
+        clearLibrary()
+        start(BackupPrefs.State(enabled = true))
+
+        BackupManager.backupNow()
+        awaitConfirmPending()
+
+        assertTrue("空库点立即备份应弹确认，而不是直接上传", BackupManager.state.value.emptyConfirmPending)
+        Thread.sleep(400)
+        assertEquals("确认之前不能有上传", 0, uploads.get())
+    }
+
+    @Test
+    fun confirmingUploadsTheEmptySnapshotOnce() {
+        clearLibrary()
+        start(BackupPrefs.State(enabled = true))
+
+        BackupManager.backupNow()
+        awaitConfirmPending()
+        BackupManager.confirmEmptyBackup()
+        awaitUploads()
+
+        assertEquals("确认后应上传一份", 1, uploads.get())
+        assertFalse("确认后不该再挂着确认态", BackupManager.state.value.emptyConfirmPending)
+        val stored = BackupPrefs(context).read("u1")
+        assertEquals("要如实记下这次传的是 0 首", 0, stored.lastTracks)
+        assertNotNull("确认上传后可以写 lastHash（用户已明确同意）", stored.lastHash)
+    }
+
+    @Test
+    fun cancellingTheConfirmSendsNothing() {
+        clearLibrary()
+        start(BackupPrefs.State(enabled = true))
+
+        BackupManager.backupNow()
+        awaitConfirmPending()
+        BackupManager.cancelEmptyConfirm()
+        Thread.sleep(400)
+
+        assertEquals(0, uploads.get())
+        assertFalse(BackupManager.state.value.emptyConfirmPending)
+        assertNull(BackupPrefs(context).read("u1").lastHash)
     }
 }

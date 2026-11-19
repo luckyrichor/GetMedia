@@ -115,6 +115,17 @@ class BackupCardRenderTest {
         rule.onNodeWithText("登录后可用备份").assertIsDisplayed()
     }
 
+    /** 空库点「立即备份」：确认框必须把"会挤掉一份"说清楚，不能只说"确定要传吗"。 */
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun emptyLibraryConfirmExplainsCost() {
+        render(normal.copy(lastTracks = 0, lastAtMs = 0, emptyConfirmPending = true))
+        saveShot("backup-light-empty-confirm")
+        rule.onNodeWithText("本地曲库为空").assertIsDisplayed()
+        rule.onNodeWithText("会挤掉最旧的一份", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("仍要上传").assertIsDisplayed()
+    }
+
     // ---------- 恢复：选一份备份 ----------
 
     private val cloud = listOf(

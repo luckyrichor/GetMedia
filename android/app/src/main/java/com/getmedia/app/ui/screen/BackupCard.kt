@@ -145,6 +145,22 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
 
     if (restoreOpen) RestoreFlow(onClose = { restoreOpen = false })
 
+    // 空库点「立即备份」：先说清楚代价再传。服务器每账号只留 3 份，
+    // 一份空清单挤掉的可能是唯一一份有内容的备份。
+    if (state.emptyConfirmPending) {
+        AlertDialog(
+            onDismissRequest = { BackupManager.cancelEmptyConfirm() },
+            title = { Text("本地曲库为空") },
+            text = { Text("上传会占用云端 3 份备份中的 1 份，且会挤掉最旧的一份。仍要上传？") },
+            confirmButton = {
+                TextButton(onClick = { BackupManager.confirmEmptyBackup() }) { Text("仍要上传") }
+            },
+            dismissButton = {
+                TextButton(onClick = { BackupManager.cancelEmptyConfirm() }) { Text("取消") }
+            },
+        )
+    }
+
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
