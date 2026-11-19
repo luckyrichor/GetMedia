@@ -63,6 +63,8 @@ class Ops:
                 self.fb.delete_for_user(c, uid)
                 c.execute(text("DELETE FROM heartbeats WHERE user_id=:u"), {"u": uid})
                 c.execute(text("DELETE FROM audit WHERE user_id=:u"), {"u": uid})
+                # 双保险：提交注销时已删过一次；这里再删一遍，防冷静期被绕过（design §3.5）
+                c.execute(text("DELETE FROM metadata_backups WHERE user_id=:u"), {"u": uid})
                 c.execute(text("DELETE FROM users WHERE id=:u"), {"u": uid})  # sessions/recovery/consents 级联
                 c.execute(text("INSERT OR IGNORE INTO deletion_ledger(user_id,deleted_at) VALUES(:u,:n)"), {"u": uid, "n": now})
                 c.execute(text("UPDATE deletion_requests SET executed_at=:n WHERE user_id=:u"), {"u": uid, "n": now})

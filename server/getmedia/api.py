@@ -302,6 +302,10 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     def recover(req: RecoverReq, request: Request):
         return svc.recover(req.login_name, req.recovery_code, req.new_password, ip_of(request))
 
+    # 曲库清单备份：走免费通道 + 登录态，所以只依赖 auth，不挂 owner 依赖（design §3.2）
+    from .metadata_backup_api import register as register_metadata_backup
+    register_metadata_backup(app, auth, engine, clock)
+
     # 博主批量：只取列表，媒体仍由手机端提取，因此不需要任务表
     from . import creator_rt
     from .creator_api import register as register_creator_routes

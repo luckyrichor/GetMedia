@@ -333,6 +333,8 @@ class AccountService:
         with self.engine.begin() as c:
             c.execute(text("UPDATE users SET status='pending_deletion' WHERE id=:u"), {"u": ctx.user_id})
             c.execute(text("UPDATE sessions SET revoked_at=:n WHERE user_id=:u AND revoked_at IS NULL"), {"n": now, "u": ctx.user_id})
+            # 云端备份立即删，不等冷静期（design §3.5）。代价：冷静期内恢复账号时备份已经没了。
+            c.execute(text("DELETE FROM metadata_backups WHERE user_id=:u"), {"u": ctx.user_id})
             c.execute(text("INSERT OR REPLACE INTO deletion_requests(user_id,requested_at,execute_at) VALUES(:u,:n,:a)"),
                       {"u": ctx.user_id, "n": now, "a": at})
             self.audit(c, "delete_request", ctx.user_id, ip, path, "ok")

@@ -437,6 +437,21 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "ALTER TABLE creator_items ADD COLUMN play_urls TEXT",
         "ALTER TABLE creator_items ADD COLUMN play_urls_at INTEGER",
     ]),
+    # 曲库清单备份：独立表存 gzip 快照，服务器不解释内容（design §3.1）
+    (13, [
+        """CREATE TABLE IF NOT EXISTS metadata_backups(
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            bytes INTEGER NOT NULL,
+            raw_bytes INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            counts_json TEXT NOT NULL,
+            app_version TEXT NOT NULL DEFAULT '',
+            device TEXT NOT NULL DEFAULT '',
+            payload BLOB NOT NULL,
+            created_at INTEGER NOT NULL)""",
+        "CREATE INDEX IF NOT EXISTS idx_meta_backups_user ON metadata_backups(user_id, created_at DESC)",
+    ]),
 ]
 
 

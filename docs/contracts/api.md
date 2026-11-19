@@ -42,7 +42,17 @@ App ≤ 5 台、网页 ≤ 3 个。设备项：`id`、`channel`、`device`、`ap
 `login_name`、`recovery_code`、`new_password`。旧恢复码作废并发新码（响应返回一次）；吊销全部会话；同账号每小时 5 次。
 
 ## DELETE /account/me
-`password`。停用并吊销会话；7 天后物理删除（含反馈文字与图片）；写删除台账。冷静期内仅管理 CLI 可恢复。
+`password`。停用并吊销会话；7 天后物理删除（含反馈文字与图片）；写删除台账。冷静期内仅管理 CLI 可恢复。提交注销时同时删除该账号的云端曲库清单备份。
+
+## GET /account/metadata-backups · POST /account/metadata-backups
+曲库清单备份（元数据快照），免费账号可用，需登录。
+`GET`：列表，不含备份内容。返回 `backups`（各含 `id`、`bytes`、`counts`、`app_version`、`device`、`created_at`）、`total_bytes`、`keep`（每账号保留份数，当前 3）。
+`POST`：请求体是 `application/gzip` 的 JSON 快照（`v=1`），响应 `201`：`id`、`created_at`、`pruned`（本次被挤掉的旧备份 id 列表）。`Content-Type` 不是 `application/gzip` → `415`；内容不合法 → `422 backup_invalid`；超过体积或条数上限 → `413 backup_too_large`；同一账号每 10 分钟 1 次 → `429`（带 `Retry-After`；服务端在内容校验全部通过后才计数）。`X-GetMedia-App`、`X-GetMedia-Device` 两个可选头用于列表页显示。
+
+## GET /account/metadata-backups/{id} · DELETE /account/metadata-backups/{id} · DELETE /account/metadata-backups
+`GET` 返回 `application/gzip` 原始字节，响应头 `X-Backup-Sha256` 供客户端校验完整性。
+`DELETE /{id}` 返回 `{"deleted":1}`；备份不存在或不属于本账号 → `404 backup_not_found`。
+`DELETE`（不带 id）删除本账号全部备份，返回 `{"deleted":n}`。备份严格按账号隔离。
 
 ## POST /v2/heartbeat
 `client`。每端每天最多记一次，多余的静默成功。`204`。

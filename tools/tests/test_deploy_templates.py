@@ -48,8 +48,12 @@ def test_http_conf_whitelist_matches_free_routes():
     assert entries, "没有解析到白名单条目"
     assert "default 0;" in block
     want = set()
+    # 路径里的变量在 nginx 侧写成同名正则片段；新增带参数的免费路由时在这里登记
+    patterns = {"{device_id}": "dev_[0-9a-f]{16}", "{backup_id}": "bkp_[0-9a-f]{16}"}
     for method, path in FREE_ROUTES:
-        want.add((method, "/getmedia/api" + path.replace("{device_id}", "dev_[0-9a-f]{16}")))
+        for placeholder, regex in patterns.items():
+            path = path.replace(placeholder, regex)
+        want.add((method, "/getmedia/api" + path))
     assert set(entries) == want, (set(entries) ^ want)
 
 
