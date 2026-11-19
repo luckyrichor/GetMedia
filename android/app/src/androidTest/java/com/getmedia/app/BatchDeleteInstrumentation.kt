@@ -21,14 +21,14 @@ class BatchDeleteInstrumentation : Instrumentation() {
             runBlocking {
                 val context = targetContext
                 if (mode == "diagnostics") {
+                    // 这里只验手机直提取：服务器提取页在 full 源码集，androidTest 要为 free 一起编译，
+                    // 引用它会把这个类拖进 free 的测试编译单元。
                     val vm = withContext(Dispatchers.Main) { com.getmedia.app.ui.screen.ExtractViewModel(TrackRepository(context), BuildConfig.VERSION_NAME).apply { input = "invalid"; submit() } }
                     while (withContext(Dispatchers.Main) { vm.busy }) delay(50)
-                    withContext(Dispatchers.Main) { vm.submitViaServer() }
-                    while (withContext(Dispatchers.Main) { vm.busy }) delay(50)
                     val text = com.getmedia.app.data.repo.DiagnosticsStore.exportFailures()
-                    check(text.contains("手机直提取") && text.contains("服务器提取")) { "Failure tasks missing" }
-                    check(text.contains("提取失败") && text.contains("服务器提取失败")) { "Failure reasons missing" }
-                    report.putString("stream", "Diagnostic tasks PASS: local and server failures persisted with reasons\n")
+                    check(text.contains("手机直提取")) { "Failure task missing: $text" }
+                    check(text.contains("提取失败")) { "Failure reason missing: $text" }
+                    report.putString("stream", "Diagnostic task PASS: local extraction failure persisted with reason\n")
                     return@runBlocking
                 }
                 val db = AppDatabase.get(context)
