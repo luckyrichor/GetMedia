@@ -584,8 +584,16 @@ private fun ServerTaskRow(index: Int, task: ServerTask, progress: ServerExtractC
  * 换个解析路径（本机直连）才可能过去。
  */
 internal enum class FailureAction {
-    /** 去"我的"页登录。 */
+    /** 去"我的"页登录。本机压根没有令牌，只能先登录。 */
     LOGIN,
+
+    /**
+     * 去登录，或改用本机提取。
+     *
+     * 服务器对"未登录 / 不是 owner / 路由不存在"回同一个裸 404，客户端分不出是哪一种：
+     * 只给"去登录"的话，换一个本来就没权限的账号登进来，还是会卡在同一张卡片上。
+     */
+    LOGIN_OR_LOCAL,
 
     /** 服务器侧原因：切回本机提取，并把这条链接带过去。 */
     LOCAL,
@@ -595,7 +603,8 @@ internal enum class FailureAction {
 }
 
 internal fun failureAction(problem: ServerProblem?): FailureAction = when (problem) {
-    ServerProblem.LOGIN_REQUIRED, ServerProblem.NOT_OWNER -> FailureAction.LOGIN
+    ServerProblem.LOGIN_REQUIRED -> FailureAction.LOGIN
+    ServerProblem.NOT_OWNER -> FailureAction.LOGIN_OR_LOCAL
     ServerProblem.UNAVAILABLE, ServerProblem.STORAGE_FULL, ServerProblem.SERVER,
     ServerProblem.TIMEOUT, ServerProblem.JOB_GONE,
     -> FailureAction.LOCAL
@@ -654,27 +663,37 @@ private fun FailureCard(
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (action == FailureAction.LOCAL) {
-                SmallButton(onClick = onRetry, enabled = enabled, filled = false) {
-                    Icon(Icons.Default.Download, null, Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("重试这条", fontSize = 12.sp)
-                }
-            }
             when (action) {
                 FailureAction.LOGIN -> SmallButton(onClick = onGoLogin, enabled = enabled, filled = true) {
                     Text("去登录", fontSize = 12.sp)
                 }
-                FailureAction.LOCAL -> SmallButton(onClick = onUseLocal, enabled = enabled, filled = true) {
-                    Text("改用本机提取", fontSize = 12.sp)
+                // 分不清是"没登录"还是"这个号本来就没权限"，两条路都给，别让人卡在同一张卡片上。
+                FailureAction.LOGIN_OR_LOCAL -> {
+                    SmallButton(onClick = onGoLogin, enabled = enabled, filled = false) {
+                        Text("去登录", fontSize = 12.sp)
+                    }
+                    SmallButton(onClick = onUseLocal, enabled = enabled, filled = true) {
+                        Text("改用本机提取", fontSize = 12.sp)
+                    }
                 }
-                FailureAction.RETRY -> SmallButton(onClick = onRetry, enabled = enabled, filled = false) {
-                    Icon(Icons.Default.Download, null, Modifier.size(14.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("重试这条", fontSize = 12.sp)
+                FailureAction.LOCAL -> {
+                    RetryButton(enabled = enabled, onRetry = onRetry)
+                    SmallButton(onClick = onUseLocal, enabled = enabled, filled = true) {
+                        Text("改用本机提取", fontSize = 12.sp)
+                    }
                 }
+                FailureAction.RETRY -> RetryButton(enabled = enabled, onRetry = onRetry)
             }
         }
+    }
+}
+
+@Composable
+private fun RetryButton(enabled: Boolean, onRetry: () -> Unit) {
+    SmallButton(onClick = onRetry, enabled = enabled, filled = false) {
+        Icon(Icons.Default.Download, null, Modifier.size(14.dp))
+        Spacer(Modifier.width(6.dp))
+        Text("重试这条", fontSize = 12.sp)
     }
 }
 

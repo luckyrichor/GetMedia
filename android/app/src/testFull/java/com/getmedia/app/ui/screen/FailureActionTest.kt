@@ -10,9 +10,17 @@ import org.junit.Test
 class FailureActionTest {
 
     @Test
-    fun loginProblemsLeadToLogin() {
+    fun missingTokenOnlyOffersLogin() {
         assertEquals(FailureAction.LOGIN, failureAction(ServerProblem.LOGIN_REQUIRED))
-        assertEquals(FailureAction.LOGIN, failureAction(ServerProblem.NOT_OWNER))
+    }
+
+    /**
+     * 裸 404 分不出"没登录"和"这个号没权限"：只给"去登录"的话，
+     * 换一个本来就没权限的账号登进来还会卡在同一张卡片上，所以两条路都要给。
+     */
+    @Test
+    fun notOwnerOffersBothLoginAndLocal() {
+        assertEquals(FailureAction.LOGIN_OR_LOCAL, failureAction(ServerProblem.NOT_OWNER))
     }
 
     @Test
