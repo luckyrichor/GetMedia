@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 /**
  * 两张辅助表的读写（P0-2 骨架）。
@@ -17,6 +18,14 @@ interface LibraryAuxDao {
     /** 某个账号还没重放掉的删除，按发生时间从早到晚。 */
     @Query("SELECT * FROM track_removals WHERE account = :account ORDER BY requestedAt ASC")
     suspend fun removals(account: String): List<TrackRemovalEntity>
+
+    /** 设置页要"常显排队中的删除"，所以给一份可观察的版本。 */
+    @Query("SELECT * FROM track_removals WHERE account = :account ORDER BY requestedAt ASC")
+    fun observeRemovals(account: String): Flow<List<TrackRemovalEntity>>
+
+    /** 设置页展示同步结果摘要（[LibraryCursorEntity.note]）用。 */
+    @Query("SELECT * FROM library_cursor WHERE account = :account")
+    fun observeCursor(account: String): Flow<LibraryCursorEntity?>
 
     @Query("SELECT * FROM track_removals WHERE account = :account AND platform = :platform AND videoKey = :videoKey")
     suspend fun removal(account: String, platform: String, videoKey: String): TrackRemovalEntity?

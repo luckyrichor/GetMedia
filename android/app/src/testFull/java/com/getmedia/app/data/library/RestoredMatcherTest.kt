@@ -85,6 +85,23 @@ class RestoredMatcherTest {
         assertEquals(1, dao.allNow().size)
     }
 
+    @Test fun bindingCopiesServerStorageSoArchiveIsKnownLocally() = runBlocking {
+        dao.insertIgnore(listOf(row))
+        val archived = cloud.copy(storage = "archive")
+        assertEquals(RestoreMatchResult(bound = 1), matcher(page(archived)).match(owner, false) { true })
+
+        val linked = requireNotNull(dao.byId(row.id))
+        assertEquals("archive", linked.serverStorage)
+        // 归档行不给"同时从云端移除"的选项；删除确认只说明"云端归档会保留"
+        assertTrue(cloudSync.isCloudArchive(linked))
+        assertFalse(cloudSync.canQueueCloudDelete(linked, session()))
+    }
+
+    private fun session() = com.getmedia.app.account.SessionStore.Session(
+        loginName = owner, token = "t", expiresAt = Long.MAX_VALUE, deviceId = "d",
+        tier = "owner", consentedPrivacyVersion = 3,
+    )
+
     @Test fun distinctCloudIdsForEquivalentPartitionAcrossPagesLeaveOriginal() = runBlocking {
         dao.insertIgnore(listOf(row))
         val legacy = cloud.copy(id = 8, videoId = "$bv-p3", page = 1, updatedSeq = 18)

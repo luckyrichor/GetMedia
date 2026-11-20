@@ -888,7 +888,11 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                         }
                         if (archive.isNotEmpty()) {
                             Text(
-                                "其中 ${archive.size} 项是云端归档，云端归档会保留，只删除本机。",
+                                if (archive.size == doomed.size) {
+                                    "这是云端归档，云端归档会保留，只删除本机。"
+                                } else {
+                                    "其中 ${archive.size} 项是云端归档，云端归档会保留，只删除本机。"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = com.getmedia.app.ui.components.uiMuted(),
                                 modifier = Modifier.padding(top = 8.dp),

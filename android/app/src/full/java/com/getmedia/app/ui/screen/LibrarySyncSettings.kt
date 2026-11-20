@@ -5,8 +5,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Switch
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -21,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.library.LibraryMark
 import com.getmedia.app.data.library.LibrarySyncClient
 import com.getmedia.app.data.library.LibrarySyncGate
 import com.getmedia.app.data.library.LibrarySyncPrefs
@@ -44,6 +46,10 @@ internal fun LibrarySyncSettings() {
     val prefs = remember(context) { LibrarySyncPrefs(context) }
     var enabled by remember(account) { mutableStateOf(prefs.enabled(account)) }
     var count by remember(account) { mutableStateOf(0) }
+    var drafts by remember(account) { mutableStateOf(0) }
+    var queued by remember(account) { mutableStateOf(0) }
+    var waiting by remember(account) { mutableStateOf(0) }
+    var summary by remember(account) { mutableStateOf<String?>(null) }
     var hasRestored by remember(account) { mutableStateOf(false) }
     var confirmLegacy by remember(session?.token) { mutableStateOf(false) }
     var includeLegacy by remember(session?.token) { mutableStateOf(false) }
@@ -53,14 +59,29 @@ internal fun LibrarySyncSettings() {
         val uploader = LibraryUploader(db, LibrarySyncClient(), account)
         db.trackDao().observeAll().collect { rows ->
             count = withContext(Dispatchers.IO) { rows.count(uploader::eligible) }
+            drafts = rows.count { it.accountKey == account && it.pendingTitle != null }
             hasRestored = rows.any { it.needsRestoreMatch() && (it.accountKey == null || it.accountKey == account) }
         }
+    }
+    // 排队中的云端删除：开关关着时用户最需要看到它，所以单独观察、不依赖同步轮次
+    LaunchedEffect(context, account) {
+        AppDatabase.get(context).libraryAuxDao().observeRemovals(account).collect { list ->
+            queued = list.count { it.state != LibraryMark.REMOVAL_WAITING }
+            waiting = list.count { it.state == LibraryMark.REMOVAL_WAITING }
+        }
+    }
+    LaunchedEffect(context, account) {
+        AppDatabase.get(context).libraryAuxDao().observeCursor(account).collect { summary = it?.note }
     }
 
     LibrarySyncControls(
         enabled = enabled,
         count = count,
         allowed = LibrarySyncGate.maySync(session),
+        queued = queued,
+        waiting = waiting,
+        drafts = drafts,
+        summary = summary,
         onToggle = {
             LibrarySyncRunner.setEnabled(context, account, it)
             enabled = prefs.enabled(account)
@@ -131,6 +152,10 @@ internal fun LibrarySyncControls(
     enabled: Boolean,
     count: Int,
     allowed: Boolean = true,
+    queued: Int = 0,
+    waiting: Int = 0,
+    drafts: Int = 0,
+    summary: String? = null,
     onToggle: (Boolean) -> Unit,
     onRequest: () -> Unit,
 ) {
@@ -144,6 +169,12 @@ internal fun LibrarySyncControls(
             Text("自动同步")
             Switch(checked = enabled, onCheckedChange = onToggle)
         }
+        // 待处理项常显：开关关着时最需要看见它，否则用户会以为"删了就是删了"
+        if (queued > 0) SyncStatusLine("${queued} 项云端删除排队中")
+        if (waiting > 0) SyncStatusLine("${waiting} 项云端删除未完成，需处理")
+        if (drafts > 0) SyncStatusLine("${drafts} 项改名待推送")
+        if (!enabled) SyncStatusLine("同步已关闭，开启后继续")
+        summary?.takeIf { it.isNotBlank() }?.let { SyncStatusLine(it) }
         RowDivider(startIndent = 14.dp)
         TextButton(
             onClick = onRequest,
@@ -153,4 +184,14 @@ internal fun LibrarySyncControls(
             Text("上传本机新增（${count} 条）")
         }
     }
+}
+
+@Composable
+private fun SyncStatusLine(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = com.getmedia.app.ui.components.uiMuted(),
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+    )
 }

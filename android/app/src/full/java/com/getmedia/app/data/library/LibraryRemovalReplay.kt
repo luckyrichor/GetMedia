@@ -37,6 +37,8 @@ class LibraryRemovalReplay(
         val cancelled: Int = 0,
         val stopped: LibrarySyncProblem? = null,
         val reason: String = "",
+        /** 服务端以"归档受保护"拒绝的条数：本机删除照常完成，云端保留。 */
+        val archiveProtected: Int = 0,
     )
 
     suspend fun replay(): Summary {
@@ -44,8 +46,9 @@ class LibraryRemovalReplay(
         var replayed = 0
         var waiting = 0
         var cancelled = 0
+        var archiveProtected = 0
         for (op in dao.removals(account)) {
-            if (!valid()) return Summary(replayed, waiting, cancelled, LibrarySyncProblem.LOGIN_REQUIRED, "登录已失效")
+            if (!valid()) return Summary(replayed, waiting, cancelled, LibrarySyncProblem.LOGIN_REQUIRED, "登录已失效", archiveProtected)
             // 归档保护 / 版本冲突是"待用户处理"，不是自动重试项；用户再次删除会重置为 QUEUED
             if (op.state == LibraryMark.REMOVAL_WAITING) {
                 waiting++
@@ -94,7 +97,12 @@ class LibraryRemovalReplay(
                         }
                     }
                     LibrarySyncProblem.ARCHIVE_PROTECTED -> {
+                        // 本机删除早就在用户确认时完成了；这里只说明"云端不会动"。
+                        // 顺手把本机这一行（如果有，比如用户又加回来了）标成 archive，
+                        // 免得下一次删除确认又给一个必然被拒的勾选项。
                         markWaiting(op, "云端归档会保留，未从云端移除")
+                        markArchive(op)
+                        archiveProtected++
                         waiting++
                     }
                     LibrarySyncProblem.INPUT -> {
@@ -105,7 +113,7 @@ class LibraryRemovalReplay(
                     LibrarySyncProblem.NETWORK, LibrarySyncProblem.RATE_LIMITED,
                     LibrarySyncProblem.SERVER, LibrarySyncProblem.NOT_AVAILABLE,
                     LibrarySyncProblem.LOGIN_REQUIRED -> {
-                        return Summary(replayed, waiting, cancelled, e.problem, e.message.orEmpty())
+                        return Summary(replayed, waiting, cancelled, e.problem, e.message.orEmpty(), archiveProtected)
                     }
                     else -> {
                         markWaiting(op, e.message.ifBlank { "删除未完成，已暂停" })
@@ -114,7 +122,20 @@ class LibraryRemovalReplay(
                 }
             }
         }
-        return Summary(replayed, waiting, cancelled)
+        return Summary(replayed, waiting, cancelled, archiveProtected = archiveProtected)
+    }
+
+    /**
+     * 服务端说"这是归档，不能写墓碑"：把同键本机行标成 archive。
+     *
+     * 行的删除在用户确认时就完成了，所以这里通常没有行可标；只有"删完又加回来"或
+     * 类别批量删除留下的同键行才会命中。标记过后，删除确认会给"云端归档会保留"的说明
+     * 而不是一个必然被拒的勾选项。
+     */
+    private suspend fun markArchive(op: TrackRemovalEntity) {
+        val row = trackFor(op) ?: return
+        if (row.serverStorage == "archive") return
+        db.trackDao().updateExisting(row.copy(serverStorage = "archive"))
     }
 
     /** 删除成功后：若用户在本机重新添加了同键文件，把它脱钩，避免下一轮又自动传回云端。 */

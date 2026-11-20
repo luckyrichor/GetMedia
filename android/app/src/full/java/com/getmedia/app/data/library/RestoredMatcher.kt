@@ -85,6 +85,9 @@ internal class RestoredMatcher(
                     serverSeq = hit.updatedSeq,
                     serverPage = key.page,
                     serverUpdatedAtMs = (hit.updatedAtSec * 1_000).takeIf { it > 0 },
+                    // 存储类型必须一起写：绑定到归档行时，删除确认要据此显示"云端归档会保留"。
+                    // 只写 ID/版本会让本机一直以为它是普通行（真机 1b 就是这个问题）。
+                    serverStorage = hit.storage.ifBlank { row.serverStorage },
                     accountKey = account,
                     syncState = SyncState.SYNCED.name,
                 )) == 1)

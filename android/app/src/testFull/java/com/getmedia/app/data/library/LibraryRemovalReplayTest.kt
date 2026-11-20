@@ -156,12 +156,31 @@ class LibraryRemovalReplayTest {
         val summary = LibraryRemovalReplay(db, write, account).replay()
 
         assertEquals(1, summary.waiting)
+        assertEquals("归档拒绝要单独计数，用于给用户明确提示", 1, summary.archiveProtected)
         val op = db.libraryAuxDao().removals(account).single()
         assertEquals(LibraryMark.REMOVAL_WAITING, op.state)
         assertEquals(before.toList(), f.readBytes().toList())
         // WAITING 不再自动重试，避免每轮都打一次必然被拒的请求
         LibraryRemovalReplay(db, write, account).replay()
         assertEquals(1, write.deletes.size)
+    }
+
+    @Test fun archiveProtectedMarksRowArchiveWhenStorageWasUnknown() = runBlocking {
+        // 本机不知道它是归档（storage 空）：照样给勾选项、照样入队；
+        // 服务端拒绝后本机不用再猜——把这一行标成 archive，下次删除确认就不会再给错选项。
+        val t = bound(localPath = file().absolutePath, storage = null)
+        db.trackDao().upsertAll(listOf(t))
+        db.libraryAuxDao().addRemoval(
+            TrackRemovalEntity(platform = "bilibili", videoKey = "BV1", account = account,
+                remoteId = t.serverId, requestedAt = 2_000, expectedSeq = t.serverSeq, generation = 2_000),
+        )
+        val write = FakeWrite(deleteError = LibrarySyncException(
+            LibrarySyncProblem.ARCHIVE_PROTECTED, "归档保留", "archive_protected"))
+        val summary = LibraryRemovalReplay(db, write, account).replay()
+
+        assertEquals(1, summary.archiveProtected)
+        assertEquals("archive", db.trackDao().byId(t.id)?.serverStorage)
+        assertTrue("本机文件一律不动", File(t.localPath!!).exists())
     }
 
     @Test fun versionConflictPausesButDoesNotUseNewVersion() = runBlocking {

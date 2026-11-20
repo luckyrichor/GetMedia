@@ -49,11 +49,13 @@ class LibrarySyncEngineTest {
         seq: Long = id,
         title: String = "云端 $id",
         mediaType: String = "audio",
+        storage: String = "metadata",
     ) = CloudTrack(
         id = id, platform = "bilibili", videoId = videoId, page = page, title = title,
         uploader = "某UP", durationSec = 12.5,
         sourceUrl = "https://www.bilibili.com/video/$videoId?p=$page",
         mediaType = mediaType, deleted = deleted, updatedSeq = seq, updatedAtSec = 1_700_000_000 + id,
+        storage = storage,
     )
 
     private class FakeTransport(private val pages: MutableList<Any>) : LibrarySyncTransport {
@@ -214,7 +216,7 @@ class LibrarySyncEngineTest {
         assertEquals("本地文件不动", "/files/-1.audio", row.localPath)
     }
 
-    @Test fun serverWinsOverPendingDraftWhenVersionMoved() = runBlocking {
+    @Test fun pendingDraftIsNeverOverwrittenByPull() = runBlocking {
         val id = LocalIds.localId("bilibili", "BV1", 1)
         db.trackDao().upsertAll(listOf(
             cloudRow(id, deletedMirror = false).copy(
@@ -227,10 +229,59 @@ class LibrarySyncEngineTest {
         e.pull(account)
 
         val row = rows().single()
-        assertEquals("网页改的", row.title)
-        assertNull(row.pendingTitle)
-        assertNull(row.localTitleOverride)
-        assertEquals(5L, row.serverSeq)
+        // 拉取只更新服务器字段；草稿与它的显示标题必须原样保留，冲突交给 LibraryTitlePush 处理
+        assertEquals("我的草稿", row.title)
+        assertEquals("我的草稿", row.pendingTitle)
+        assertEquals("我的草稿", row.localTitleOverride)
+        assertEquals("服务器旧名", row.confirmedTitle)
+        assertEquals("服务器版本照记，供推送时判冲突", 5L, row.serverSeq)
+        assertEquals(LibraryMark.PENDING_UP, row.syncState)
+    }
+
+    @Test fun stage4LocalRenameSurvivesPull() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(
+                title = "我以前改的名字", localTitleOverride = "我以前改的名字",
+                confirmedTitle = "服务器原名", serverSeq = 1,
+            ),
+        ))
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 2, title = "服务器新名")), hasMore = false)))
+        e.pull(account)
+
+        val row = rows().single()
+        assertEquals("本机改名不能被顺手抹掉", "我以前改的名字", row.title)
+        assertEquals("我以前改的名字", row.localTitleOverride)
+        assertEquals("服务器标题只作基准", "服务器新名", row.confirmedTitle)
+        assertEquals(2L, row.serverSeq)
+    }
+
+    @Test fun storageIsWrittenEvenWhenSeqDidNotMove() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(serverStorage = null, serverSeq = 1),
+        ))
+        val (e, _) = engine(listOf(
+            page(listOf(cloud(1, videoId = "BV1", seq = 1).copy(storage = "archive")), hasMore = false),
+        ))
+        e.pull(account)
+
+        assertEquals("版本没动也要补上存储类型", "archive", rows().single().serverStorage)
+    }
+
+    @Test fun boundRowWithoutStorageTriggersOneFullBackfill() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV7", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(
+                videoId = "BV7", serverId = 7, serverSeq = 7, serverStorage = null,
+            ),
+        ))
+        db.libraryAuxDao().putCursor(LibraryCursorEntity(account, 99, 0))
+        val (e, t) = engine(listOf(page(listOf(cloud(7, videoId = "BV7", seq = 7)), hasMore = false)))
+        e.pull(account)
+
+        assertEquals("有绑定行缺 storage，就从 0 全量拉一次", listOf(0L), t.calls)
+        assertEquals("metadata", rows().single().serverStorage)
     }
 
     @Test fun pullDoesNotRecreateAKeyWaitingForRemoval() = runBlocking {

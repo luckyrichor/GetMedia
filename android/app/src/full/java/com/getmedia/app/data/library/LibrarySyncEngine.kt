@@ -52,6 +52,17 @@ class LibrarySyncEngine(
     suspend fun pull(account: String): Result {
         require(account.isNotBlank()) { "账号不能为空" }
         var cursor = db.libraryAuxDao().cursor(account)?.lastPos ?: 0L
+        // 一次性回填：旧版本只在"新建云端行"时写 serverStorage，恢复匹配与老绑定行可能一直是空。
+        // 增量水位不会再把那些行送回来，所以只要发现"有 serverId 但没 storage"，就退到全量拉一次。
+        // 拉取幂等；全量之后仍是空的（服务器没给这个字段）就写 "unknown" 占位，避免每轮都全量。
+        var backfill = false
+        if (cursor > 0L && db.trackDao().allNow().any {
+                it.accountKey == account && it.serverId != null && it.serverStorage == null
+            }
+        ) {
+            cursor = 0L
+            backfill = true
+        }
         var added = 0
         var skipped = 0
         var tombstones = 0
@@ -70,6 +81,13 @@ class LibrarySyncEngine(
             cursor = applied.cursor
             // 空页但 has_more=true 是服务端的边界抖动，直接停，别打空请求
             if (!page.hasMore || page.items.isEmpty()) break
+        }
+        if (backfill) {
+            // 服务器没给 storage 的绑定行写占位值：`isKnownArchive` 只认 "archive"，
+            // 所以它仍然会被当作"未知"，删除确认照常给勾选项，由服务端兜底。
+            db.trackDao().allNow()
+                .filter { it.accountKey == account && it.serverId != null && it.serverStorage == null }
+                .forEach { db.trackDao().updateExisting(it.copy(serverStorage = "unknown")) }
         }
         return Result(added = added, skipped = skipped, tombstones = tombstones, pages = pages,
             cursor = cursor, marks = marks, removedRows = removedRows)
@@ -155,8 +173,11 @@ class LibrarySyncEngine(
                     it.accountKey == account && it.restoredKey() == identity
                 }
                 if (existing != null) {
-                    // 已有的绑定行：只更新服务器权威字段，绝不碰收藏/类别/排序/文件
-                    if (item.updatedSeq > existing.serverSeq.orZero()) {
+                    // 已有的绑定行：只更新服务器权威字段，绝不碰收藏/类别/排序/文件。
+                    // 除了版本前进，**存储类型变了也要写**：归档行可能版本没动（例如恢复匹配时
+                    // 才第一次看到 storage），只比 updated_seq 会让本机永远不知道它是 archive。
+                    val storage = item.storage.ifBlank { existing.serverStorage }
+                    if (item.updatedSeq > existing.serverSeq.orZero() || storage != existing.serverStorage) {
                         db.trackDao().updateExisting(mergeServer(existing, item, now))
                     }
                     skipped++
@@ -189,43 +210,38 @@ class LibrarySyncEngine(
      * 把服务器的新版本合进已有绑定行。**只改服务器权威字段**：
      * 收藏、类别、手动顺序、本地文件、入库时间、播放列表不动（`existing.copy` 的纪律）。
      *
-     * 标题冲突：本机有待推送草稿时，服务器版本只要比草稿基线新，就以服务器为准；
-     * 如果服务器标题正好等于草稿（说明 PATCH 已经生效、只是响应丢了），按"已达到目标"结项。
+     * 标题的三条规则（从强到弱）：
+     *
+     * 1. **有待推送草稿**：拉取一律不动标题、不动草稿，也不改 `syncState`。草稿只能由
+     *    [LibraryTitlePush] 收尾——它先 `GET` 核对，只有版本冲突（含 412）时才采用服务器标题
+     *    并计入 `conflicts`，由调用方给出"已改用云端标题"的明确提示。
+     *    以前这里"服务器版本比基线新就清草稿"的做法会让用户改完名、还没推送就被悄悄抹掉。
+     * 2. **阶段 4 留下的本机改名**（`localTitleOverride` 有值、没有草稿）：保留本机标题，
+     *    只把服务器的实际标题记到 `confirmedTitle`，作为以后冲突判断的基准。
+     * 3. 其余情况：服务器为准。
      */
     private fun mergeServer(existing: TrackEntity, item: CloudTrack, now: Long): TrackEntity {
-        val draft = existing.pendingTitle
         var state = existing.syncState
         var title = existing.title
         var confirmed = existing.confirmedTitle
         var override = existing.localTitleOverride
-        var pending = draft
-        var pendingBase = existing.pendingTitleBaseSeq
-        var pendingGen = existing.pendingTitleGen
-        if (draft != null) {
-            val base = existing.pendingTitleBaseSeq ?: existing.serverSeq ?: 0L
-            if (item.updatedSeq > base) {
-                // 服务器在我们编辑之后又变了：服务器赢；标题相同则视为草稿已生效
-                title = item.title
-                confirmed = item.title
-                override = null
-                pending = null
-                pendingBase = null
-                pendingGen = null
-                state = SyncState.SYNCED.name
-            }
+        if (existing.pendingTitle != null) {
+            // 规则 1：草稿受保护，连 title/confirmed 都不动
+        } else if (override != null) {
+            // 规则 2：本机改名优先，服务器标题只作基准
+            confirmed = item.title
         } else {
             title = item.title
             confirmed = item.title
-            override = null
             state = SyncState.SYNCED.name
         }
         return existing.copy(
             title = title,
             confirmedTitle = confirmed,
             localTitleOverride = override,
-            pendingTitle = pending,
-            pendingTitleBaseSeq = pendingBase,
-            pendingTitleGen = pendingGen,
+            pendingTitle = existing.pendingTitle,
+            pendingTitleBaseSeq = existing.pendingTitleBaseSeq,
+            pendingTitleGen = existing.pendingTitleGen,
             uploader = item.uploader,
             durationSec = item.durationSec,
             sourceUrl = item.sourceUrl.ifBlank { existing.sourceUrl },

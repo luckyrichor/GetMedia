@@ -250,6 +250,16 @@ object LibrarySyncRunner {
         return app
     }
 
+    /**
+     * 自动轮次的唯一准入门槛。**开关关着就一个请求都不发**（隐私说明 v3 写的是关闭后不再
+     * 上传与拉取），所以删除队列在关闭期间只会排队、不会重放——设置页会常显排队数提醒用户。
+     */
+    internal fun mayRunAutomatically(
+        prefs: LibrarySyncPrefs,
+        account: String,
+        manualPromptOpen: Boolean = false,
+    ): Boolean = prefs.enabled(account) && !manualPromptOpen
+
     private suspend fun run(context: Context) {
         val session = SessionStore.current.value
         if (!LibrarySyncGate.maySync(session)) {
@@ -259,7 +269,7 @@ object LibrarySyncRunner {
         }
         val account = session!!.loginName
         val prefs = LibrarySyncPrefs(context)
-        if (!prefs.enabled(account) || prompt.state.value?.manual == true) return
+        if (!mayRunAutomatically(prefs, account, prompt.state.value?.manual == true)) return
         if (!mutex.tryLock()) return
         try {
             val db = AppDatabase.get(context)
@@ -270,7 +280,13 @@ object LibrarySyncRunner {
                 pull = { acc ->
                     // ① 先重放本机删除：必须在拉取前，否则刚删的行会被拉回来
                     val replay = LibraryRemovalReplay(db, client, acc, valid = { token() != null }).replay()
-                    if (replay.waiting > 0) note(db, acc, "${replay.waiting} 项云端删除待处理")
+                    val replayNotes = buildList {
+                        if (replay.waiting > 0) add("${replay.waiting} 项云端删除待处理")
+                        if (replay.archiveProtected > 0) {
+                            add("云端归档会保留，已只删除本机（${replay.archiveProtected} 项）")
+                        }
+                    }
+                    if (replayNotes.isNotEmpty()) note(db, acc, replayNotes.joinToString("；"))
                     if (replay.stopped != null && replay.stopped != LibrarySyncProblem.NOT_AVAILABLE) {
                         note(db, acc, "云端删除未完成：${replay.reason}")
                     }
@@ -285,6 +301,9 @@ object LibrarySyncRunner {
                     LibrarySyncEngine(db, LibrarySyncApi(token = token)).pull(acc)
                     // ④ 标题草稿条件 PATCH（拉取之后，以最新服务器版本为准）
                     val titles = LibraryTitlePush(db, client, acc, valid = { token() != null }).push()
+                    if (titles.conflicts > 0) {
+                        note(db, acc, "${titles.conflicts} 项改名与云端冲突，已改用云端标题")
+                    }
                     if (titles.stopped != null && titles.stopped != LibrarySyncProblem.NOT_AVAILABLE) {
                         note(db, acc, "标题推送未完成：${titles.reason}")
                     }
