@@ -21,6 +21,7 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import androidx.activity.compose.BackHandler
 import com.getmedia.app.data.repo.DiagnosticsStore
+import com.getmedia.app.data.cloud.cloudSync
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
@@ -425,9 +426,16 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
     fun operate(block: suspend () -> Unit) { scope.launch { runCatching { DiagnosticsStore.operation("媒体库操作", block) }.onFailure { notice = it.message ?: "操作失败" } } }
     fun queueItems(tracks: List<TrackEntity>, play: Boolean, sourceId: Long? = null) = operate {
         val ready = mutableListOf<PlayerHolder.QueueItem>()
+        // 云端行（服务器有、本机没文件）要先下载再入队；其它缺文件的照旧走仓库的本地检查，
+        // 由它给出"已丢失，请重新提取"这类明确结论。下载可能几十秒，先说一声再动手。
+        if (tracks.any { cloudSync.awaitingDownload(it) }) notice = "正在从云端下载…"
         for (track in tracks) {
-            val path = track.localPath?.takeIf { File(it).exists() }
-                ?: trackRepo.download(track).getOrThrow().absolutePath
+            val local = track.localPath?.takeIf { File(it).exists() }
+            val path = local ?: if (cloudSync.awaitingDownload(track)) {
+                cloudSync.download(context, track).absolutePath
+            } else {
+                trackRepo.download(track).getOrThrow().absolutePath
+            }
             ready += PlayerHolder.QueueItem(track, path)
         }
         if (ready.isEmpty()) notice = "这里还没有可播放的内容"
@@ -1332,7 +1340,7 @@ private fun LibraryTrackList(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () -> Unit,
+internal fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () -> Unit,
     selecting: Boolean = false, selected: Boolean = false, selectionEnabled: Boolean = true, onSelect: () -> Unit = {},
     number: Int = 0, modifier: Modifier = Modifier,
     longPressSelects: Boolean = false) {
@@ -1407,6 +1415,20 @@ private fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () -
                 fontWeight = FontWeight.Medium,
                 color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
             )
+            // 云端行（服务器有、本机没文件）要一眼看出来：不然"点了没反应"像是应用坏了。
+            // 判定在 full/free 的实现里（free 恒 false），这里只管画。
+            if (cloudSync.awaitingDownload(track)) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "云端未下载",
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
             Spacer(Modifier.height(3.dp))
             // 作者 · 时长一行；入库时间单独一行 —— 一行塞不下完整的「年-月-日 时:分」，
             // 之前被 maxLines=1 截成了「2026-10-27 16:4」。

@@ -109,6 +109,14 @@ object ExportPlan {
     const val REASON_MISSING_LOCAL = "本机文件缺失，需要重新提取"
 
     /**
+     * 云端行还没下载到本机（`localPath` 为 null 但 `serverId` 有值）。
+     *
+     * 与 [REASON_MISSING_LOCAL] 分开：这条不是丢了，是还没拿下来，去下载就能导；
+     * 说成"需要重新提取"会让人把服务器上已有的一条重提取一遍，白等一遍还多一份文件。
+     */
+    const val REASON_NOT_DOWNLOADED = "尚未下载到本机，请先下载"
+
+    /**
      * 失败归类：只返回**固定文案**，绝不拼接异常消息或路径——异常消息里常带用户目录名。
      * 返回值直接用于摘要页与诊断计数。
      */

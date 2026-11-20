@@ -28,6 +28,14 @@ object SessionStore {
         val loginName: String, val token: String, val expiresAt: Long, val deviceId: String?,
         val consentRequired: Boolean = false, val recoveryConfirmed: Boolean = true,
         val pendingRecoveryCode: String? = null,
+        /**
+         * 账号档位（`free` / `owner` …），登录与每次 `me()` 时刷新。
+         *
+         * 存本地是为了让曲库同步的两道闸能在**客户端**判定：没同意最新隐私说明、或不是
+         * owner 档，就一个请求都不发（不靠服务端 403 兜底，403 只当兜底）。
+         * `null` = 还不知道（旧版本升级上来的会话、或还没成功对过一次 `me()`），按"不许同步"处理。
+         */
+        val tier: String? = null,
     )
 
     private const val ALIAS = "getmedia.account.session"
@@ -45,6 +53,7 @@ object SessionStore {
                 o.getString("login_name"), o.getString("token"), o.optLong("expires_at"), o.optString("device_id").ifBlank { null },
                 o.optBoolean("consent_required"), o.optBoolean("recovery_confirmed", true),
                 o.optString("pending_recovery").ifBlank { null },
+                o.optString("tier").ifBlank { null },
             )
         }.getOrNull()
     }
@@ -56,7 +65,7 @@ object SessionStore {
         val data = JSONObject().put("login_name", session.loginName).put("token", session.token)
             .put("expires_at", session.expiresAt).put("device_id", session.deviceId ?: "")
             .put("consent_required", session.consentRequired).put("recovery_confirmed", session.recoveryConfirmed)
-            .put("pending_recovery", session.pendingRecoveryCode ?: "").toString().toByteArray()
+            .put("pending_recovery", session.pendingRecoveryCode ?: "").put("tier", session.tier ?: "").toString().toByteArray()
         val temp = File(file.parentFile, file.name + ".tmp")
         temp.writeBytes(encrypt(data))
         check(temp.renameTo(file)) { "无法保存登录状态" }

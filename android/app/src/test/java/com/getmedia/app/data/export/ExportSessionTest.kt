@@ -113,6 +113,26 @@ class ExportSessionTest {
         assertEquals(ExportSession.Status.DONE, state.results.first { it.id == 2L }.status)
     }
 
+    /** 云端行（有 serverId、没 localPath）要说"尚未下载"，不能让人去重提取一遍（阶段 3 验收 ④）。 */
+    @Test
+    fun cloudRowSaysNotDownloadedInsteadOfMissing() = runBlocking {
+        val cloud = ExportTrack(
+            id = 9L, title = "云端的一条", audioFormat = "", audioBytes = null,
+            localPath = null, serverId = 41L,
+        )
+        val session = newSession(
+            listOf(ExportPlan.Item(cloud, emptyList(), "云端的一条.m4a"), item(2L, source("b.m4a"))),
+            FakeTarget(),
+        )
+
+        session.run()
+
+        val state = session.state.value as ExportSession.State.Finished
+        assertEquals(ExportPlan.REASON_NOT_DOWNLOADED, state.results.first { it.id == 9L }.reason)
+        assertEquals("尚未下载到本机，请先下载", state.results.first { it.id == 9L }.reason)
+        assertEquals(ExportSession.Status.DONE, state.results.first { it.id == 2L }.status)
+    }
+
     @Test
     fun retryOnlyRunsUnfinishedItems() = runBlocking {
         val late = File(folder.root, "late.m4a") // 先不存在，重试前才建

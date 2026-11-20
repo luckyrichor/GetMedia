@@ -2,6 +2,7 @@ package com.getmedia.app.ui
 
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import com.getmedia.app.data.cloud.CloudUploadAsk
 import com.getmedia.app.data.local.MediaKind
 
 /**
@@ -51,4 +52,16 @@ interface OwnerGate {
      */
     @Composable
     fun ExportMissingNotice(missingCount: Int, onSkip: () -> Unit)
+
+    /**
+     * 「有 N 条只在这台手机上，上传到账号 X？」的一次性确认（P0-2 阶段 3）。
+     *
+     * - `free`：空实现——免费版没有服务器曲库，这个询问永远不会出现；
+     * - `full`：真实的确认弹窗，文案只存在于 full 源码集。
+     *
+     * @param onUpload 点了上传：该账号以后自动同步，不再问。
+     * @param onDecline 点了暂不上传：该账号以后不问、也不自动传。
+     */
+    @Composable
+    fun UploadAsk(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit)
 }

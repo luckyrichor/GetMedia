@@ -70,3 +70,27 @@ data class CloudTrack(
 
 /** 一页拉取结果。[nextSeq] 是本页最大 `updated_seq`，**不能**当水位直接用（见引擎）。 */
 data class PullPage(val items: List<CloudTrack>, val nextSeq: Long, val hasMore: Boolean)
+
+/**
+ * 上传一条"本机新增"要带的东西：**只有这 8 个字段**。
+ *
+ * 服务端 `POST /v2/tracks` 收多一个字段就 422（契约见 `docs/p0-2-sync-design.md` §18.2）。
+ * 刻意不带 `localPath` / `favorite` / 类别：那些是本机整理痕迹，服务器不存。
+ */
+data class UploadEntry(
+    val platform: String,
+    val videoId: String,
+    val page: Int,
+    val mediaType: String,
+    val title: String,
+    val uploader: String?,
+    val durationSec: Double?,
+    val sourceUrl: String,
+)
+
+/**
+ * 上传结果。[created] 为 false 表示服务器上已经有这个键（幂等重放、或网页端先建过）：
+ * 按设计以服务器那一行为准，包括标题。
+ */
+data class CreatedTrack(val created: Boolean, val track: CloudTrack)
+

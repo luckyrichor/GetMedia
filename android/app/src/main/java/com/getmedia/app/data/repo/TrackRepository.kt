@@ -183,6 +183,11 @@ class TrackRepository(private val context: Context) {
     /**
      * 返回曲目的本地文件。GetMedia 免费版没有服务器下载：文件只来自本机提取或导入，
      * 文件缺失时只能重新提取。保留 [Result] 形式，调用方统一处理失败。
+     *
+     * 两种情况必须分开说（P0-2 阶段 3）：`localPath == null` **且**这行有服务器身份
+     * （`serverId` 非空，即"云端有、本机没下过"）→ 是"还没下载"，不是"文件丢了"。
+     * 说成"已丢失，请重新提取"会让人去重提取一遍，白做；真正的丢失是下面那条：
+     * 有 `localPath` 但文件不在了。
      */
     suspend fun download(track: TrackEntity): Result<File> = runCatching {
         withContext(Dispatchers.IO) { fileMutex.withLock {
@@ -190,6 +195,7 @@ class TrackRepository(private val context: Context) {
             val file = current.localPath?.let(::File)
             if (file != null && file.exists() && file.length() > 0) return@withLock file
             if (current.locallyEdited) error("本地剪辑文件已丢失，请重新剪辑")
+            if (current.localPath == null && current.serverId != null) error("尚未下载到本机，请先下载")
             error("本机音频文件已丢失，请重新提取")
         } }
     }

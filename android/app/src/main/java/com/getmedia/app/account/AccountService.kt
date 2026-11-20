@@ -30,6 +30,7 @@ object AccountService {
         SessionStore.save(SessionStore.Session(
             r.account.loginName, r.session.token, r.session.expiresAt, r.session.deviceId,
             consentRequired = false, recoveryConfirmed = false, pendingRecoveryCode = r.recoveryCode,
+            tier = r.account.tier,
         ))
     }
 
@@ -38,7 +39,10 @@ object AccountService {
         SessionStore.save(SessionStore.Session(
             r.account.loginName, r.session.token, r.session.expiresAt, r.session.deviceId,
             consentRequired = r.consentRequired, recoveryConfirmed = r.recoveryConfirmed,
+            tier = r.account.tier,
         ))
+        // 登录即触发一轮曲库同步（free 风味是空实现；闸门在实现里判）
+        com.getmedia.app.data.cloud.cloudSync.onAccountChanged(appContext)
     }
 
     /** 找回：成功后所有设备登出，需要用新密码重新登录；返回新的恢复码（只显示一次）。 */
@@ -60,7 +64,9 @@ object AccountService {
         if (SessionStore.current.value == null) return
         try {
             val me = api.me()
-            SessionStore.update { it.copy(consentRequired = me.consentRequired, recoveryConfirmed = me.recoveryConfirmed) }
+            SessionStore.update {
+                it.copy(consentRequired = me.consentRequired, recoveryConfirmed = me.recoveryConfirmed, tier = me.tier)
+            }
         } catch (e: ApiException) {
             if (e.status == 401) SessionStore.clear()
         } catch (_: java.io.IOException) {
@@ -77,6 +83,8 @@ object AccountService {
     suspend fun logout() {
         runCatching { api.logout() }
         SessionStore.clear()
+        // 退出后不该再有同步请求；通知一次让实现把待确认的询问收回去
+        runCatching { com.getmedia.app.data.cloud.cloudSync.onAccountChanged(appContext) }
     }
 
     /** 调用需要登录的接口时统一处理会话失效。 */

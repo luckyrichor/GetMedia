@@ -32,9 +32,25 @@ object LibrarySyncJson {
         )
     }
 
+    /**
+     * `POST /v2/tracks` 的 200 响应：`{"created": true|false, "track": {...}}`。
+     *
+     * `created=false` 不是失败：服务器上已经有这个键，客户端按服务器那一行回填。
+     * 缺 `track` 直接当服务器错误——没有服务器那一行就没法回填 `serverId`，留着也是脏数据。
+     */
+    fun created(text: String): CreatedTrack {
+        val root = runCatching { JSONObject(text) }.getOrElse {
+            throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的内容无法识别")
+        }
+        val obj = root.optJSONObject("track")
+            ?: throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器没有返回上传后的条目")
+        val parsed = track(obj)
+            ?: throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的条目缺少平台或作品号")
+        return CreatedTrack(created = root.optBoolean("created", true), track = parsed)
+    }
+
     /** 解析一条；**键不全的行直接丢掉**（没有 platform/video_id 就没法算本地 id）。 */
-    private fun track(o: JSONObject): CloudTrack? {
-        val platform = o.optString("platform").trim()
+    private fun track(o: JSONObject): CloudTrack? {        val platform = o.optString("platform").trim()
         val videoId = o.optString("video_id").trim()
         if (platform.isEmpty() || videoId.isEmpty()) return null
         val id = o.optLong("id", 0)

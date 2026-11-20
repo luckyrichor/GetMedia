@@ -68,3 +68,10 @@ __pycache__/
 /docs/deploy-mail-proxy-2026-11-18.md
 # 上线清单含服务器路径、systemd/nginx/sqlite 命令与真机验收步骤：只留本地
 /docs/metadata-backup-golive.md
+
+# P0-2 阶段 3 报告：含未发布行为、真机设备号与本机路径，随部署清单一起只留本地
+/docs/reports/p0-2-stage3-report.md
+# 曲库同步部署清单：含服务器路径与可执行命令，只留本地
+/docs/p0-2-golive.md
+# 隐私说明 v3 草稿：未生效的文本不进公开仓库，生效时以正式文件替换 docs/legal/privacy-policy.md
+/docs/legal/privacy-policy-v3-draft.md

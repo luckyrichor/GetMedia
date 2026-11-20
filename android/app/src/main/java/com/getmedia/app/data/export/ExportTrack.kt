@@ -25,7 +25,18 @@ data class ExportTrack(
     val audioBytes: Long? = null,
     /** null 表示文件缺失（导出时记失败）。 */
     val localPath: String? = null,
+    /**
+     * 服务器上的条目号；null 表示这一条从来不在服务器上（本机提取/导入）。
+     *
+     * 用它区分两种"本机没文件"：有 `serverId` + 没 `localPath` = **还没下载**（去下载就行）；
+     * 没有 `serverId` = 本机产物真的丢了（要重新提取）。免费版永远是 null。
+     */
+    val serverId: Long? = null,
 ) {
+    /** 云端有、本机没下过：导出失败原因要说"尚未下载"，不能让人去重提取一遍。 */
+    val awaitingDownload: Boolean
+        get() = localPath.isNullOrBlank() && serverId != null
+
     /** 显示名：重命名优先，空串仍回落到原标题。 */
     val displayTitle: String
         get() = localTitleOverride?.takeIf { it.isNotBlank() } ?: title
@@ -44,6 +55,7 @@ data class ExportTrack(
             mediaType = entity.mediaType,
             audioBytes = entity.audioBytes,
             localPath = entity.localPath,
+            serverId = entity.serverId,
         )
     }
 }

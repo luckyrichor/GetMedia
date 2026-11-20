@@ -195,6 +195,16 @@ class MainActivity : ComponentActivity() {
                         if (restoreFromDecision) {
                             com.getmedia.app.ui.screen.RestoreFlow(onClose = { restoreFromDecision = false })
                         }
+                        // 曲库同步：有"只在这台手机上"的条目时问一次（每个账号一次）。
+                        // 询问的数据由 sync 实现给（free 恒为 null），文案在 full 的弹窗里。
+                        val uploadAsk by com.getmedia.app.data.cloud.cloudSync.uploadAsk.collectAsState()
+                        uploadAsk?.let { ask ->
+                            com.getmedia.app.ui.ownerGate.UploadAsk(
+                                ask = ask,
+                                onUpload = { com.getmedia.app.data.cloud.cloudSync.acceptUpload(this@MainActivity) },
+                                onDecline = { com.getmedia.app.data.cloud.cloudSync.declineUpload(this@MainActivity) },
+                            )
+                        }
                         com.getmedia.app.ui.screen.AccountGates()
                     }
                 }
@@ -206,6 +216,8 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         // 曲库清单备份：进前台 5 秒后算一次指纹，之后每 10 分钟一次（设计 §5.3）。
         com.getmedia.app.data.backup.BackupManager.onForeground()
+        // 曲库同步：进前台触发一轮（内部 5 分钟节流，闸门在实现里判）。
+        com.getmedia.app.data.cloud.cloudSync.onForeground(this)
         lifecycleScope.launch {
             // 联网失败一律静默：账号状态对一次、每天一次心跳，都不影响本地功能。
             try {

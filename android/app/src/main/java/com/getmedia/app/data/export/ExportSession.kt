@@ -141,7 +141,13 @@ class ExportSession(
 
             val outcome =
                 if (item.track.localPath.isNullOrBlank()) {
-                    ExportWriter.Outcome(null, 0, ExportPlan.REASON_MISSING_LOCAL)
+                    // 云端行还没下到本机 ≠ 本机文件丢了：前者去下载就能导，后者只能重提取
+                    val reason = if (item.track.awaitingDownload) {
+                        ExportPlan.REASON_NOT_DOWNLOADED
+                    } else {
+                        ExportPlan.REASON_MISSING_LOCAL
+                    }
+                    ExportWriter.Outcome(null, 0, reason)
                 } else {
                     withContext(io) {
                         writer.write(item, File(item.track.localPath)) { shouldStop(deadlineMs) }

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import hdr, login, register
+from conftest import hdr, login, make_owner, register
 from getmedia.cli import main as cli
 from getmedia.config import MailConfig
 
@@ -55,6 +55,35 @@ def test_cooldown_then_physical_delete_with_ledger(u):
     assert uid in ops.ledger_ids() and q(env, "select user_id from deletion_ledger")[0][0] == uid
     assert ops.run_deletions() == 0
     assert register(env).status_code == 201  # 登录名可再次使用
+
+
+def test_cooldown_delete_clears_tracks(open_reg):
+    """冷静期满后该账号的曲库行一起清空（P0-2 阶段 3 补的回归）。
+
+    曲库行靠 `tracks.user_id ... ON DELETE CASCADE` 随账号删除，链路是
+    `DELETE FROM users`（`ops.run_deletions`）→ 外键级联。以前只断言了 users/feedback/sessions，
+    tracks 这一层没有用例盯着，换 schema 或有人把级联改成 SET NULL 都不会被发现。
+
+    同时钉住冷静期内的行为：行必须还在，否则"冷静期内恢复账号"会变成恢复出一个空库。
+    """
+    env = open_reg
+    tok = make_owner(env)
+    uid = env.client.get("/account/me", headers=hdr(tok)).json()["id"]
+    body = {"platform": "bilibili", "video_id": "BVcool0001", "page": 1, "media_type": "audio",
+            "title": "冷静期里该被删掉的一条", "uploader": "某UP", "duration_sec": 12.5,
+            "source_url": "https://www.bilibili.com/video/BVcool0001?p=1"}
+    assert env.client.post("/v2/tracks", headers=hdr(tok), json=body).status_code == 200
+    assert q(env, "select count(*) from tracks where user_id=?", uid)[0][0] == 1
+
+    assert env.client.request("DELETE", "/account/me", json={"password": PW}, headers=hdr(tok)).status_code == 200
+    env.clock.advance(6 * 86400)
+    assert env.app.state.ops.run_deletions() == 0
+    assert q(env, "select count(*) from tracks where user_id=?", uid)[0][0] == 1, "冷静期内不该删曲库行"
+
+    env.clock.advance(2 * 86400)
+    assert env.app.state.ops.run_deletions() == 1
+    assert q(env, "select count(*) from tracks")[0][0] == 0, "账号物理删除后曲库行必须一起清空"
+    assert q(env, "select count(*) from deletion_ledger where user_id=?", uid)[0][0] == 1
 
 
 def test_cli_restore_account_in_cooldown(u):
