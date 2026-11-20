@@ -118,12 +118,16 @@ object BackupManager {
         prefs = BackupPrefs(app)
         api = transportOverride ?: BackupApi()
         scope.launch {
-            SessionStore.current.collect { session ->
+            SessionStore.current.collect { _ ->
                 publish()
                 // 登录（或换账号）本身就是一次触发点：前台那条 5 秒检查在没登录时早就
                 // 返回了，之后要等 10 分钟周期才会再跑一遍，恢复决策框就会迟迟不出现
                 // （全新安装后"库被同步拉满、却没弹过恢复框"就是这么来的，0.1.13 修）。
-                onSessionSettled(session)
+                // 用 [sessionNow]（优先测试后门 sessionOverride）而不是 collect 传来的值：
+                // 单测里 sessionOverride 生效、SessionStore.current 恒为 null，若直接传
+                // 这个 null 会在手动 onSessionSettled 之后又收到一次"登出"，把刚排好的
+                // 登录检查 cancel 掉（竞态）。生产里 sessionOverride 恒为 null，二者等价。
+                onSessionSettled(sessionNow())
             }
         }
     }
@@ -544,14 +548,18 @@ object BackupManager {
 
         // 登录后先决定"云端那份要不要恢复"，再谈上传（设计 §5.3 最后一行）。
         // 用户没选之前一律不传：本机零星几首会把云端有内容的备份挤掉。
+        //
+        // 恢复决策与「自动备份开关」解耦（0.1.16）：关掉自动备份只是不再自动传新快照，
+        // 不等于放弃恢复云端已有的备份。所以决策检查要放在 enabled/blocked 拦截之前——
+        // 否则重装后关了自动备份的用户登录后永远看不到"云端有备份要不要恢复"。
         val before = p.read(session.loginName)
-        if (!before.enabled || before.blocked != null) return
         if (before.restoreDecision == BackupPrefs.RESTORE_UNKNOWN) {
             when (resolveRestoreDecision(session.loginName, manual = force)) {
                 Decision.Paused, Decision.Deferred -> return publish()
                 Decision.Allow -> Unit
             }
         }
+        if (!before.enabled || before.blocked != null) return
 
         if (!busy.compareAndSet(false, true)) return
 

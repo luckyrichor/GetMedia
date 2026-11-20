@@ -168,6 +168,39 @@ class BackupRestoreDecisionTest {
         )
     }
 
+    // ---------- ①c 自动备份关闭：登录后仍要问恢复决策 ----------
+
+    /**
+     * 0.1.16 修：恢复决策与「自动备份开关」解耦。关掉自动备份只是不再自动传新快照，
+     * 不等于放弃恢复云端已有的备份。否则重装后关了自动备份的用户登录后永远看不到
+     * "云端有备份要不要恢复"（真机复验登录触发点时踩到：enabled=false 让 runCheck
+     * 一上来就 return，resolveRestoreDecision 根本没走到）。
+     */
+    @Test
+    fun loginStillAsksRestoreDecisionWhenAutoBackupDisabled() {
+        clearLibrary()
+        runBlocking {
+            AppDatabase.get(context).trackDao().upsertAll((1L..3L).map(::cloudOnlyTrack))
+        }
+        val transport = FakeTransport(cloud = listOf(cloudItem(tracks = 61)))
+        start(BackupPrefs.State(enabled = false), transport)
+
+        // 只模拟"登录完成"，不碰前台/后台——正是重装后关自动备份再登录的路径。
+        BackupManager.onSessionSettled(session("u1"))
+
+        await { BackupManager.state.value.restoreDecisionPending }
+        Thread.sleep(300)
+
+        assertTrue("自动备份关了，云端有备份也应当弹恢复决策", BackupManager.state.value.restoreAskVisible)
+        assertEquals("弹窗上显示的是云端那份的条数", 61, BackupManager.state.value.restoreCloudTracks)
+        assertEquals("决定之前一个字节都不能传", 0, transport.uploads.get())
+        assertEquals(
+            "没做决策就不能落决策",
+            BackupPrefs.RESTORE_UNKNOWN,
+            BackupPrefs(context).read("u1").restoreDecision,
+        )
+    }
+
     // ---------- ② 本机已有 1 首，云端有 5 首 ----------
 
     @Test
