@@ -23,7 +23,6 @@ import androidx.compose.material.icons.rounded.Feedback
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.VerifiedUser
@@ -167,14 +166,9 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
                     .onFailure { Toast.makeText(context, "复制失败，请重试", Toast.LENGTH_SHORT).show() }
             } })
             RowDivider()
-            // 复验与自救用：只清本设备这个账号的"要不要恢复"记录，云端备份与曲库不动。
-            SettingRow(
-                Icons.Rounded.Refresh, "重置云端恢复决策",
-                subtitle = "下次登录或进入前台会重新问要不要恢复",
-                showChevron = true,
-                onClick = { dialog = "resetRestore" },
-            )
-            RowDivider()
+            // 只存在于预览构建里（src/preview）。正式包的 debug/release 源码集给空实现，
+            // 所以正式包 APK 里既没有这个入口，也没有它的任何文案。
+            RestoreResetSection(account = session?.loginName)
             SettingRow(Icons.Rounded.Feedback, "联系作者", subtitle = "反馈问题或提出建议", showChevron = true, onClick = { page = "contact" })
         }
 
@@ -202,29 +196,6 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
     when (dialog) {
         "storage" -> InfoDialog("存储空间", "本机已保存 ${tracks.size} 个条目，约 ${bytes / 1024 / 1024} MB。") { dialog = null }
         "about" -> InfoDialog("GetMedia $version", "分享链接提取音频，分类、播放和管理均可在本机完成。") { dialog = null }
-        "resetRestore" -> {
-            val account = session?.loginName
-            AlertDialog(
-                onDismissRequest = { dialog = null },
-                title = { Text("重置云端恢复决策？") },
-                text = {
-                    Text(
-                        "只清掉本设备上「$account 的云端备份要不要恢复」这条记录：云端备份、曲库和文件都不动。" +
-                            "之后下次登录或回到前台会重新问一次。",
-                    )
-                },
-                confirmButton = {
-                    AreaButton(onClick = {
-                        dialog = null
-                        if (account != null) {
-                            com.getmedia.app.data.cloud.cloudSync.resetRestoreDecision(context, account)
-                            Toast.makeText(context, "已重置，下次登录会重新询问", Toast.LENGTH_SHORT).show()
-                        }
-                    }, tone = ActionTone.CONFIRM) { Text("重置") }
-                },
-                dismissButton = { AreaButton(onClick = { dialog = null }) { Text("取消") } },
-            )
-        }
     }
 }
 

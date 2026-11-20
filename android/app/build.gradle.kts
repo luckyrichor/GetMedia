@@ -150,29 +150,32 @@ android {
         create("full") {
             dimension = "edition"
             applicationId = appIds.getProperty("fullApplicationId")
-            versionName = "0.1.14"
-            versionCode = 15
+            versionName = "0.1.15"
+            versionCode = 16
         }
     }
-
-    // 预览版可与正式版并存：包名加 .preview，桌面名称带「新版」，方便在保留旧数据的前提下试新版本
-    val previewBuild = providers.gradleProperty("getmediaPreview").orNull == "true"
 
     buildTypes {
         debug {
             isMinifyEnabled = false
-            if (previewBuild) {
-                applicationIdSuffix = ".preview"
-                manifestPlaceholders["appLabel"] = "GetMedia 新版"
-            }
         }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName(if (releaseSigning != null) "release" else "debug")
-            if (previewBuild) {
-                applicationIdSuffix = ".preview"
-                manifestPlaceholders["appLabel"] = "GetMedia 新版"
-            }
+        }
+        /**
+         * 预览版：与正式版并肩安装（包名加 `.preview`、桌面名「GetMedia 新版」），保留旧数据试新版本。
+         *
+         * 为什么是一个**独立构建类型**而不是给 release 加后缀：构建类型名决定了源码集目录名，
+         * 有了 `preview` 才会有 `src/preview`。只给 release 改后缀的话，那些"只该出现在预览包里"
+         * 的代码没有地方可放，只能塞进 `main`——正式包 APK 里也就会有。
+         * 现在诊断类入口（如「重置云端恢复决策」）只写在 `src/preview`，正式包产物里连字符串都没有。
+         */
+        create("preview") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".preview"
+            manifestPlaceholders["appLabel"] = "GetMedia 新版"
+            matchingFallbacks += listOf("release")
         }
     }
 

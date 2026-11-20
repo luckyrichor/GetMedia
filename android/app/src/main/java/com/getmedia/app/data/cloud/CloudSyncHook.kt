@@ -66,9 +66,6 @@ interface CloudSyncHook {
     /** 这一条现在能做哪些补救（下载 / 只能移除空壳）；`free` 恒为 [RepairOptions.NONE]。 */
     fun repairOptions(track: TrackEntity): RepairOptions
 
-    /** 重置本设备这个账号的"云端备份要不要恢复"决策，用于诊断与复验；不动云端与曲库。 */
-    fun resetRestoreDecision(context: Context, account: String)
-
     /** App 回到前台：实现里自己判断闸门、节流与单飞，调用方不用关心。 */
     fun onForeground(context: Context)
 

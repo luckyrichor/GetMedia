@@ -39,8 +39,6 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
     /** 免费版没有服务器曲库：恢复空壳与云端补救都不存在，菜单里一件事都不多给。 */
     override fun repairOptions(track: TrackEntity): RepairOptions = RepairOptions.NONE
 
-    override fun resetRestoreDecision(context: Context, account: String) = Unit
-
     override fun onForeground(context: Context) = Unit
 
     override fun onAccountChanged(context: Context) = Unit

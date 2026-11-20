@@ -433,24 +433,6 @@ object BackupManager {
         publish()
     }
 
-    /**
-     * 诊断用：把这个账号的"云端备份要不要恢复"清回**未决定**。
-     *
-     * 只清本设备的这条偏好记录——云端备份、曲库、文件一个字节都不动。用途有两个：
-     * 复验"登录后会不会弹恢复决定框"，以及用户误点「用本机内容」后想重新看一次云端那份。
-     * 清完不主动发起检查：下次登录或进入前台自然会问，免得一点就抢在用户前面打请求。
-     */
-    fun resetRestoreDecision(account: String) {
-        val p = prefs ?: return
-        p.update(account) { it.copy(restoreDecision = BackupPrefs.RESTORE_UNKNOWN) }
-        clearPendingDecision()
-        decisionLogin = null
-        decisionOutcome = Decision.Allow
-        decisionSnoozed = false
-        DiagnosticsStore.event("数据备份", "已重置恢复决策：下次登录或进入前台会重新询问", true)
-        publish()
-    }
-
     private fun clearPendingDecision() {
         pendingCloudBackup = null
         decisionSnoozed = false

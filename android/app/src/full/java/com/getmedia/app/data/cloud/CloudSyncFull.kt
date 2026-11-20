@@ -2,7 +2,6 @@ package com.getmedia.app.data.cloud
 
 import android.content.Context
 import com.getmedia.app.account.SessionStore
-import com.getmedia.app.data.backup.BackupManager
 import com.getmedia.app.data.library.DownloadCenter
 import com.getmedia.app.data.library.LibraryLocalEdits
 import com.getmedia.app.data.library.LibraryMark
@@ -84,9 +83,6 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
         // 菜单里的判断可以读磁盘：`localPath` 指向的文件可能已经被系统清理。
         hasFile = track.localPath?.let { File(it).let { f -> f.isFile && f.length() > 0 } } == true,
     )
-
-    override fun resetRestoreDecision(context: Context, account: String) =
-        BackupManager.resetRestoreDecision(account)
 
     override fun managesRestores(session: SessionStore.Session?) = LibrarySyncGate.isOwner(session)
 
