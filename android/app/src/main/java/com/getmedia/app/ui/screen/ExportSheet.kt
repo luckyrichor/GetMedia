@@ -68,7 +68,7 @@ import java.io.File
  * 三条硬约束都落在这个文件里：
  * 1. 目录必须持久化授权成功才开始（一次性授权进不了后台服务）；
  * 2. 空间**查不到**时只提示"无法确认剩余空间"，不拦；只有算出"明确不足"才禁用开始；
- * 3. 本机缺文件的那一块只经 `ownerGate.ExportMissingNotice` 渲染，main 不持有那句文案。
+ * 3. 云端尚未下载与本机文件缺失分开提示，云端提示由完整版提供。
  */
 @Composable
 fun ExportSheet(
@@ -127,8 +127,9 @@ fun ExportSheet(
     }
     val counts = remember(sized) { ExportPlan.classify(sized) }
     val required = remember(sized) { ExportPlan.requiredBytes(sized) }
-    val missingIds = remember(tracks) {
-        tracks.filter { track -> track.localPath.isNullOrBlank() || !File(track.localPath).isFile }.map { it.id }.toSet()
+    val (waitingForDownload, missingLocalFiles) = remember(usable) {
+        usable.filter { track -> track.localPath.isNullOrBlank() || !File(track.localPath).isFile }
+            .partition { it.awaitingDownload }
     }
     val sanitizedFolder = folderName?.let {
         ExportNaming.sanitize(it, ExportNaming.MAX_FOLDER_CHARS, ExportNaming.MAX_FOLDER_BYTES)
@@ -341,10 +342,17 @@ fun ExportSheet(
                     CheckRow("文件名带入库日期", withDate) { withDate = it }
                 }
 
-                val missingCount = missingIds.count { it !in skipIds }
-                if (missingCount > 0) {
+                if (waitingForDownload.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
-                    ownerGate.ExportMissingNotice(missingCount) { skipIds = skipIds + missingIds }
+                    ownerGate.ExportMissingNotice(waitingForDownload.size) {
+                        skipIds = skipIds + waitingForDownload.map { it.id }
+                    }
+                }
+                if (missingLocalFiles.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    ExportUnavailableNotice(missingLocalFiles.size, ExportPlan.REASON_MISSING_LOCAL) {
+                        skipIds = skipIds + missingLocalFiles.map { it.id }
+                    }
                 }
 
                 when (verdict) {

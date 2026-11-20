@@ -4,12 +4,14 @@ import android.content.Context
 import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.library.LibraryMark
 import com.getmedia.app.data.library.LibrarySyncRunner
-import com.getmedia.app.data.local.MediaKind
+import com.getmedia.app.data.library.LibrarySyncGate
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.serverextract.ServerMediaApi
 import com.getmedia.app.data.serverextract.serverExtractClient
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 
 /**
@@ -23,23 +25,29 @@ import java.io.File
  * - 触发点：前台与账号变化都转给 [LibrarySyncRunner]，闸门（隐私同意、档位）由它判。
  */
 val cloudSync: CloudSyncHook = object : CloudSyncHook {
+    private val downloadLock = Mutex()
 
     override val uploadAsk: StateFlow<CloudUploadAsk?> get() = LibrarySyncRunner.uploadAsk
 
     override fun awaitingDownload(track: TrackEntity): Boolean =
         track.syncState == LibraryMark.CLOUD_ONLY
 
-    override suspend fun download(context: Context, track: TrackEntity): File {
-        val source = track.sourceUrl?.takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("这一条缺少原始链接，请重新提取")
+    override suspend fun download(context: Context, track: TrackEntity): File = downloadLock.withLock {
+        val session = SessionStore.current.value
+        check(session != null && track.accountKey == session.loginName && LibrarySyncGate.maySync(session)) {
+            "请使用原账号并同意最新隐私说明后再下载"
+        }
+        fun sameSession(): Boolean = SessionStore.current.value.let {
+            it?.token == session.token && it.loginName == session.loginName && LibrarySyncGate.maySync(it)
+        }
         val repo = TrackRepository(context.applicationContext)
-        val saved = serverExtractClient(repo, ServerMediaApi(), context.cacheDir)
-            .extract(
-                input = source,
-                kind = MediaKind.of(track.mediaType),
-                accountKey = SessionStore.current.value?.loginName,
-            )
-        return saved.localPath?.let(::File)
+        repo.download(track).getOrNull()?.let { return@withLock it }
+        val api = ServerMediaApi(token = { session.token.takeIf { sameSession() } })
+        val saved = serverExtractClient(repo, api, context.cacheDir).refillOriginal(track) { original, detail, file ->
+            repo.fillExistingFile(original, file.file, file.bytes, file.sha256, detail.updatedSeq,
+                detail.updatedAtSec?.times(1000), ::sameSession)
+        }
+        saved.localPath?.let(::File)
             ?: throw IllegalStateException("下载完成但没有落成本地文件")
     }
 
@@ -47,7 +55,9 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
 
     override fun onAccountChanged(context: Context) = LibrarySyncRunner.onAccountChanged(context)
 
-    override fun acceptUpload(context: Context) = LibrarySyncRunner.accept(context)
+    override fun dismissUpload(ask: CloudUploadAsk) = LibrarySyncRunner.dismiss(ask)
 
-    override fun declineUpload(context: Context) = LibrarySyncRunner.decline(context)
+    override fun acceptUpload(context: Context, ask: CloudUploadAsk) = LibrarySyncRunner.accept(context, ask)
+
+    override fun declineUpload(context: Context, ask: CloudUploadAsk) = LibrarySyncRunner.decline(context, ask)
 }

@@ -36,6 +36,14 @@ object SessionStore {
          * `null` = 还不知道（旧版本升级上来的会话、或还没成功对过一次 `me()`），按"不许同步"处理。
          */
         val tier: String? = null,
+        /**
+         * 该账号**已同意**的隐私说明版本。只在 `consentRequired == false` 时才可信
+         * （那时服务端的"当前版本"就等于他同意过的那一版）；同意过期或从没对过 `me()` 时为 null。
+         *
+         * 曲库同步的闸门要用它做本地硬判定：低于应用要求的版本，一个请求都不发
+         * （见 `LibrarySyncGate.MIN_PRIVACY_FOR_SYNC`）。存本地是为了不依赖服务端"够不够新"。
+         */
+        val consentedPrivacyVersion: Int? = null,
     )
 
     private const val ALIAS = "getmedia.account.session"
@@ -54,6 +62,7 @@ object SessionStore {
                 o.optBoolean("consent_required"), o.optBoolean("recovery_confirmed", true),
                 o.optString("pending_recovery").ifBlank { null },
                 o.optString("tier").ifBlank { null },
+                o.optInt("consent_pp", 0).takeIf { it > 0 },
             )
         }.getOrNull()
     }
@@ -65,7 +74,8 @@ object SessionStore {
         val data = JSONObject().put("login_name", session.loginName).put("token", session.token)
             .put("expires_at", session.expiresAt).put("device_id", session.deviceId ?: "")
             .put("consent_required", session.consentRequired).put("recovery_confirmed", session.recoveryConfirmed)
-            .put("pending_recovery", session.pendingRecoveryCode ?: "").put("tier", session.tier ?: "").toString().toByteArray()
+            .put("pending_recovery", session.pendingRecoveryCode ?: "").put("tier", session.tier ?: "")
+            .put("consent_pp", session.consentedPrivacyVersion ?: 0).toString().toByteArray()
         val temp = File(file.parentFile, file.name + ".tmp")
         temp.writeBytes(encrypt(data))
         check(temp.renameTo(file)) { "无法保存登录状态" }

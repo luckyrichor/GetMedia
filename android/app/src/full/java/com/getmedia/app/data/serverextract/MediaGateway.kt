@@ -15,10 +15,15 @@ interface MediaGateway {
     /** 建任务；`storage` 见 [Storage]。 */
     suspend fun startExtract(input: String, kind: MediaKind, storage: String = Storage.CACHE): ExtractJob
 
+    suspend fun startTargetedExtract(input: String, kind: MediaKind, target: ExtractTarget): ExtractJob =
+        error("目标条目提取不可用")
+
     suspend fun job(id: Long): ExtractJob
 
     suspend fun track(id: Long): ServerTrack
 
     /** 打开媒体流，调用方负责关闭。 */
     fun openMedia(trackId: Long, offset: Long = 0): Response
+
+    fun openStoredMedia(trackId: Long, offset: Long): Response = error("已存文件下载不可用")
 }

@@ -59,6 +59,9 @@ ExportMissingNoticeBody
 # P0-2 曲库同步（full 专属）：这些标识符和状态值只允许出现在 full 源码集。
 # 表名/实体/DAO 用的是中性名（track_removals / library_cursor），不在此列。
 LibraryMark
+LibraryUploadPrompt
+LibrarySyncSettings
+LibrarySyncControls
 LibrarySyncClient
 LibrarySyncEngine
 LibrarySyncApi

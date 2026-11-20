@@ -35,11 +35,15 @@ data class AccountInfo(val id: String, val loginName: String, val tier: String)
 data class AuthResult(
     val session: SessionInfo, val account: AccountInfo,
     val consentRequired: Boolean, val recoveryConfirmed: Boolean, val recoveryCode: String?,
+    /** 服务端**当前要求**的隐私版本（`legal_versions.privacy_policy`）；缺失为 null。 */
+    val privacyVersion: Int? = null,
 )
 
 data class MeInfo(
     val id: String, val loginName: String, val tier: String,
     val consentRequired: Boolean, val recoveryConfirmed: Boolean, val status: String,
+    /** 服务端**当前要求**的隐私版本（`legal_versions.privacy_policy`）；缺失为 null。 */
+    val privacyVersion: Int? = null,
 )
 
 data class LatestRelease(val version: String, val notes: String, val apk: String, val sha256: String)
@@ -84,12 +88,23 @@ object AccountJson {
         consentRequired = o.optBoolean("consent_required", false),
         recoveryConfirmed = o.optBoolean("recovery_confirmed", false),
         recoveryCode = o.optString("recovery_code").ifBlank { null },
+        privacyVersion = requiredPrivacyVersion(o),
     )
 
     fun me(o: JSONObject) = MeInfo(
         o.getString("id"), o.getString("login_name"), o.optString("tier", "free"),
         o.optBoolean("consent_required"), o.optBoolean("recovery_confirmed"), o.optString("status"),
+        requiredPrivacyVersion(o),
     )
+
+    /**
+     * 服务端当前要求的隐私版本。取不到就当"不知道"，由调用方按"不许同步"处理——
+     * 不能猜成某个数，否则一次旧服务器的响应就能把闸门打开。
+     */
+    private fun requiredPrivacyVersion(o: JSONObject): Int? =
+        if (o.opt("consent_required") == false) {
+            (o.optJSONObject("legal_versions")?.opt("privacy_policy") as? Int)?.takeIf { it > 0 }
+        } else null
 
     fun config(o: JSONObject): ServerConfig {
         val latest = o.optJSONObject("latest")?.let {

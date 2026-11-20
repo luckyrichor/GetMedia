@@ -14,9 +14,9 @@ import com.getmedia.app.data.cloud.CloudUploadAsk
  * 与隐私说明 v3 的措辞对齐。
  */
 @Composable
-fun UploadAskDialog(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit) {
+fun UploadAskDialog(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
-        onDismissRequest = onDecline,
+        onDismissRequest = onDismiss,
         title = { Text("上传本机新增") },
         text = {
             Text(

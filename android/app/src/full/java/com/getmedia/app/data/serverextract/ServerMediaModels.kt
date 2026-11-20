@@ -114,4 +114,9 @@ data class ServerTrack(
     val updatedSeq: Long = 0,
     val updatedAtSec: Long? = null,
     val hasFile: Boolean = false,
+    val mediaType: String = "",
+    val deleted: Boolean = false,
+    val sha256: String? = null,
 )
+
+data class ExtractTarget(val trackId: Long, val platform: String, val videoId: String, val page: Int)

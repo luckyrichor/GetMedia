@@ -35,5 +35,8 @@ val ownerGate: OwnerGate = object : OwnerGate {
 
     /** 免费版没有服务器曲库，不会有"本机独有条目要不要上传"的询问。 */
     @Composable
-    override fun UploadAsk(ask: com.getmedia.app.data.cloud.CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit) = Unit
+    override fun UploadAsk(ask: com.getmedia.app.data.cloud.CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit, onDismiss: () -> Unit) = Unit
+
+    @Composable
+    override fun AdditionalBackupSettings() = Unit
 }

@@ -8,11 +8,10 @@ import com.getmedia.app.data.local.LibraryCursorEntity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * 曲库同步的总调度（P0-2 阶段 3 的"首次接线"）。
@@ -35,14 +34,22 @@ object LibrarySyncRunner {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
-    private val askState = MutableStateFlow<CloudUploadAsk?>(null)
+    private val prompt = LibraryUploadPrompt()
 
     /** 需要用户确认的一次询问；null 表示当前没有。 */
-    val uploadAsk: StateFlow<CloudUploadAsk?> = askState.asStateFlow()
+    val uploadAsk: StateFlow<CloudUploadAsk?> = prompt.state
 
     private var started = false
     private var lastForegroundAt = 0L
-    private var signature: Triple<String, Boolean, String>? = null
+    private var signature: SessionKey? = null
+
+    /** 会话里影响"要不要同步"的四个字段；任一变化就重跑一轮（同意从过期变有效也算）。 */
+    private data class SessionKey(
+        val loginName: String,
+        val consentRequired: Boolean,
+        val tier: String,
+        val consentedPrivacyVersion: Int?,
+    )
 
     fun onForeground(context: Context) {
         val app = prime(context)
@@ -57,19 +64,34 @@ object LibrarySyncRunner {
         scope.launch { run(app) }
     }
 
-    fun accept(context: Context) {
-        val app = prime(context)
-        val account = SessionStore.current.value?.loginName ?: return
-        LibrarySyncPrefs(app).setDecision(account, SyncUploadDecision.ACCEPTED)
-        askState.value = null
-        scope.launch { uploadNow(app, account) }
+    fun requestUpload(account: String, count: Int) {
+        val session = SessionStore.current.value
+        if (session?.loginName == account && LibrarySyncGate.maySync(session)) {
+            prompt.request(account, count, manual = true)
+        }
     }
 
-    fun decline(context: Context) {
-        val app = prime(context)
-        val account = SessionStore.current.value?.loginName ?: return
-        LibrarySyncPrefs(app).setDecision(account, SyncUploadDecision.DECLINED)
-        askState.value = null
+    fun dismiss(ask: CloudUploadAsk) = prompt.dismiss(ask)
+
+    fun accept(context: Context, ask: CloudUploadAsk) {
+        val session = SessionStore.current.value ?: return
+        if (session.loginName != ask.account || !LibrarySyncGate.maySync(session)) return
+        val app = context.applicationContext
+        val prefs = LibrarySyncPrefs(app)
+        if (!ask.manual && !prefs.enabled(ask.account)) return
+        if (!prompt.decide(ask, prefs, SyncUploadDecision.ACCEPTED)) return
+        scope.launch { uploadNow(app, session, manual = ask.manual) }
+    }
+
+    fun decline(context: Context, ask: CloudUploadAsk) {
+        if (SessionStore.current.value?.loginName != ask.account) return
+        prompt.decide(ask, LibrarySyncPrefs(context), SyncUploadDecision.DECLINED)
+    }
+
+    fun setEnabled(context: Context, account: String, enabled: Boolean) {
+        if (SessionStore.current.value?.loginName != account) return
+        LibrarySyncPrefs(context).setEnabled(account, enabled)
+        if (enabled) onAccountChanged(context) else prompt.clearAutomatic()
     }
 
     // ---------- 内部 ----------
@@ -81,10 +103,13 @@ object LibrarySyncRunner {
             started = true
             scope.launch {
                 SessionStore.current.collect { session ->
-                    val sig = session?.let { Triple(it.loginName, it.consentRequired, it.tier.orEmpty()) }
+                    val sig = session?.let {
+                        SessionKey(it.loginName, it.consentRequired, it.tier.orEmpty(), it.consentedPrivacyVersion)
+                    }
                     if (sig == signature) return@collect
+                    if (sig?.loginName != signature?.loginName || !LibrarySyncGate.maySync(session)) prompt.clear()
                     signature = sig
-                    if (session == null) askState.value = null else run(app)
+                    if (session != null) run(app)
                 }
             }
         }
@@ -95,46 +120,59 @@ object LibrarySyncRunner {
         val session = SessionStore.current.value
         if (!LibrarySyncGate.maySync(session)) {
             // 闸门关了就把待确认的询问收回去：账号已退出、或降级成免费档时不该继续挂着
-            askState.value = null
+            prompt.clear()
             return
         }
+        val account = session!!.loginName
+        val prefs = LibrarySyncPrefs(context)
+        if (!prefs.enabled(account) || prompt.state.value?.manual == true) return
         if (!mutex.tryLock()) return
         try {
-            val account = session!!.loginName
             val db = AppDatabase.get(context)
+            val token = syncToken(session, prefs)
             val round = LibrarySyncRound(
-                pull = { acc -> LibrarySyncEngine(db, LibrarySyncApi()).pull(acc).let { } },
-                candidateCount = { acc -> LibraryUploader(db, LibrarySyncClient(), acc).candidates().size },
-                upload = { acc -> upload(LibraryUploader(db, LibrarySyncClient(), acc), db, acc) },
+                pull = { acc -> LibrarySyncEngine(db, LibrarySyncApi(token = token)).pull(acc).let { } },
+                candidateCount = { acc -> LibraryUploader(db, LibrarySyncClient(token = token), acc).candidates().size },
+                upload = { acc -> upload(LibraryUploader(db, LibrarySyncClient(token = token), acc), db, acc) },
             )
-            when (val outcome = round.run(session, LibrarySyncPrefs(context).decision(account))) {
+            when (val outcome = round.run(session, prefs.decision(account))) {
                 LibrarySyncRound.Outcome.Blocked,
                 LibrarySyncRound.Outcome.Idle,
                 LibrarySyncRound.Outcome.Uploaded,
-                LibrarySyncRound.Outcome.Declined -> askState.value = null
+                LibrarySyncRound.Outcome.Declined -> prompt.clearAutomatic()
 
                 // 拉取失败不弹任何东西：NOT_AVAILABLE（服务器还没部署）与网络问题都该静默，
                 // 只在本机留一句话，避免"每次进前台都弹同一个错"。
                 is LibrarySyncRound.Outcome.PullFailed ->
                     note(db, account, "拉取未完成：${outcome.message}")
 
-                is LibrarySyncRound.Outcome.Ask -> askState.value = CloudUploadAsk(account, outcome.count)
+                is LibrarySyncRound.Outcome.Ask -> if (token() != null) {
+                    prompt.request(account, outcome.count, manual = false)
+                }
             }
         } finally {
             mutex.unlock()
         }
     }
 
-    private suspend fun uploadNow(context: Context, account: String) {
-        val session = SessionStore.current.value ?: return
-        if (!LibrarySyncGate.maySync(session) || session.loginName != account) return
-        if (!mutex.tryLock()) return
-        try {
+    private suspend fun uploadNow(context: Context, session: SessionStore.Session, manual: Boolean) {
+        val prefs = LibrarySyncPrefs(context)
+        val token = syncToken(session, prefs, manual)
+        mutex.withLock {
+            if (token() == null) return
             val db = AppDatabase.get(context)
-            upload(LibraryUploader(db, LibrarySyncClient(), account), db, account)
-        } finally {
-            mutex.unlock()
+            upload(LibraryUploader(db, LibrarySyncClient(token = token), session.loginName), db, session.loginName)
         }
+    }
+
+    private fun syncToken(
+        startedAs: SessionStore.Session, prefs: LibrarySyncPrefs, manual: Boolean = false,
+    ): () -> String? = {
+        val current = SessionStore.current.value
+        current?.takeIf {
+            it.token == startedAs.token && it.loginName == startedAs.loginName && LibrarySyncGate.maySync(it) &&
+                (manual || prefs.enabled(it.loginName))
+        }?.token
     }
 
     private suspend fun upload(uploader: LibraryUploader, db: AppDatabase, account: String) {

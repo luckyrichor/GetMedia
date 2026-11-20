@@ -9,6 +9,7 @@ import com.getmedia.app.data.backup.BackupManager
 import com.getmedia.app.player.PlayerHolder
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.MediaKind
+import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.localextract.DirectExtractor
 import kotlinx.coroutines.Dispatchers
@@ -175,6 +176,55 @@ class TrackRepository(private val context: Context) {
             // 覆盖到同一行时，旧路径（例如本机剪辑副本）留着就是孤儿文件
             previousPath?.takeIf { it != dest.absolutePath }?.let { File(it).delete() }
             record
+        }
+    }
+
+    /** 已校验的文件只补到原行；UPDATE 保留引用原主键的播放列表条目。 */
+    suspend fun fillExistingFile(
+        original: TrackEntity,
+        staged: File,
+        bytes: Long,
+        hash: String,
+        serverSeq: Long,
+        serverUpdatedAtMs: Long?,
+        sameSession: () -> Boolean,
+    ): TrackEntity = withContext(Dispatchers.IO + NonCancellable) {
+        fileMutex.withLock {
+            var dest: File? = null
+            val saved = try {
+                db.withTransaction {
+                    val existing = trackDao.byId(original.id)
+                    check(sameSession() && existing != null && existing.serverId == original.serverId &&
+                        existing.accountKey == original.accountKey && existing.platform == original.platform &&
+                        existing.videoId == original.videoId && existing.serverPage == original.serverPage &&
+                        existing.mediaType == original.mediaType) { "账号或原条目已变化，请重新打开" }
+                    if (existing.localPath?.let { File(it).isFile && File(it).length() > 0 } == true) {
+                        return@withTransaction existing
+                    }
+                    check(existing.syncState == original.syncState) { "原条目已变化，请重新打开" }
+                    val video = MediaKind.of(existing.mediaType) == MediaKind.VIDEO
+                    val dir = File(context.filesDir, if (video) "video" else "audio").apply { mkdirs() }
+                    val file = File.createTempFile("refill-${existing.id}-", if (video) ".mp4" else ".audio", dir)
+                    dest = file
+                    staged.copyTo(file, overwrite = true)
+                    check(file.length() == bytes && bytes > 0 && sha256(file) == hash) { "本机文件校验失败" }
+                    check(sameSession()) { "账号已变化，请重新打开" }
+                    val updated = existing.copy(
+                        localPath = file.absolutePath, audioBytes = bytes, audioSha256 = hash,
+                        audioFormat = if (video) "mp4" else "m4a",
+                        syncState = SyncState.SYNCED.name, serverSeq = serverSeq,
+                        serverUpdatedAtMs = serverUpdatedAtMs, updatedAtMs = System.currentTimeMillis(),
+                    )
+                    check(trackDao.updateExisting(updated) == 1) { "原条目已变化，请重新打开" }
+                    updated
+                }
+            } catch (e: Exception) {
+                dest?.delete()
+                throw e
+            }
+            staged.delete()
+            if (dest != null) BackupManager.noteWrite()
+            saved
         }
     }
 

@@ -18,6 +18,12 @@ class LibrarySyncPrefs(context: Context) {
     private val prefs = context.applicationContext
         .getSharedPreferences("library-cloud-sync", Context.MODE_PRIVATE)
 
+    fun enabled(account: String): Boolean = prefs.getBoolean("$account.enabled", true)
+
+    fun setEnabled(account: String, enabled: Boolean) {
+        prefs.edit().putBoolean("$account.enabled", enabled).apply()
+    }
+
     fun decision(account: String): SyncUploadDecision {
         val raw = prefs.getString("$account.decision", null) ?: return SyncUploadDecision.NONE
         return runCatching { SyncUploadDecision.valueOf(raw) }.getOrDefault(SyncUploadDecision.NONE)

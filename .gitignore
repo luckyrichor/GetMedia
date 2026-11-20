@@ -73,5 +73,6 @@ __pycache__/
 /docs/reports/p0-2-stage3-report.md
 # 曲库同步部署清单：含服务器路径与可执行命令，只留本地
 /docs/p0-2-golive.md
+/docs/p0-2-download-golive.md
 # 隐私说明 v3 草稿：未生效的文本不进公开仓库，生效时以正式文件替换 docs/legal/privacy-policy.md
 /docs/legal/privacy-policy-v3-draft.md

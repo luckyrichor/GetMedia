@@ -201,8 +201,9 @@ class MainActivity : ComponentActivity() {
                         uploadAsk?.let { ask ->
                             com.getmedia.app.ui.ownerGate.UploadAsk(
                                 ask = ask,
-                                onUpload = { com.getmedia.app.data.cloud.cloudSync.acceptUpload(this@MainActivity) },
-                                onDecline = { com.getmedia.app.data.cloud.cloudSync.declineUpload(this@MainActivity) },
+                                onUpload = { com.getmedia.app.data.cloud.cloudSync.acceptUpload(this@MainActivity, ask) },
+                                onDecline = { com.getmedia.app.data.cloud.cloudSync.declineUpload(this@MainActivity, ask) },
+                                onDismiss = { com.getmedia.app.data.cloud.cloudSync.dismissUpload(ask) },
                             )
                         }
                         com.getmedia.app.ui.screen.AccountGates()

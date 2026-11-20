@@ -42,11 +42,21 @@ class ServerMediaApi(
     }
 
     /** 建任务。**202 只代表已排队**，成功与否要看 [job] 轮询。 */
-    override suspend fun startExtract(input: String, kind: MediaKind, storage: String): ExtractJob {
+    override suspend fun startExtract(input: String, kind: MediaKind, storage: String): ExtractJob =
+        startExtract(input, kind, storage, target = null)
+
+    override suspend fun startTargetedExtract(input: String, kind: MediaKind, target: ExtractTarget): ExtractJob =
+        startExtract(input, kind, Storage.CACHE, target)
+
+    private suspend fun startExtract(input: String, kind: MediaKind, storage: String, target: ExtractTarget?): ExtractJob {
         val body = JSONObject()
             .put("input", input.trim())
             .put("media_type", kind.wire)
             .put("storage", storage)
+        if (target != null) {
+            body.put("target", JSONObject().put("track_id", target.trackId).put("platform", target.platform)
+                .put("video_id", target.videoId).put("page", target.page))
+        }
         return ServerMediaJson.extract(call(post("/v2/extract", body.toString())))
     }
 
@@ -60,9 +70,15 @@ class ServerMediaApi(
      * `offset > 0` 时带 `Range: bytes=offset-`；服务器若忽略 Range 直接回 200，
      * 由 [ServerDownload] 把本地 `.part` 截断重写，不在这里猜。
      */
-    override fun openMedia(trackId: Long, offset: Long): Response {
+    override fun openMedia(trackId: Long, offset: Long): Response = openMedia(trackId, offset, storedOnly = false)
+
+    override fun openStoredMedia(trackId: Long, offset: Long): Response = openMedia(trackId, offset, storedOnly = true)
+
+    private fun openMedia(trackId: Long, offset: Long, storedOnly: Boolean): Response {
+        val url = (base + "/v2/media/$trackId").toHttpUrl().newBuilder()
+        if (storedOnly) url.addQueryParameter("stored_only", "1")
         val builder = Request.Builder()
-            .url((base + "/v2/media/$trackId").toHttpUrl())
+            .url(url.build())
             .header("X-GetMedia-Session", session())
             .header("Accept-Encoding", "identity")
         if (offset > 0) builder.header("Range", "bytes=$offset-")

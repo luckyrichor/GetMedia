@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -48,6 +49,9 @@ interface TrackDao {
 
     @Query("SELECT * FROM tracks WHERE id = :id")
     suspend fun byId(id: Long): TrackEntity?
+
+    @Update
+    suspend fun updateExisting(track: TrackEntity): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(items: List<TrackEntity>)

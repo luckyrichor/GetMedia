@@ -92,13 +92,17 @@ class MediaStore:
         return int(c.execute(text("SELECT COALESCE(MAX(updated_seq),0)+1 FROM tracks")).scalar_one())
 
     # ---------- 读 ----------
-    def get(self, user_id: str, track_id: int, *, include_deleted: bool = False) -> dict:
+    def get(self, user_id: str, track_id: int, *, include_deleted: bool = False,
+            include_file_hash: bool = False) -> dict:
         with self.engine.begin() as c:
             row = c.execute(text(f"SELECT {_COLS} FROM tracks WHERE id=:i AND user_id=:u"),
                             {"i": track_id, "u": user_id}).first()
         if row is None or (row._mapping["deleted"] and not include_deleted):
             raise MediaError("track_not_found", "媒体不存在", 404)
-        return _row_to_dict(row)
+        result = _row_to_dict(row)
+        if include_file_hash and row._mapping["media_path"] and row._mapping["sha256"]:
+            result["sha256"] = row._mapping["sha256"]
+        return result
 
     def list(self, user_id: str, *, media_type: str | None = None, since_seq: int = 0,
              limit: int = 200, include_deleted: bool = False) -> list[dict]:
@@ -341,18 +345,22 @@ class MediaStore:
         return TrackFile(full, int(row._mapping["bytes"] or full.stat().st_size))
 
     def attach_file(self, user_id: str, track_id: int, *, storage: str, filename: str,
-                    nbytes: int, sha256: str, ttl_seconds: int | None = None) -> dict:
+                    nbytes: int, sha256: str, ttl_seconds: int | None = None,
+                    expected_seq: int | None = None) -> dict:
         now = self.now()
         expires = now + ttl_seconds if (storage == "cache" and ttl_seconds) else None
         if storage == "cache" and expires is None:
             expires = now + self.s.cache_ttl_seconds
         with self.engine.begin() as c:
             seq = self._next_seq(c)
-            c.execute(text("UPDATE tracks SET storage=:st, media_path=:p, bytes=:b, sha256=:h,"
+            condition = " AND deleted=0 AND updated_seq=:expected" if expected_seq is not None else ""
+            updated = c.execute(text("UPDATE tracks SET storage=:st, media_path=:p, bytes=:b, sha256=:h,"
                            " cache_expires_at=:e, updated_seq=:s, updated_at=:n, last_access_at=:n"
-                           " WHERE id=:i AND user_id=:u"),
+                           " WHERE id=:i AND user_id=:u" + condition),
                       {"st": storage, "p": filename, "b": nbytes, "h": sha256, "e": expires,
-                       "s": seq, "n": now, "i": track_id, "u": user_id})
+                       "s": seq, "n": now, "i": track_id, "u": user_id, "expected": expected_seq})
+            if expected_seq is not None and updated.rowcount != 1:
+                raise MediaError("target_changed", "原条目已变更，请重新打开", 409)
         return self.get(user_id, track_id, include_deleted=True)
 
     def touch(self, track_id: int) -> None:

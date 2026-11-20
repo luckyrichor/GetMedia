@@ -8,6 +8,7 @@ import com.getmedia.app.ui.screen.CreatorBatchScreen
 import com.getmedia.app.ui.screen.ExportMissingNoticeBody
 import com.getmedia.app.ui.screen.ServerExtractPanel
 import com.getmedia.app.ui.screen.UploadAskDialog
+import com.getmedia.app.ui.screen.LibrarySyncSettings
 
 /** 完整版：博主批量与服务器提取都接真实实现（`data/creator`、`data/serverextract` 只在 full 源码集里）。 */
 val ownerGate: OwnerGate = object : OwnerGate {
@@ -41,6 +42,9 @@ val ownerGate: OwnerGate = object : OwnerGate {
 
     /** 上传确认弹窗：文案与按钮都在 `UploadAskDialog` 里，free 产物里没有这个类。 */
     @Composable
-    override fun UploadAsk(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit) =
-        UploadAskDialog(ask = ask, onUpload = onUpload, onDecline = onDecline)
+    override fun UploadAsk(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit, onDismiss: () -> Unit) =
+        UploadAskDialog(ask = ask, onUpload = onUpload, onDecline = onDecline, onDismiss = onDismiss)
+
+    @Composable
+    override fun AdditionalBackupSettings() = LibrarySyncSettings()
 }

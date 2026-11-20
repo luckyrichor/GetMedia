@@ -381,3 +381,126 @@ def test_create_is_rate_limited_per_account(tmp_path):
     # 被拒之后没有偷偷建行
     listed = env.client.get("/v2/tracks", headers=hdr(token)).json()["items"]
     assert [t["video_id"] for t in listed] == ["BVrate0000", "BVrate0001"]
+
+P3_BV = "BV1KG411w7r2"
+P3_URL = f"https://www.bilibili.com/video/{P3_BV}?p=3"
+
+
+def p3_track(env, storage):
+    created = extract(env, storage=storage, media_type="audio", text=f"https://example.invalid/{P3_BV}-p3")
+    job = env.client.get(f"/v2/extraction-jobs/{created.json()['id']}", headers=hdr(env.token)).json()
+    return job["track_id"]
+
+
+def test_stored_p3_uses_original_archive_and_never_resolves(menv):
+    import hashlib
+
+    tid = p3_track(menv, "archive")
+    headers = hdr(menv.token)
+    original = menv.client.get(f"/v2/tracks/{tid}", headers=headers).json()
+    assert (original["video_id"], original["page"], original["storage"], original["sha256"]) == (
+        P3_BV + "-p3", 1, "archive", hashlib.sha256(PAYLOAD).hexdigest(),
+    )
+    calls = list(menv.resolver.calls)
+    jobs_before = menv.client.get("/v2/extraction-jobs", headers=headers).json()
+    full = menv.client.get(f"/v2/media/{tid}?stored_only=1", headers=headers)
+    part = menv.client.get(f"/v2/media/{tid}?stored_only=1", headers={**headers, "Range": "bytes=3-8"})
+    assert full.status_code == 200 and full.content == PAYLOAD
+    assert part.status_code == 206 and part.content == PAYLOAD[3:9]
+    assert full.headers["X-GetMedia-Media-Source"] == part.headers["X-GetMedia-Media-Source"] == "stored"
+    assert menv.resolver.calls == calls
+    assert menv.client.get("/v2/extraction-jobs", headers=headers).json() == jobs_before
+    assert menv.client.get("/v2/tracks", headers=headers).json()["count"] == 1
+    assert menv.client.get(f"/v2/tracks/{tid}", headers=headers).json() == original
+
+
+def test_stored_only_after_cache_prune_and_targeted_refill(menv):
+    from dataclasses import replace
+
+    tid = p3_track(menv, "cache")
+    headers = hdr(menv.token)
+    menv.clock.advance(menv.settings.cache_ttl_seconds + 1)
+    menv.app.state.media.prune_cache()
+    original = menv.client.get(f"/v2/tracks/{tid}", headers=headers).json()
+    assert original["storage"] == "metadata"
+    calls = list(menv.resolver.calls)
+    reply = menv.client.get(f"/v2/media/{tid}?stored_only=1", headers=headers)
+    assert reply.status_code == 409 and reply.json()["code"] == "stored_file_missing"
+    assert menv.resolver.calls == calls
+
+    def resolve_target(text, *, media_type, page):
+        assert text == P3_URL and page == 3 and media_type == "audio"
+        return replace(menv.resolver.resolve(text, media_type=media_type),
+                       video_id=P3_BV, page=3, media_type=media_type)
+
+    menv.resolver.resolve_target = resolve_target
+    r = menv.client.post("/v2/extract", headers=headers, json={
+        "input": P3_URL, "media_type": "audio", "storage": "cache",
+        "target": {"track_id": tid, "platform": "bilibili", "video_id": P3_BV, "page": 3},
+    })
+    assert r.status_code == 202, r.text
+    job = menv.client.get(f"/v2/extraction-jobs/{r.json()['id']}", headers=headers).json()
+    assert job["status"] == "done" and job["track_id"] == tid
+    current = menv.client.get(f"/v2/tracks/{tid}", headers=headers).json()
+    assert current["storage"] == "cache" and current["bytes"] == len(PAYLOAD)
+    assert (current["title"], current["video_id"], current["page"]) == (
+        original["title"], original["video_id"], original["page"],
+    )
+    assert menv.client.get("/v2/tracks", headers=headers).json()["count"] == 1
+
+
+@pytest.mark.parametrize(("video", "page", "kind"), [
+    (P3_BV, 1, "audio"), ("BV1GJ411x7h7", 3, "audio"), (P3_BV, 3, "video"),
+])
+def test_targeted_mismatch_leaves_original_row_and_disk_untouched(menv, video, page, kind):
+    from dataclasses import replace
+
+    tid = p3_track(menv, "metadata")
+    headers = hdr(menv.token)
+    before = menv.client.get("/v2/sync", headers=headers).json()
+    menv.resolver.resolve_target = lambda text, **kw: replace(
+        menv.resolver.resolve(text, media_type=kw["media_type"]),
+        video_id=video, page=page, media_type=kind,
+    )
+    r = menv.client.post("/v2/extract", headers=headers, json={
+        "input": P3_URL, "media_type": "audio", "storage": "cache",
+        "target": {"track_id": tid, "platform": "bilibili", "video_id": P3_BV, "page": 3},
+    })
+    assert r.status_code == 202, r.text
+    job = menv.client.get(f"/v2/extraction-jobs/{r.json()['id']}", headers=headers).json()
+    assert job["status"] == "failed" and job["error_code"] == "target_mismatch"
+    assert menv.client.get("/v2/sync", headers=headers).json() == before
+    assert not list((menv.tmp / "cache").glob("*"))
+
+
+def test_legacy_owner_submit_with_p3_query_still_uses_default_cid(tmp_path, monkeypatch):
+    import httpx
+    from getmedia.extractor import API_PLAYURL, API_VIEW, MediaResolver
+
+    cids = []
+
+    def upstream(request):
+        url = str(request.url).split("?", 1)[0]
+        if url == API_VIEW:
+            return httpx.Response(200, json={"code": 0, "data": {
+                "bvid": P3_BV, "title": "test", "cid": 101, "duration": 90,
+                "pages": [{"page": 1, "cid": 101}, {"page": 3, "cid": 303, "duration": 37}],
+            }})
+        assert url == API_PLAYURL
+        cids.append(request.url.params["cid"])
+        return httpx.Response(200, json={"code": 0, "data": {"durl": [{"url": "https://example.invalid/media"}]}})
+
+    resolver = MediaResolver(client_factory=lambda **kw: httpx.Client(transport=httpx.MockTransport(upstream), **kw))
+    monkeypatch.setattr(resolver, "cookie_file", lambda _: None)
+    monkeypatch.setattr("getmedia.extractor._get_mixin_key", lambda _: None)
+    env = build(tmp_path, resolver=resolver)
+    env.app.state.runtime.write(registration_open=True)
+    env.token = make_owner(env)
+    for _ in range(2):
+        reply = extract(env, text=P3_URL)
+        assert reply.status_code == 202
+    tracks = env.client.get("/v2/tracks", headers=hdr(env.token)).json()["items"]
+    assert len(tracks) == 1 and tracks[0]["video_id"] == P3_BV and tracks[0]["page"] == 1
+    assert cids == ["101", "101"]
+    targeted = resolver.resolve_target(P3_URL, media_type="audio", page=3)
+    assert (targeted.video_id, targeted.page, targeted.duration_sec, cids[-1]) == (P3_BV, 3, 37, "303")

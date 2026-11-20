@@ -33,9 +33,11 @@ class LibrarySyncRoundTest {
         tier: String? = "owner",
         consentRequired: Boolean = false,
         name: String = "boss",
+        privacy: Int? = LibrarySyncGate.MIN_PRIVACY_FOR_SYNC,
     ) = SessionStore.Session(
         loginName = name, token = "tok", expiresAt = 0, deviceId = null,
         consentRequired = consentRequired, recoveryConfirmed = true, tier = tier,
+        consentedPrivacyVersion = privacy,
     )
 
     @Test fun noSessionSendsNothing() = runBlocking {
@@ -67,6 +69,43 @@ class LibrarySyncRoundTest {
         val f = Fixture(candidates = 5)
         assertEquals(LibrarySyncRound.Outcome.Blocked, f.round.run(session(tier = null), SyncUploadDecision.NONE))
         assertEquals(0, f.pulls)
+        assertEquals(0, f.uploads)
+    }
+
+    /**
+     * 已同意的还是隐私 v2：本地硬判定必须挡住——**拉取和上传都算同步请求，都是 0 次**。
+     * 这是 2026-11-19 手机 2 反例（线上 v2 时 0.1.5 照样拉了一次）的回归测试。
+     */
+    @Test fun consentedPrivacyBelowMinimumSendsNothing() = runBlocking {
+        for (decision in SyncUploadDecision.entries) {
+            val f = Fixture(candidates = 6)
+            assertEquals(
+                LibrarySyncRound.Outcome.Blocked,
+                f.round.run(session(privacy = 2), decision),
+            )
+            assertEquals("decision=$decision 时不应发拉取", 0, f.pulls)
+            assertEquals("decision=$decision 时不应发上传", 0, f.uploads)
+        }
+    }
+
+    /** 已同意版本未知（旧会话、`me()` 还没成功过）：与"版本不够"一样，宁可晚一轮。 */
+    @Test fun unknownConsentedPrivacySendsNothing() = runBlocking {
+        for (decision in SyncUploadDecision.entries) {
+            val f = Fixture(candidates = 6)
+            assertEquals(
+                LibrarySyncRound.Outcome.Blocked,
+                f.round.run(session(privacy = null), decision),
+            )
+            assertEquals(0, f.pulls)
+            assertEquals(0, f.uploads)
+        }
+    }
+
+    /** 刚好达到门槛（v3）就放行：别把"≥"写成">"。 */
+    @Test fun consentedPrivacyAtMinimumPulls() = runBlocking {
+        val f = Fixture(candidates = 0)
+        assertEquals(LibrarySyncRound.Outcome.Idle, f.round.run(session(privacy = 3), SyncUploadDecision.NONE))
+        assertEquals(1, f.pulls)
         assertEquals(0, f.uploads)
     }
 
@@ -113,10 +152,14 @@ class LibrarySyncRoundTest {
         assertEquals(0, f.uploads)
     }
 
-    /** 闸门函数本身：tier 大小写不敏感，空档位与 `free` 一样不许同步。 */
+    /** 闸门函数本身：tier 大小写不敏感，空档位与 `free` 一样不许同步；隐私版本低于门槛也不许。 */
     @Test fun gateAcceptsOwnerInAnyCase() {
         assertTrue(LibrarySyncGate.maySync(session(tier = "OWNER")))
         assertFalse(LibrarySyncGate.maySync(session(tier = "free")))
         assertFalse(LibrarySyncGate.maySync(session(tier = "")))
+        assertFalse(LibrarySyncGate.maySync(session(privacy = 2)))
+        assertFalse(LibrarySyncGate.maySync(session(privacy = null)))
+        assertFalse(LibrarySyncGate.maySync(session(consentRequired = true)))
+        assertEquals(3, LibrarySyncGate.MIN_PRIVACY_FOR_SYNC)
     }
 }

@@ -59,6 +59,7 @@ class ResolvedMedia:
     source_url: str | None = None
     page: int = 1
     estimated_bytes: int = 0
+    media_type: str | None = None
 
 
 class MediaResolver:
@@ -129,7 +130,16 @@ class MediaResolver:
             )
         return self._resolve_bilibili(vid, media_type=media_type)
 
-    def _resolve_bilibili(self, vid: str, *, media_type: str) -> ResolvedMedia:
+    def resolve_target(self, text: str, *, media_type: str, page: int) -> ResolvedMedia:
+        found = self.sniff(text)
+        if found is None or found[0] != "bilibili":
+            return self.resolve(text, media_type=media_type)
+        pages_in_link = re.findall(r"[?&]p=([^&#\s]+)", text)
+        if any(value != str(page) for value in pages_in_link):
+            raise ResolveError("target_mismatch", "链接中的分集与目标不符", 409)
+        return self._resolve_bilibili(found[1], media_type=media_type, target_page=page)
+
+    def _resolve_bilibili(self, vid: str, *, media_type: str, target_page: int | None = None) -> ResolvedMedia:
         params = {"bvid": vid} if vid.startswith("BV") else {"aid": vid[2:]}
         cookies = _parse_cookie_file(self.cookie_file("bilibili"))
         headers = {"User-Agent": _UA, "Referer": "https://www.bilibili.com/"}
@@ -140,10 +150,19 @@ class MediaResolver:
             if body.get("code") != 0 or not body.get("data"):
                 raise ResolveError("resolve_failed", f"B 站没有返回该作品：{body.get('message') or view.status_code}", 404)
             data = body["data"]
-            cid = data.get("cid")
-            if not cid:
+            if target_page is not None:
                 pages = data.get("pages") or []
-                cid = pages[0].get("cid") if pages else None
+                selected = next((p for p in pages if p.get("page") == target_page), None)
+                if selected is None or not selected.get("cid"):
+                    raise ResolveError("target_mismatch", "B 站未返回目标分集", 409)
+                cid = selected["cid"]
+                duration = selected.get("duration")
+            else:
+                cid = data.get("cid")
+                pages = data.get("pages") or []
+                if not cid:
+                    cid = pages[0].get("cid") if pages else None
+                duration = data.get("duration")
             if not cid:
                 raise ResolveError("resolve_failed", "该作品没有可播放的分片")
 
@@ -170,14 +189,16 @@ class MediaResolver:
                 platform="bilibili",
                 video_id=data.get("bvid") or vid,
                 title=(data.get("title") or "")[:200] or "未命名作品",
-                duration_sec=float(data.get("duration") or 0) or None,
+                duration_sec=float(duration or 0) or None,
                 sources=sources,
                 ext="m4s" if media_type == "audio" else "mp4",
                 uploader=(data.get("owner") or {}).get("name"),
                 cover_url=data.get("pic"),
-                source_url=f"https://www.bilibili.com/video/{data.get('bvid') or vid}",
-                page=1,
+                source_url=f"https://www.bilibili.com/video/{data.get('bvid') or vid}"
+                           + (f"?p={target_page}" if target_page and target_page > 1 else ""),
+                page=target_page or 1,
                 estimated_bytes=int(first.get("size") or 0),
+                media_type=media_type,
             )
 
     # ---------- 读取 ----------

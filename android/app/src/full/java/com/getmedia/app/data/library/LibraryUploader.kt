@@ -114,7 +114,7 @@ class LibraryUploader(
         ))
     }
 
-    private fun eligible(t: TrackEntity): Boolean {
+    internal fun eligible(t: TrackEntity): Boolean {
         if (t.serverId != null) return false
         when (t.syncState) {
             LibraryMark.CLOUD_ONLY, LibraryMark.PENDING_UP, LibraryMark.DETACHED -> return false

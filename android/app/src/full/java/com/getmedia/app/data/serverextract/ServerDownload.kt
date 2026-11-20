@@ -73,6 +73,7 @@ object ServerDownload {
         trackId: Long,
         part: File,
         expected: Long?,
+        storedOnly: Boolean = false,
         onProgress: (downloaded: Long, total: Long?) -> Unit = { _, _ -> },
     ): DownloadedFile = withContext(Dispatchers.IO) {
         var lastReason = ""
@@ -83,7 +84,7 @@ object ServerDownload {
             if (offset == 0L && part.exists() && part.length() > 0) part.delete()
 
             val result = try {
-                downloadOnce(api, trackId, part, offset, expected, onProgress)
+                downloadOnce(api, trackId, part, offset, expected, storedOnly, onProgress)
             } catch (e: IOException) {
                 // 断流、读超时：已落盘的字节是真实前缀，保留给下一轮用 Range 续；
                 // 不把原始 IOException 抛给上层（上层只认 ServerMediaException 与中文文案）。
@@ -124,9 +125,10 @@ object ServerDownload {
         part: File,
         offset: Long,
         expected: Long?,
+        storedOnly: Boolean,
         onProgress: (downloaded: Long, total: Long?) -> Unit,
     ): Attempt {
-        val response: Response = api.openMedia(trackId, offset)
+        val response: Response = if (storedOnly) api.openStoredMedia(trackId, offset) else api.openMedia(trackId, offset)
         response.use { r ->
             if (r.code == 416) {
                 // 本地断点越界：这份 `.part` 不能用，删掉从 0 重来
@@ -140,10 +142,18 @@ object ServerDownload {
                     ServerMediaJson.retryAfterSeconds(r.header("Retry-After")),
                 )
             }
+            if (storedOnly && r.header("X-GetMedia-Media-Source") != "stored") {
+                throw ServerMediaException(ServerProblem.SERVER, "服务器尚未启用已存文件下载",
+                    code = "stored_mode_unsupported")
+            }
             val body = r.body ?: throw ServerMediaException(
                 ServerProblem.SERVER, "服务器没有返回媒体内容")
             var total = totalBytes(r.header("Content-Range"), body.contentLength(), offset)
             var start = offset
+            if (storedOnly && r.code == 206 &&
+                r.header("Content-Range")?.startsWith("bytes $offset-") != true) {
+                return Attempt.Invalid("服务器返回的断点位置不符")
+            }
             if (r.code != 206 && start > 0) {
                 // 服务器忽略了 Range：从头写，否则文件会变成"半段 + 全段"
                 RandomAccessFile(part, "rw").use { it.setLength(0) }

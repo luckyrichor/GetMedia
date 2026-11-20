@@ -68,6 +68,9 @@ object ServerMediaJson {
             updatedSeq = root.optLong("updated_seq", 0),
             updatedAtSec = root.optLong("updated_at", 0).takeIf { it > 0 },
             hasFile = root.optBoolean("has_file"),
+            mediaType = root.optString("media_type"),
+            deleted = root.optBoolean("deleted"),
+            sha256 = root.optString("sha256").takeIf { !root.isNull("sha256") && it.isNotBlank() },
         )
     }
 

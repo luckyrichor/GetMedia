@@ -63,5 +63,8 @@ interface OwnerGate {
      * @param onDecline 点了暂不上传：该账号以后不问、也不自动传。
      */
     @Composable
-    fun UploadAsk(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit)
+    fun UploadAsk(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit, onDismiss: () -> Unit)
+
+    @Composable
+    fun AdditionalBackupSettings()
 }

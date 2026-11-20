@@ -31,6 +31,7 @@ object AccountService {
             r.account.loginName, r.session.token, r.session.expiresAt, r.session.deviceId,
             consentRequired = false, recoveryConfirmed = false, pendingRecoveryCode = r.recoveryCode,
             tier = r.account.tier,
+            consentedPrivacyVersion = consent.privacyPolicy.version,
         ))
     }
 
@@ -40,6 +41,8 @@ object AccountService {
             r.account.loginName, r.session.token, r.session.expiresAt, r.session.deviceId,
             consentRequired = r.consentRequired, recoveryConfirmed = r.recoveryConfirmed,
             tier = r.account.tier,
+            // 同意已过期时"已同意版本"不可信，一律记 null（闸门按不许同步处理）
+            consentedPrivacyVersion = if (r.consentRequired) null else r.privacyVersion,
         ))
         // 登录即触发一轮曲库同步（free 风味是空实现；闸门在实现里判）
         com.getmedia.app.data.cloud.cloudSync.onAccountChanged(appContext)
@@ -50,8 +53,12 @@ object AccountService {
         api.recover(loginName, AccountRules.cleanRecoveryCode(recoveryCode), newPassword).also { SessionStore.clear() }
 
     suspend fun consent(consent: LegalBundle) {
+        val sessionToken = SessionStore.token()
         api.consent(consent)
-        SessionStore.update { it.copy(consentRequired = false) }
+        SessionStore.update {
+            if (it.token != sessionToken) it
+            else it.copy(consentRequired = false, consentedPrivacyVersion = consent.privacyPolicy.version)
+        }
     }
 
     suspend fun ackRecovery() {
@@ -61,11 +68,16 @@ object AccountService {
 
     /** 启动/回到前台时对一次账号状态；401 说明会话失效（被吊销、过期、账号注销），退回登录页。联网失败则保持现状。 */
     suspend fun refresh() {
-        if (SessionStore.current.value == null) return
+        val sessionToken = SessionStore.token() ?: return
         try {
             val me = api.me()
             SessionStore.update {
-                it.copy(consentRequired = me.consentRequired, recoveryConfirmed = me.recoveryConfirmed, tier = me.tier)
+                if (it.token != sessionToken || it.loginName != me.loginName) it
+                else it.copy(
+                    consentRequired = me.consentRequired, recoveryConfirmed = me.recoveryConfirmed,
+                    tier = me.tier,
+                    consentedPrivacyVersion = if (me.consentRequired) null else me.privacyVersion,
+                )
             }
         } catch (e: ApiException) {
             if (e.status == 401) SessionStore.clear()

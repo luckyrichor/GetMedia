@@ -41,15 +41,18 @@ interface CloudSyncHook {
     /** 登录/切换账号/退出登录后调一次。 */
     fun onAccountChanged(context: Context)
 
+    /** 关闭当前询问，不记录决定。 */
+    fun dismissUpload(ask: CloudUploadAsk)
+
     /** 用户在询问里点了"上传"。 */
-    fun acceptUpload(context: Context)
+    fun acceptUpload(context: Context, ask: CloudUploadAsk)
 
     /** 用户在询问里点了"暂不上传"：该账号以后不再问，也不再自动传。 */
-    fun declineUpload(context: Context)
+    fun declineUpload(context: Context, ask: CloudUploadAsk)
 }
 
 /** 一次"本机独有条目要不要上传"的询问。文案由 full 的实现渲染，`main` 只递数据。 */
-data class CloudUploadAsk(val account: String, val count: Int)
+data class CloudUploadAsk(val account: String, val count: Int, val manual: Boolean = false)
 
 // 具体实例 `val cloudSync: CloudSyncHook` 由风味源码集提供（与 `ui/ownerGate` 同一套做法：
 // `main` 只引用符号，真实现分别在 `full`/`free` 里）。

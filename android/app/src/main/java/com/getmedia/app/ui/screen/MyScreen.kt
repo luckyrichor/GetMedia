@@ -151,6 +151,7 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
 
         // 云端只存清单（标题/类别/列表顺序），媒体文件始终在本机。
         BackupSection()
+        com.getmedia.app.ui.ownerGate.AdditionalBackupSettings()
 
         SectionTitle("诊断与反馈")
         SectionCard {

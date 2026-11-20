@@ -5,7 +5,9 @@ import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.repo.TrackRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /** 轮询节奏与超时上限。抽成对象，好让单测钉住"退避到 4 秒封顶"和"音频 180s / 视频 600s"。 */
@@ -79,6 +81,85 @@ class ServerExtractClient(
         onProgress(Progress(Stage.SAVED, saved.audioBytes ?: 0, saved.audioBytes))
         return saved
     }
+
+    /** 补齐曲库已有行。只接受原条目的已存文件，或绑定该条目的提取任务。 */
+    suspend fun refillOriginal(
+        original: TrackEntity,
+        save: suspend (TrackEntity, ServerTrack, DownloadedFile) -> TrackEntity,
+    ): TrackEntity {
+        val id = original.serverId ?: mismatch()
+        val expected = key(original.platform, original.videoId, original.serverPage)
+        val kind = MediaKind.entries.firstOrNull { it.name == original.mediaType } ?: mismatch()
+
+        fun checked(detail: ServerTrack): ServerTrack {
+            if (detail.deleted || detail.id != id || detail.mediaType != kind.name.lowercase() ||
+                key(detail.platform, detail.videoId, detail.page) != expected) mismatch()
+            return detail
+        }
+
+        var detail = checked(api.track(id))
+        when (detail.storage) {
+            "archive", "cache" -> {
+                val file = try {
+                    fetchStored(detail)
+                } catch (e: ServerMediaException) {
+                    if (e.code != "stored_file_missing" || detail.storage != "cache") throw e
+                    null
+                }
+                if (file != null) return save(original, detail, file)
+                // 读取时缓存没了：再核对身份与存储。归档缺失不静默重建。
+                detail = checked(api.track(id))
+            }
+        }
+        if (detail.storage !in setOf("metadata", "cache")) {
+            throw ServerMediaException(ServerProblem.UNAVAILABLE, "服务器没有可读取的已存文件")
+        }
+        val source = original.sourceUrl.ifBlank {
+            throw ServerMediaException(ServerProblem.INPUT, "这一条缺少原始链接")
+        }
+        val target = ExtractTarget(id, expected.first, expected.second, expected.third)
+        val job = api.startTargetedExtract(source, kind, target)
+        val done = poll(job.id, kind) {}
+        if (done.trackId != id) mismatch()
+        val result = checked(api.track(id))
+        if (result.storage !in setOf("archive", "cache")) {
+            throw ServerMediaException(ServerProblem.UNAVAILABLE, "提取未生成可下载的文件")
+        }
+        return save(original, result, fetchStored(result))
+    }
+
+    private suspend fun fetchStored(track: ServerTrack): DownloadedFile = withContext(Dispatchers.IO) {
+        val bytes = track.bytes?.takeIf { it > 0 }
+        // 即便缓存详情尚未更新，也让只读接口判断文件是否已清理；成功响应仍须有条目长度。
+        val directory = File(cacheDir, "cloud-refill").apply { mkdirs() }
+        val part = PartStore.file(directory, track.id, track.updatedSeq, bytes)
+        PartStore.sweep(directory, part)
+        val file = ServerDownload.fetch(api, track.id, part, bytes, storedOnly = true)
+        val hash = track.sha256
+        if (bytes != file.bytes || (hash != null && !hash.equals(file.sha256, ignoreCase = true))) {
+            file.file.delete()
+            throw ServerMediaException(ServerProblem.UNAVAILABLE, "下载文件大小或校验值不符",
+                code = "file_integrity_mismatch")
+        }
+        file
+    }
+
+    private fun key(platform: String, videoId: String, page: Int): Triple<String, String, Int> {
+        if (platform == "bilibili") {
+            val legacy = LEGACY_BILI_PAGE.matchEntire(videoId)
+            if (legacy != null) {
+                val encoded = legacy.groupValues[2].toInt()
+                if (page != 1 && page != encoded) mismatch()
+                return Triple(platform, legacy.groupValues[1], encoded)
+            }
+        }
+        if (platform.isBlank() || videoId.isBlank() || page !in 1..9999) mismatch()
+        return Triple(platform, videoId, page)
+    }
+
+    private fun mismatch(): Nothing = throw ServerMediaException(
+        ServerProblem.UNAVAILABLE, "返回的作品、分集或媒体类型与请求不符", code = "target_mismatch",
+    )
 
     private suspend fun submitAndWait(
         input: String,
@@ -166,6 +247,7 @@ class ServerExtractClient(
     }
 
     private companion object {
+        val LEGACY_BILI_PAGE = Regex("(BV[0-9A-Za-z]{10})-p([1-9][0-9]{0,3})")
         const val MAX_RATE_LIMITED = 3
         const val RATE_LIMIT_DELAY_MS = 3_000L
     }

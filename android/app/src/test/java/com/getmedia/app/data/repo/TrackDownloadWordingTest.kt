@@ -4,13 +4,17 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.PlaylistEntity
+import com.getmedia.app.data.local.PlaylistItemEntity
 import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * `TrackRepository.download()` 的**说法分流**（P0-2 阶段 3 硬性验收 ③）。
@@ -73,5 +77,41 @@ class TrackDownloadWordingTest {
         seed(track)
         assertNull(repo.download(track).exceptionOrNull())
         assertEquals(file.absolutePath, repo.download(track).getOrThrow().absolutePath)
+    }
+
+    @Test fun refillUpdatesOriginalAndRetainsLatestLocalOrganization() = runBlocking {
+        val original = row(id = -9005L, serverId = 6L).copy(
+            favorite = true, localCategoryId = 8, accountKey = "owner",
+        )
+        seed(original)
+        val playlist = db.playlistDao().insert(PlaylistEntity(name = "refill test"))
+        val listItem = PlaylistItemEntity(playlistId = playlist, trackId = original.id, orderIndex = 7)
+        db.playlistDao().add(listOf(listItem))
+        db.trackDao().rename(original.id, "renamed during download", 123)
+        val bytes = "P3 audio".toByteArray()
+        val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val staged = File.createTempFile("refill-9005-", ".part", context.cacheDir).apply { writeBytes(bytes) }
+        val saved = repo.fillExistingFile(original, staged, bytes.size.toLong(), hash, 10, 11) { true }
+        assertEquals(original.id, saved.id)
+        assertEquals(original.serverId, saved.serverId)
+        assertEquals("renamed during download", saved.title)
+        assertEquals(saved.title, saved.localTitleOverride)
+        assertTrue(saved.favorite)
+        assertEquals(8L, saved.localCategoryId)
+        assertEquals(listOf(listItem), db.playlistDao().itemsNow(playlist))
+        assertEquals(saved, db.trackDao().byId(original.id))
+        assertTrue(File(requireNotNull(saved.localPath)).readBytes().contentEquals(bytes))
+    }
+
+    @Test fun refillAfterAccountChangeLeavesOriginalUntouched() = runBlocking {
+        val original = row(id = -9006L, serverId = 6L).copy(accountKey = "owner")
+        seed(original)
+        val staged = File.createTempFile("refill-9006-", ".part", context.cacheDir).apply { writeText("P3") }
+        val failure = runCatching {
+            repo.fillExistingFile(original, staged, 2, "unused", 10, 11) { false }
+        }
+        assertTrue(failure.isFailure)
+        assertEquals(original, db.trackDao().byId(original.id))
+        assertTrue(staged.isFile)
     }
 }

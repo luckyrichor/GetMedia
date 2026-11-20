@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote
+from uuid import uuid4
 
 from fastapi import BackgroundTasks, Depends, Header, Query, Response
 from fastapi.responses import StreamingResponse
@@ -45,11 +46,31 @@ class ResolveOut(BaseModel):
     estimated_bytes: int = 0
 
 
+class ExtractTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    track_id: int = Field(gt=0)
+    platform: Literal["bilibili", "douyin"]
+    video_id: str = Field(min_length=1, max_length=128)
+    page: int = Field(default=1, ge=1, le=9999)
+
+
 class ExtractBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     input: str = Field(min_length=1, max_length=4000, description="作品链接或分享文案")
     media_type: Literal["audio", "video"] = "video"
     storage: Literal["metadata", "archive", "cache"] = "metadata"
+    target: ExtractTarget | None = None
+
+
+def _media_key(platform: str, video_id: str, page: int) -> tuple[str, str, int]:
+    if platform == "bilibili":
+        legacy = re.fullmatch(r"(BV[0-9A-Za-z]{10})-p([1-9][0-9]{0,3})", video_id)
+        if legacy:
+            encoded_page = int(legacy[2])
+            if page not in (1, encoded_page):
+                raise MediaError("target_mismatch", "条目的分集标识冲突", 409)
+            return platform, legacy[1], encoded_page
+    return platform, video_id, page
 
 
 class TrackPatchBody(BaseModel):
@@ -182,11 +203,56 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
                           duration_sec=m.duration_sec, uploader=m.uploader, cover_url=m.cover_url,
                           source_url=m.source_url, estimated_bytes=m.estimated_bytes)
 
-    def _run_job(job_id: int, user_id: str, input_: str, media_type: str, storage: str) -> None:
+    def _run_target_job(job_id: int, user_id: str, body: ExtractBody, target: ExtractTarget) -> None:
+        track = store.get(user_id, target.track_id)
+        expected = _media_key(target.platform, target.video_id, target.page)
+        if (track["media_type"] != body.media_type
+                or _media_key(track["platform"], track["video_id"], track["page"]) != expected):
+            raise MediaError("target_mismatch", "原条目的作品、分集或媒体类型与请求不符", 409)
+        if store.file_for(user_id, target.track_id) is not None:
+            store.job_update(job_id, status="done", platform=track["platform"], video_id=track["video_id"],
+                             track_id=track["id"], finished_at=store.now())
+            return
+        if track["storage"] == "archive":
+            raise MediaError("stored_file_missing", "服务器归档文件缺失", 409)
+        if track["storage"] not in ("metadata", "cache") or body.storage != "cache":
+            raise MediaError("target_storage_invalid", "补取原条目只支持缓存模式", 409)
+        resolved = resolver.resolve_target(body.input, media_type=body.media_type, page=expected[2])
+        if (resolved.media_type != body.media_type
+                or _media_key(resolved.platform, resolved.video_id, resolved.page) != expected):
+            raise MediaError("target_mismatch", "返回的作品、分集或媒体类型与请求不符", 409)
+
+        store.ensure_room("cache", resolved.estimated_bytes)
+        filename = f"{track['id']}-{uuid4().hex}.{resolved.ext}"
+        last_error = "no_source"
+        for source in resolved.sources:
+            try:
+                path, nbytes, sha = store.write_atomic(store.dir_for("cache"), filename, iter_source(resolver, source))
+            except (ResolveError, OSError) as exc:
+                last_error = exc.detail if isinstance(exc, ResolveError) else type(exc).__name__
+                continue
+            try:
+                if nbytes <= 0:
+                    raise MediaError("download_failed", "上游文件为空", 502)
+                store.attach_file(user_id, track["id"], storage="cache", filename=filename, nbytes=nbytes,
+                                  sha256=sha, expected_seq=track["updated_seq"])
+            except Exception:
+                path.unlink(missing_ok=True)
+                raise
+            store.job_update(job_id, status="done", platform=track["platform"], video_id=track["video_id"],
+                             track_id=track["id"], finished_at=store.now())
+            return
+        raise MediaError("download_failed", f"下载失败：{last_error}"[:200], 502)
+
+    def _run_job(job_id: int, user_id: str, body: ExtractBody) -> None:
+        input_, media_type, storage = body.input, body.media_type, body.storage
         store.job_update(job_id, status="running", started_at=store.now())
         try:
+            if body.target is not None:
+                _run_target_job(job_id, user_id, body, body.target)
+                return
             m = resolver.resolve(input_, media_type=media_type)
-        except ResolveError as exc:
+        except (ResolveError, MediaError) as exc:
             store.job_update(job_id, status="failed", error_code=exc.code, error_detail=exc.detail,
                              finished_at=store.now())
             return
@@ -241,7 +307,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
     def extract(body: ExtractBody, background: BackgroundTasks, ctx: AuthCtx = Depends(guard)):
         job_id = store.job_create(ctx.user_id, media_type=body.media_type, storage=body.storage,
                                   input_=body.input)
-        background.add_task(_run_job, job_id, ctx.user_id, body.input, body.media_type, body.storage)
+        background.add_task(_run_job, job_id, ctx.user_id, body)
         return {"id": job_id, "status": "queued"}
 
     @app.get("/v2/extraction-jobs")
@@ -294,7 +360,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
     @app.get("/v2/tracks/{track_id}")
     def get_track(track_id: str, ctx: AuthCtx = Depends(guard)):
         try:
-            return store.get(ctx.user_id, _tid(track_id), include_deleted=True)
+            return store.get(ctx.user_id, _tid(track_id), include_deleted=True, include_file_hash=True)
         except MediaError as exc:
             _translate(exc)
 
@@ -332,6 +398,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
     @app.get("/v2/media/{track_id}")
     def media(track_id: str, range_header: str | None = Header(default=None, alias="Range"),
               download: bool = Query(default=False),
+              stored_only: bool = Query(default=False),
               ctx: AuthCtx = Depends(guard)):
         """``?download=1`` 时按附件下发（浏览器直接存盘），否则内联给播放器。
 
@@ -340,7 +407,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
         """
         tid = _tid(track_id)
         try:
-            track = store.get(ctx.user_id, tid, include_deleted=True)
+            track = store.get(ctx.user_id, tid, include_deleted=not stored_only)
             tf = store.file_for(ctx.user_id, tid)
         except MediaError as exc:
             _translate(exc)
@@ -350,7 +417,18 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
             if download:
                 ext = tf.path.suffix
                 disposition = attachment_disposition(attachment_name(track["title"], tid, ext), tid, ext)
-            return _file_response(tf.path, range_header, track["media_type"], disposition)
+            try:
+                response = _file_response(tf.path, range_header, track["media_type"], disposition)
+            except FileNotFoundError:
+                if not stored_only:
+                    raise
+            else:
+                if stored_only:
+                    response.headers["X-GetMedia-Media-Source"] = "stored"
+                return response
+
+        if stored_only:
+            raise ApiError(409, "stored_file_missing", "服务器没有可读取的已存文件")
 
         # 没有落盘文件：当场解析并中转，不写盘
         if not track.get("source_url"):

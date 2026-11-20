@@ -27,7 +27,9 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
 
     override fun onAccountChanged(context: Context) = Unit
 
-    override fun acceptUpload(context: Context) = Unit
+    override fun dismissUpload(ask: CloudUploadAsk) = Unit
 
-    override fun declineUpload(context: Context) = Unit
+    override fun acceptUpload(context: Context, ask: CloudUploadAsk) = Unit
+
+    override fun declineUpload(context: Context, ask: CloudUploadAsk) = Unit
 }
