@@ -93,3 +93,35 @@ data class PlaylistItemEntity(
     val addedAt: Long = System.currentTimeMillis(),
     val orderIndex: Int,
 )
+
+/**
+ * 待重放的"本机删除"记录（P0-2 骨架，设计 §8）。
+ *
+ * 名字刻意中性：这张表和曲库在同一个库文件里，free 也带着它，所以表名/列名里不出现
+ * sync / server / cloud 一类字样。free 的代码一行都不读它。
+ */
+@Entity(tableName = "track_removals", primaryKeys = ["platform", "videoKey", "account"])
+data class TrackRemovalEntity(
+    val platform: String,
+    /** 与曲库同一套键形态：B 站分 P 是 `BV1xx-p2`。 */
+    val videoKey: String,
+    /** 登录名。删除按账号隔离，换账号不会拿别人的队列去删。 */
+    val account: String,
+    /** 那条记录在远端的编号；没有就留空，靠平台 + 键去对。 */
+    val remoteId: Long? = null,
+    val requestedAt: Long = 0,
+)
+
+/**
+ * 每个账号各自处理到哪了（P0-2 骨架，设计 §8）。
+ *
+ * 同样取中性名：`lastPos` 是远端给的序号，只做"大于"比较，不做算术（序号全局递增、跨账号不连续）。
+ */
+@Entity(tableName = "library_cursor")
+data class LibraryCursorEntity(
+    @PrimaryKey val account: String,
+    val lastPos: Long = 0,
+    val lastAt: Long = 0,
+    /** 上次失败的一句话摘要，只用于设置页展示，不含标题与账号。 */
+    val note: String? = null,
+)

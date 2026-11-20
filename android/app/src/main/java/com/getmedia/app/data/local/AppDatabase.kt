@@ -15,14 +15,20 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * 只 `ALTER TABLE ADD COLUMN`，不重建表、不动已有数据。
  */
 @Database(
-    entities = [TrackEntity::class, CategoryEntity::class, PlaylistEntity::class, PlaylistItemEntity::class],
-    version = 2,
+    entities = [
+        TrackEntity::class, CategoryEntity::class, PlaylistEntity::class, PlaylistItemEntity::class,
+        TrackRemovalEntity::class, LibraryCursorEntity::class,
+    ],
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun trackDao(): TrackDao
     abstract fun categoryDao(): CategoryDao
     abstract fun playlistDao(): PlaylistDao
+
+    /** 两张辅助表（待重放的删除、每账号的处理位置）。P0-2 骨架建表，阶段 2 起才有人读写。 */
+    abstract fun libraryAuxDao(): LibraryAuxDao
 
     companion object {
         /**
@@ -45,6 +51,28 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v2 → v3（P0-2 骨架）：两张辅助表，只新建、不动 `tracks` 与其它任何表。
+         *
+         * 表名与列名可以中性：这张表跟曲库同库，free 也带着这个库文件，名字里没有
+         * sync / server / cloud，解包扫描才干净（`LibraryTablesMigrationTest` 会检查）。
+         * 列名与实体属性逐字对应，否则 Room 打开库时的结构校验会报"迁移后 schema 不匹配"。
+         */
+        val LIBRARY_TABLES_2_3_SQL: List<String> = listOf(
+            "CREATE TABLE IF NOT EXISTS `track_removals` (`platform` TEXT NOT NULL, " +
+                "`videoKey` TEXT NOT NULL, `account` TEXT NOT NULL, `remoteId` INTEGER, " +
+                "`requestedAt` INTEGER NOT NULL, PRIMARY KEY(`platform`, `videoKey`, `account`))",
+            "CREATE TABLE IF NOT EXISTS `library_cursor` (`account` TEXT NOT NULL, " +
+                "`lastPos` INTEGER NOT NULL, `lastAt` INTEGER NOT NULL, `note` TEXT, " +
+                "PRIMARY KEY(`account`))",
+        )
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                LIBRARY_TABLES_2_3_SQL.forEach(db::execSQL)
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -54,7 +82,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "getmedia.db",
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)

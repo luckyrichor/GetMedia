@@ -55,3 +55,12 @@ re:(?i)owner[-_ ]?(page|route|panel|dashboard)
 # 导出确认页里「N 项本机没有文件」整块：只有 full 有服务器库，free 产物里不得出现这句与实现类名
 本机没有文件
 ExportMissingNoticeBody
+
+# P0-2 曲库同步（full 专属）：这些标识符和状态值只允许出现在 full 源码集。
+# 表名/实体/DAO 用的是中性名（track_removals / library_cursor），不在此列。
+LibraryMark
+LibrarySyncClient
+LibrarySyncEngine
+CLOUD_ONLY
+LIB_PENDING_UP
+LIB_DETACHED
