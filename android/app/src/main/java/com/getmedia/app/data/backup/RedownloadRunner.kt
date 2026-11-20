@@ -34,6 +34,7 @@ class RedownloadRunner(
     private val extract: suspend (String, MediaKind) -> TrackEntity,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val random: Random = Random.Default,
+    private val canRedownload: (TrackEntity) -> Boolean = { true },
 ) {
     data class State(
         val running: Boolean = false,
@@ -87,7 +88,7 @@ class RedownloadRunner(
             if (track == null) { queue.removeAt(0); continue }
 
             // 已经有文件（上一轮成功过）→ 直接跳过，不占一次请求也不用等间隔
-            if (track.localPath != null) {
+            if (track.localPath != null || !canRedownload(track)) {
                 queue.removeAt(0)
                 _state.value = _state.value.copy(done = _state.value.done + 1)
                 continue
@@ -112,12 +113,16 @@ class RedownloadRunner(
             }
 
             if (result != null) {
-                // 强制用恢复出来的 id 写回：URL 里的页码若与快照不一致，也不会多出一行。
-                // syncState 与 serverPage 也照抄原行：重新下载只是把文件补回来，这条从来不是
-                // "本机新增"；页码是这行的身份（P2 不能因为下载器不认识 ?p=2 就变回 P1）。
-                db.trackDao().upsertLocal(
-                    result.copy(id = track.id, syncState = track.syncState, serverPage = track.serverPage)
-                )
+                db.withTransaction {
+                    val dao = db.trackDao()
+                    val existing = dao.byId(track.id)
+                    if (existing != null && existing.localPath == null && canRedownload(existing)) {
+                        dao.updateExisting(existing.copy(
+                            localPath = result.localPath, audioBytes = result.audioBytes,
+                            audioSha256 = result.audioSha256, audioFormat = result.audioFormat,
+                        ))
+                    }
+                }
                 queue.removeAt(0)
                 consecutive = 0
                 _state.value = _state.value.copy(
@@ -149,7 +154,7 @@ class RedownloadRunner(
 
     /** 恢复后统计"待下载"用：本地没有文件、且能从链接重新取的那些。 */
     suspend fun pendingIds(): List<Long> = db.withTransaction {
-        db.trackDao().allNow().filter { it.localPath == null && it.sourceUrl.isNotBlank() }.map { it.id }
+        db.trackDao().allNow().filter { it.localPath == null && it.sourceUrl.isNotBlank() && canRedownload(it) }.map { it.id }
     }
 
     companion object {

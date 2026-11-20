@@ -5,10 +5,15 @@ import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.cloud.CloudUploadAsk
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.LibraryCursorEntity
+import com.getmedia.app.data.localextract.DirectExtractor
+import com.getmedia.app.data.repo.TrackRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,12 +44,23 @@ object LibrarySyncRunner {
     /** 需要用户确认的一次询问；null 表示当前没有。 */
     val uploadAsk: StateFlow<CloudUploadAsk?> = prompt.state
 
+    internal data class RestoreStatus(
+        val account: String,
+        val working: Boolean = false,
+        val message: String? = null,
+        val notices: List<RestoreMatchNotice> = emptyList(),
+    )
+
+    private val restoreState = MutableStateFlow<RestoreStatus?>(null)
+    internal val restoreStatus = restoreState.asStateFlow()
+
     private var started = false
     private var lastForegroundAt = 0L
     private var signature: SessionKey? = null
 
     /** 会话里影响"要不要同步"的四个字段；任一变化就重跑一轮（同意从过期变有效也算）。 */
     private data class SessionKey(
+        val token: String,
         val loginName: String,
         val consentRequired: Boolean,
         val tier: String,
@@ -62,6 +78,75 @@ object LibrarySyncRunner {
     fun onAccountChanged(context: Context) {
         val app = prime(context)
         scope.launch { run(app) }
+    }
+
+    fun onBackupRestored(context: Context) = checkRestored(context, includeLegacy = false, manual = false)
+
+    fun checkRestored(context: Context, includeLegacy: Boolean, manual: Boolean = true) {
+        val session = SessionStore.current.value ?: return
+        val app = prime(context)
+        val token = syncToken(session, LibrarySyncPrefs(app), manual)
+        if (token() == null) return
+        scope.launch {
+            mutex.withLock {
+                if (token() == null) return@withLock
+                val account = session.loginName
+                restoreState.value = RestoreStatus(account, working = true)
+                try {
+                    matchRestored(AppDatabase.get(app), account, token, includeLegacy)
+                } catch (e: LibrarySyncException) {
+                    restoreFailure(account, token, e)
+                }
+            }
+        }
+    }
+
+    fun redownloadRestored(context: Context, id: Long, includeLegacy: Boolean) {
+        val session = SessionStore.current.value ?: return
+        val app = context.applicationContext
+        val account = session.loginName
+        val prefs = LibrarySyncPrefs(app)
+        val token = syncToken(session, prefs, manual = true)
+        if (token() == null || restoreState.value?.let {
+            it.account == account && !it.working &&
+                it.notices.any { notice -> notice.id == id && notice.issue == RestoreMatchIssue.UNMATCHED }
+        } != true) return
+        scope.launch {
+            mutex.withLock {
+                if (token() == null) return@withLock
+                val db = AppDatabase.get(app)
+                suspend fun stillUnmatched(): Boolean =
+                    matchRestored(db, account, token, includeLegacy, showProgress = true)
+                        .notices.any { it.id == id && it.issue == RestoreMatchIssue.UNMATCHED }
+                try {
+                    restoreState.value = RestoreStatus(account, working = true)
+                    if (!stillUnmatched()) {
+                        restoreState.value = restoreState.value?.copy(working = false)
+                        return@withLock
+                    }
+                    val original = db.trackDao().byId(id)
+                        ?.takeIf { it.accountKey == account || (it.accountKey == null && includeLegacy) }
+                        ?: throw IllegalStateException("恢复条目已变化，请重新核对")
+                    check(token() != null) { "账号或同步权限已变化" }
+                    val repo = TrackRepository(app)
+                    val extractor = DirectExtractor(app)
+                    RestoredRedownload(app.cacheDir, { url, kind, file -> extractor.extractTo(url, kind, file) }) { row, file, bytes, hash, format ->
+                        check(prefs.requireManualUpload(account, row.id)) { "无法保存此项的手动上传设置" }
+                        repo.fillRestoredFile(row, file, bytes, hash, format, account) { token() != null }
+                    }.download(original, ::stillUnmatched)
+                    if (token() != null) restoreState.value = restoreState.value?.let {
+                        it.copy(working = false, notices = it.notices.filterNot { notice -> notice.id == id },
+                            message = "已重新下载到原条目，可在「上传本机新增」确认上传")
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (token() != null) restoreState.value = restoreState.value?.copy(
+                        working = false, message = "重新下载未完成：${e.message ?: "请稍后重试"}",
+                    )
+                }
+            }
+        }
     }
 
     fun requestUpload(account: String, count: Int) {
@@ -104,9 +189,10 @@ object LibrarySyncRunner {
             scope.launch {
                 SessionStore.current.collect { session ->
                     val sig = session?.let {
-                        SessionKey(it.loginName, it.consentRequired, it.tier.orEmpty(), it.consentedPrivacyVersion)
+                        SessionKey(it.token, it.loginName, it.consentRequired, it.tier.orEmpty(), it.consentedPrivacyVersion)
                     }
                     if (sig == signature) return@collect
+                    restoreState.value = null
                     if (sig?.loginName != signature?.loginName || !LibrarySyncGate.maySync(session)) prompt.clear()
                     signature = sig
                     if (session != null) run(app)
@@ -130,10 +216,19 @@ object LibrarySyncRunner {
         try {
             val db = AppDatabase.get(context)
             val token = syncToken(session, prefs)
+            val uploader = uploader(db, token, account, prefs, manual = false)
             val round = LibrarySyncRound(
-                pull = { acc -> LibrarySyncEngine(db, LibrarySyncApi(token = token)).pull(acc).let { } },
-                candidateCount = { acc -> LibraryUploader(db, LibrarySyncClient(token = token), acc).candidates().size },
-                upload = { acc -> upload(LibraryUploader(db, LibrarySyncClient(token = token), acc), db, acc) },
+                pull = { acc ->
+                    try {
+                        matchRestored(db, acc, token)
+                    } catch (e: LibrarySyncException) {
+                        restoreFailure(acc, token, e)
+                        throw e
+                    }
+                    LibrarySyncEngine(db, LibrarySyncApi(token = token)).pull(acc)
+                },
+                candidateCount = { uploader.candidates().size },
+                upload = { acc -> upload(uploader, db, acc) },
             )
             when (val outcome = round.run(session, prefs.decision(account))) {
                 LibrarySyncRound.Outcome.Blocked,
@@ -155,15 +250,44 @@ object LibrarySyncRunner {
         }
     }
 
+    private suspend fun matchRestored(
+        db: AppDatabase,
+        account: String,
+        token: () -> String?,
+        includeLegacy: Boolean = false,
+        showProgress: Boolean = false,
+    ): RestoreMatchResult {
+        val result = RestoredMatcher(db, LibrarySyncApi(token = token, strictCatalog = true))
+            .match(account, includeLegacy) { token() != null }
+        if (token() != null) restoreState.value = RestoreStatus(
+            account, working = showProgress,
+            message = if (result.bound > 0) "已匹配 ${result.bound} 项，可从曲库下载" else null,
+            notices = result.notices,
+        )
+        return result
+    }
+
+    private fun restoreFailure(account: String, token: () -> String?, e: LibrarySyncException) {
+        if (token() != null) restoreState.value = RestoreStatus(
+            account, message = "未完成云端核对：${e.message}",
+        )
+    }
+
     private suspend fun uploadNow(context: Context, session: SessionStore.Session, manual: Boolean) {
         val prefs = LibrarySyncPrefs(context)
         val token = syncToken(session, prefs, manual)
         mutex.withLock {
             if (token() == null) return
             val db = AppDatabase.get(context)
-            upload(LibraryUploader(db, LibrarySyncClient(token = token), session.loginName), db, session.loginName)
+            upload(uploader(db, token, session.loginName, prefs, manual), db, session.loginName)
         }
     }
+
+    private fun uploader(
+        db: AppDatabase, token: () -> String?, account: String, prefs: LibrarySyncPrefs, manual: Boolean,
+    ) = LibraryUploader(db, LibrarySyncClient(token = token), account, allowCandidate = { id ->
+        manual || !prefs.requiresManualUpload(account, id)
+    })
 
     private fun syncToken(
         startedAs: SessionStore.Session, prefs: LibrarySyncPrefs, manual: Boolean = false,

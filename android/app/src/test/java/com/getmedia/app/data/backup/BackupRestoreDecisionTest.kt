@@ -251,9 +251,11 @@ class BackupRestoreDecisionTest {
         BackupManager.onBackground()
         await { BackupManager.state.value.restoreDecisionPending }
 
+        assertEquals(1, runBlocking { BackupManager.previewRestore("bkp_cloud").getOrThrow() }.newIds)
+        assertEquals(0, transport.uploads.get())
+        assertTrue(BackupManager.state.value.restoreDecisionPending)
         val result = runBlocking { BackupManager.restoreNow("bkp_cloud") }
 
-        assertTrue("恢复应当成功", result.isSuccess)
         assertEquals(1, result.getOrThrow().addedTracks)
         assertEquals(
             "恢复完成即决策",

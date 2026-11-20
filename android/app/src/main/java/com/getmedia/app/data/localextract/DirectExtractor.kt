@@ -40,17 +40,22 @@ class DirectExtractor(
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    suspend fun extract(text: String, kind: MediaKind = MediaKind.AUDIO): TrackEntity = withContext(Dispatchers.IO) {
+    suspend fun extract(text: String, kind: MediaKind = MediaKind.AUDIO): TrackEntity =
+        extractTo(text, kind, null)
+
+    internal suspend fun extractTo(
+        text: String, kind: MediaKind, destination: File?, verifyIdentity: Boolean = destination != null,
+    ): TrackEntity = withContext(Dispatchers.IO) {
         report("开始解析分享内容")
         val link = resolve(text)
         report("已识别平台：${if (link.platform == "douyin") "抖音" else "B 站"}")
         val id = LocalIds.localId(link.platform, link.key)
         val video = kind == MediaKind.VIDEO
-        val audioDir = File(context.filesDir, if (video) "video" else "audio").apply { mkdirs() }
-        val dest = File(audioDir, if (video) "$id.mp4" else "$id.audio")
+        val audioDir = destination?.parentFile ?: File(context.filesDir, if (video) "video" else "audio").apply { mkdirs() }
+        val dest = destination ?: File(audioDir, if (video) "$id.mp4" else "$id.audio")
         val media = when (link.platform) {
-            "douyin" -> douyin(link, kind)
-            else -> bilibili(link, kind)
+            "douyin" -> douyin(link, kind, verifyIdentity)
+            else -> bilibili(link, kind, verifyIdentity)
         }
         report("已取得媒体信息，可尝试地址 ${media.urls.size} 个")
         val work = File.createTempFile("getmedia-", ".source", context.cacheDir)
@@ -70,7 +75,11 @@ class DirectExtractor(
                 format = audioOnly(work, output)
                 report("音轨处理完成：$format")
             }
-            val ready = if (video || output.length() > 1024) output else work
+            val remuxed = output.length() > if (verifyIdentity) 0 else 1024
+            val ready = if (video || remuxed) output else work
+            check(!verifyIdentity || (ready.length() > 0 && (format != "m4a" || ready == output))) {
+                "没有得到完整的媒体文件"
+            }
             val hash = sha256(ready)
             // Replace only after the complete audio has been downloaded and validated.
             ready.copyTo(staged, overwrite = true)
@@ -117,7 +126,7 @@ class DirectExtractor(
         return DirectLinkParser.parse(url)
     }
 
-    private suspend fun douyin(link: DirectLink, kind: MediaKind): Media {
+    private suspend fun douyin(link: DirectLink, kind: MediaKind, verifyIdentity: Boolean): Media {
         val shareItem = fetchSharePageItem(link)
         if (shareItem != null) {
             report("公开分享页：取得目标作品数据")
@@ -172,6 +181,7 @@ class DirectExtractor(
         report("作品详情内容：status_code=${response.optInt("status_code", -1)}，作品数据${if (response.optJSONObject("aweme_detail") == null) "缺失" else "存在"}")
         val detail = response.optJSONObject("aweme_detail")
             ?: error("抖音没有返回作品信息；可能需要登录，或该作品不可见")
+        if (verifyIdentity) require(detail.optString("aweme_id") == link.videoId) { "抖音返回的作品编号不符" }
         return douyinMedia(detail, link, "https://www.douyin.com/", kind)
     }
 
@@ -232,7 +242,7 @@ class DirectExtractor(
             selected.distinct(), referer, coverUrl = cover)
     }
 
-    private suspend fun bilibili(link: DirectLink, kind: MediaKind): Media {
+    private suspend fun bilibili(link: DirectLink, kind: MediaKind, verifyIdentity: Boolean): Media {
         report(if (kind == MediaKind.VIDEO) "B 站：开始请求作品、画面与声音信息" else "B 站：开始请求作品与音轨信息")
         withOptionalBilibiliWarmup(
             warmup = { get("https://www.bilibili.com/", ua = BROWSER_UA, stage = "B 站首页预热"); report("B 站首页预热：成功") },
@@ -245,10 +255,17 @@ class DirectExtractor(
         report("B 站作品信息：HTTP 200")
         require(view.optInt("code") == 0) { "B 站作品不可访问：${view.optString("message")}" }
         val item = view.getJSONObject("data")
+        if (verifyIdentity) {
+            val confirmed = if (link.videoId.startsWith("av", true)) "av${item.optString("aid")}" else item.optString("bvid")
+            require(confirmed == link.videoId) { "B 站返回的作品编号不符" }
+        }
         val pages = item.optJSONArray("pages")
         require(link.page == 1 || (pages != null && link.page <= pages.length())) { "作品没有 P${link.page}" }
-        val cid = pages?.optJSONObject(link.page - 1)?.optLong("cid")?.takeIf { it > 0 }
-            ?: item.optLong("cid")
+        val partInfo = pages?.optJSONObject(link.page - 1)
+        if (verifyIdentity && (partInfo != null || link.page > 1)) {
+            require(partInfo?.optInt("page") == link.page && partInfo.optLong("cid") > 0) { "B 站返回的分 P 与请求不符" }
+        }
+        val cid = partInfo?.optLong("cid")?.takeIf { it > 0 } ?: item.optLong("cid")
         require(cid > 0) { "B 站没有返回视频分 P 编号" }
         val nav = JSONObject(biliGet("https://api.bilibili.com/x/web-interface/nav", "B 站播放签名", link.url))
         val wbi = nav.getJSONObject("data").getJSONObject("wbi_img")

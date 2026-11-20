@@ -1,13 +1,19 @@
 # 状态
 
-最后更新：2026-11-17
+最后更新：2026-11-20
 
 ## 下个版本待办（v-next）
 
 | # | 事项 | 为什么 / 完成判据 |
 |---|---|---|
-| 1 | 会话 Cookie 路径改为可配置：`Settings.cookie_path` 支持 `GETMEDIA_COOKIE_PATH`，**默认改为 `/getmedia/`**；同步改 `server/tests/test_accounts.py::test_web_cookie_attributes_and_no_token_in_body` 里 `Path=/getmedia/api/` 的断言（以及 `deploy/env/getmedia.env.example` 加注释） | 现在 `cookie_path` 硬编码为 `/getmedia/api/`，owner 管理台在 `/getmedia/owner/` 下收不到会话，只能靠边缘 `proxy_cookie_path` 改写兜住。代码改完后：把 `deploy/nginx/getmedia-prefix.conf` 里两处 `proxy_cookie_path`（owner/api 与 api 两个 location）删掉，重新 `nginx -t` + reload，复验"浏览器登录 `/getmedia/login` 后 `/getmedia/owner/` 返回 200、匿名仍 404" |
-| 2 | `tools/smoke_deploy.py` 的 `证书：到期日` 检查：**已改并提交（`1737677`）** —— ① 不再静默 SKIP，读不到到期日判 FAIL 并写明原因；② 改用 `CERT_REQUIRED`（关 hostname 校验）取解析结果，失败再退到 `getpeercert(binary_form=True)` 解码；③ 阈值改为**剩余不足 36 小时判 FAIL** | 该检查原先恒 SKIP 等于假绿；2026-11-17 20:43 复跑：`剩 3.9 天（2026-11-21 23:19 UTC 到期）` PASS，14 PASS / 0 FAIL / 2 SKIP。**11-19 那次核对里再复验一次**（证书续期后应报新的 notAfter） |
+| 1 | 会话 Cookie 路径由部署配置提供 | 回归已登录管理台和匿名访问的权限行为 |
+| 2 | 部署探测检查证书有效期 | 已支持明确报告读取失败，也会报告即将到期 |
+| 3 | 阶段 4 后排期 · owner 网页展开 B 站 `b23.tv` 分享短链 | 服务端 `1753adf` 与 `6f3360b` 离线复现同为 `unsupported_link`。展开需评估服务器出网及重定向的 SSRF 防护 |
+| 4 | 阶段 4 后排期 · owner 网页保留 B 站 `?p=N` | 旧提取流程取默认分 P。后续要保留分享输入的明确分 P，并验证返回分 P 与请求一致 |
+
+## 2026-11-20 曲库同步阶段 4
+
+Android full 0.1.10 / versionCode 11 实现备份恢复项原行关联及缺文件恢复。升级和备份预览已验证。恢复、匹配、直取与重新下载纳入整体真机验收；Android 单测已覆盖。下一次 full versionCode ≥ 12。
 
 ## 2026-11-17 补充任务（批量导出 + 定时倒计时缺陷）
 
@@ -17,7 +23,7 @@
 | 批量导出 · 节点 A（纯逻辑 + 单测） | **已交付、未提交**：`ExportTrack` / `ExportNaming` / `ExportPlan` + 两个测试类（16 个方法，覆盖 §9.1 的 1–13），含整名 240 字节上限；free 145 项 / full 165 项单测全过 | `data/export/*`、`test/.../data/export/*` |
 | 批量导出 · 节点 B / C | 未开始（B：确认页与 SAF；C：前台服务与收口） | `docs/export-plan.md` §10 |
 | Android UI 方案 v3（P4a） | v2 + free 的「我的」页账号卡片不显示 tier（`OwnerGate.AccountTierBadge` 空实现），仅 full 显示 | `docs/ui-plan.md` |
-| P6 部署材料 v3 | 密钥只写 `键=值`、llm.env 本次不建、daemon-reload 后 restart 并查 schema=11、代码回退必须配库快照、冒烟脚本临时目录、nginx 脚本插 include、只建 owner1/owner2、退役三条前置 | 本地 `docs/p6-deploy-plan.md`（不入公开仓库） |
+| P6 部署材料 v3 | 已准备部署、验证与回滚步骤 | 部署记录在本地维护 |
 
 ## 2026-11-17 阶段进度（P1–P5f + P2h + P2i）
 
@@ -35,16 +41,14 @@
 | P5d 提取 / 批量 / 定时 / Agent | 完成（未新增服务端接口） | `docs/p5d-report.md` |
 | P5e 平台授权 + 库维护 | 完成（未新增服务端接口） | `docs/p5e-report.md` |
 | P5f AI 视频重建 | 完成（未新增服务端接口）；九栏全部接真实页面 | `docs/p5f-report.md` |
-| P6 部署 | **已部署（2026-11-17，A/B/C 三段完成）**：`current` → `releases/20261117-1`，库 schema 4→11，边缘装 owner 通道，公开页与 owner 页已上线（`/var/www/getmedia/{public,owner}`），owner1/owner2 已建；冒烟 18 PASS / 0 FAIL / 2 SKIP（free 身份未提供 Cookie、证书到期日检查自身失效） | 本地 `docs/p6-deploy-plan.md` §3–§5（不入公开仓库） |
+| P6 部署 | 公开页与管理台已上线；部署和联调细节在本地维护 | — |
 
 > 说明：含真实服务器路径、旧账号片段、nginx 细节的文档只留本地，见 `.gitignore` 末段。
 >
-> **P2i 已实施**（2026-11-17）：AI 素材与产物计入服务器库 3 GiB，保留期 14 天，`getmedia-ai-gc.timer` 每天 04:10 清理过期文件（保留记录）。部署这件事本身仍等 P6，见 `docs/p2i-report.md`。
+> **P2i 已实施**。AI 文件按保留期清理，元数据按既有规则保留。部署记录在本地维护。
 
-> **批量条目可直接下载到本机**（2026-11-18，已上线 `releases/20261118-2`，schema v12）：
-> `creator_items` 新增 `play_urls`/`play_urls_at`，扫描时把抖音列表响应里的 play_addr 存下；
+> 批量条目支持直接下载到本机。
 > `GET /v2/creators/jobs/{job}/items/{video_id}/file` 按附件转发（B 站无直链时回退现解析）。
-> 媒体库侧同一天加了 `GET /v2/media/{id}?download=1`。
 
 ## 工作包（历史）
 

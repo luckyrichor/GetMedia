@@ -6,6 +6,7 @@ import androidx.annotation.VisibleForTesting
 import com.getmedia.app.BuildConfig
 import com.getmedia.app.account.ApiException
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.cloud.cloudSync
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.localextract.DirectExtractor
 import com.getmedia.app.data.repo.DiagnosticsStore
@@ -399,6 +400,23 @@ object BackupManager {
         return runCatching { api.list() }
     }
 
+    /** 只比较备份中的条目主键，不恢复、不改备份决策。 */
+    suspend fun previewRestore(backupId: String): Result<RestoreService.Preview> {
+        val api = api ?: return Result.failure(IllegalStateException("未初始化"))
+        val c = context ?: return Result.failure(IllegalStateException("未初始化"))
+        val session = sessionNow() ?: return Result.failure(IllegalStateException("未登录"))
+        return runCatching {
+            val payload = api.download(backupId)
+            val snapshot = SnapshotReader.read(payload.gzip, payload.sha256)
+            val preview = RestoreService(AppDatabase.get(c)).preview(snapshot)
+            check(isSameSession(session)) { "账号已变化，请重新打开备份" }
+            preview
+        }
+    }
+
+    private fun isSameSession(startedAs: SessionStore.Session): Boolean =
+        sessionNow()?.let { it.loginName == startedAs.loginName && it.token == startedAs.token } == true
+
     /**
      * 下载 + 校验 + 合并恢复。整个过程是一个事务：校验不过就中止，本地库一个字节都不动。
      * 恢复完标脏——合并后的清单和上次上传的不一样，下一个窗口该传一次。
@@ -410,7 +428,11 @@ object BackupManager {
         val result = runCatching {
             val payload = api.download(backupId)
             val snapshot = SnapshotReader.read(payload.gzip, payload.sha256)
-            val result = RestoreService(AppDatabase.get(c)).restore(snapshot)
+            val result = RestoreService(AppDatabase.get(c)).restore(
+                snapshot,
+                account = session.loginName.takeIf { cloudSync.managesRestores(session) },
+                valid = { isSameSession(session) },
+            )
             // 恢复成功即决策：以云端那份为准，自动备份随即解禁（同设置页入口与新弹窗）。
             prefs?.update(session.loginName) {
                 it.copy(dirty = true, restoreDecision = BackupPrefs.RESTORE_RESTORED)
@@ -426,9 +448,14 @@ object BackupManager {
             result
         }
         // 决策与「暂停」标志都变了，界面要立刻知道（横幅与弹窗都靠它）。
-        if (result.isSuccess) publish()
+        result.getOrNull()?.let {
+            publish()
+            if (it.addedTracks > 0) cloudSync.onBackupRestored(c)
+        }
         return result
     }
+
+    fun usesManagedRestore(): Boolean = cloudSync.managesRestores(sessionNow())
 
     /** "全部重新下载"的进度源；第一次用时才建（避免启动时就打开数据库）。 */
     fun redownloadState(): StateFlow<RedownloadRunner.State>? = runner()?.state
@@ -452,6 +479,7 @@ object BackupManager {
         return redownload ?: RedownloadRunner(
             AppDatabase.get(c),
             extract = { url, kind -> DirectExtractor(c).extract(url, kind) },
+            canRedownload = { track -> !cloudSync.protectsRecovery(track, sessionNow()) },
         ).also { redownload = it }
     }
 

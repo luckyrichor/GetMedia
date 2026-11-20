@@ -30,8 +30,27 @@ class RestoreService(private val db: AppDatabase) {
         val totalTracks: Int get() = addedTracks + skippedTracks
     }
 
-    suspend fun restore(snapshot: ParsedSnapshot, nowMs: Long = System.currentTimeMillis()): Result =
+    data class Preview(val newIds: Int, val verifiablePlatformIds: Int)
+
+    suspend fun preview(snapshot: ParsedSnapshot): Preview = db.withTransaction {
+        val existing = db.trackDao().allNow().mapTo(HashSet()) { it.id }
+        val new = snapshot.tracks.filter { existing.add(LocalIds.localId(it.platform, it.videoId, it.page)) }
+        Preview(
+            newIds = new.size,
+            verifiablePlatformIds = new.count {
+                it.platform.lowercase() in setOf("bilibili", "douyin") && it.sourceUrl.isNotBlank()
+            },
+        )
+    }
+
+    suspend fun restore(
+        snapshot: ParsedSnapshot,
+        nowMs: Long = System.currentTimeMillis(),
+        account: String? = null,
+        valid: () -> Boolean = { true },
+    ): Result =
         db.withTransaction {
+            check(valid()) { "账号已变化，请重新打开备份" }
             val categoryMap = mergeCategories(snapshot.categories, nowMs)
             val playlistMap = mergePlaylists(snapshot.playlists)
             val existingIds = db.trackDao().allNow().mapTo(HashSet()) { it.id }
@@ -70,10 +89,10 @@ class RestoreService(private val db: AppDatabase) {
                     mediaType = runCatching { MediaKind.valueOf(t.mediaType) }.getOrDefault(MediaKind.AUDIO).name,
                     serverPage = t.page,
                     // 六列同步字段的默认值，一条都不能省：
-                    // serverId / serverSeq / serverUpdatedAtMs / accountKey = null（服务器身份未知），
-                    // syncState = RESTORED（P0-2 别当新条目上传，否则会在服务器上造出重复）。
-                    // 这条约定由 RestoreSyncDefaultsTest 钉住。
+                    // 备份来源账号可知，但服务器条目身份仍需另行匹配。
+                    // RESTORED 不参加本机新增上传。
                     syncState = SyncState.RESTORED.name,
+                    accountKey = account,
                 )
                 for (ref in t.playlists) {
                     val playlistId = playlistMap[ref.playlistId] ?: continue
@@ -87,6 +106,7 @@ class RestoreService(private val db: AppDatabase) {
             if (toInsert.isNotEmpty()) db.trackDao().upsertAll(toInsert)
             if (newItems.isNotEmpty()) db.playlistDao().add(newItems)
 
+            check(valid()) { "账号已变化，请重新打开备份" }
             Result(
                 addedTracks = toInsert.size,
                 skippedTracks = skipped,

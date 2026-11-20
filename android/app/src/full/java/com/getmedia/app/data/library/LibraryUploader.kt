@@ -1,5 +1,6 @@
 package com.getmedia.app.data.library
 
+import androidx.room.withTransaction
 import com.getmedia.app.data.backup.MetadataSnapshot
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.MediaKind
@@ -27,6 +28,7 @@ class LibraryUploader(
     private val account: String,
     private val nowMs: () -> Long = System::currentTimeMillis,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    private val allowCandidate: (Long) -> Boolean = { true },
 ) {
 
     /** 一轮上传的结果。`stopped` 非空表示整批停手（下次重跑，幂等）。 */
@@ -96,10 +98,10 @@ class LibraryUploader(
         transport.create(entryOf(track))
     }
 
-    private suspend fun writeBack(id: Long, created: CreatedTrack) {
-        val current = db.trackDao().byId(id) ?: return
+    private suspend fun writeBack(id: Long, created: CreatedTrack) = db.withTransaction {
+        val current = db.trackDao().byId(id)?.takeIf(::eligible) ?: return@withTransaction
         val server = created.track
-        db.trackDao().upsertAll(listOf(
+        db.trackDao().updateExisting(
             current.copy(
                 serverId = server.id,
                 serverSeq = server.updatedSeq,
@@ -111,11 +113,12 @@ class LibraryUploader(
                 title = if (created.created || current.localTitleOverride != null) current.title else server.title,
                 updatedAtMs = nowMs(),
             ),
-        ))
+        )
+        Unit
     }
 
     internal fun eligible(t: TrackEntity): Boolean {
-        if (t.serverId != null) return false
+        if (t.serverId != null || !allowCandidate(t.id)) return false
         when (t.syncState) {
             LibraryMark.CLOUD_ONLY, LibraryMark.PENDING_UP, LibraryMark.DETACHED -> return false
         }
@@ -130,16 +133,19 @@ class LibraryUploader(
         return true
     }
 
-    private fun entryOf(t: TrackEntity) = UploadEntry(
-        platform = t.platform,
-        videoId = MetadataSnapshot.videoIdOf(t),
-        page = MetadataSnapshot.pageOf(t),
-        mediaType = if (MediaKind.of(t.mediaType) == MediaKind.VIDEO) "video" else "audio",
-        title = (t.localTitleOverride ?: t.title).trim().take(MAX_TITLE),
-        uploader = t.uploader?.trim()?.take(MAX_UPLOADER)?.ifBlank { null },
-        durationSec = t.durationSec?.takeIf { it > 0 },
-        sourceUrl = t.sourceUrl.orEmpty().trim().take(MAX_URL),
-    )
+    private fun entryOf(t: TrackEntity): UploadEntry {
+        val identity = t.restoredKey()
+        return UploadEntry(
+            platform = identity?.platform ?: t.platform,
+            videoId = identity?.videoId ?: MetadataSnapshot.videoIdOf(t),
+            page = identity?.page ?: MetadataSnapshot.pageOf(t),
+            mediaType = if (MediaKind.of(t.mediaType) == MediaKind.VIDEO) "video" else "audio",
+            title = (t.localTitleOverride ?: t.title).trim().take(MAX_TITLE),
+            uploader = t.uploader?.trim()?.take(MAX_UPLOADER)?.ifBlank { null },
+            durationSec = t.durationSec?.takeIf { it > 0 },
+            sourceUrl = t.sourceUrl.orEmpty().trim().take(MAX_URL),
+        )
+    }
 
     private fun reasonOf(problem: LibrarySyncProblem): String = when (problem) {
         LibrarySyncProblem.RATE_LIMITED -> "同步太频繁，稍后重试"

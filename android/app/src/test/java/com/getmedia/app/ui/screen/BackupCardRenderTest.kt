@@ -27,6 +27,8 @@ import com.getmedia.app.data.backup.BackupPrefs
 import com.getmedia.app.ui.theme.GetMediaTheme
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -45,6 +47,18 @@ class BackupCardRenderTest {
 
     @get:Rule
     val rule = createAndroidComposeRule<ComponentActivity>()
+
+    @Test
+    fun restorePreviewExplainsWhatCanBeRecoveredInPlainLanguage() {
+        val empty = restorePreviewMessage(0)
+        val positive = restorePreviewMessage(2)
+        assertTrue(empty.contains("没有发现可补回的 B 站或抖音作品"))
+        assertTrue(positive.contains("可能补回 2 项"))
+        for (message in listOf(empty, positive)) {
+            assertTrue(message.contains("请用原文件重新导入"))
+            assertFalse(listOf("主键", "编号", "未命中").any(message::contains))
+        }
+    }
 
     private fun render(state: BackupManager.UiState, dark: Boolean = false) {
         rule.setContent {

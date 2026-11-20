@@ -1,5 +1,7 @@
 package com.getmedia.app.data.serverextract
 
+import com.getmedia.app.data.library.restoredIdentity
+
 import com.getmedia.app.data.local.LocalIds
 import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.SyncState
@@ -88,12 +90,14 @@ class ServerExtractClient(
         save: suspend (TrackEntity, ServerTrack, DownloadedFile) -> TrackEntity,
     ): TrackEntity {
         val id = original.serverId ?: mismatch()
-        val expected = key(original.platform, original.videoId, original.serverPage)
         val kind = MediaKind.entries.firstOrNull { it.name == original.mediaType } ?: mismatch()
+        val expected = restoredIdentity(original.platform, original.videoId, original.serverPage,
+            original.sourceUrl, kind.name) ?: mismatch()
 
         fun checked(detail: ServerTrack): ServerTrack {
-            if (detail.deleted || detail.id != id || detail.mediaType != kind.name.lowercase() ||
-                key(detail.platform, detail.videoId, detail.page) != expected) mismatch()
+            if (detail.deleted || detail.id != id ||
+                restoredIdentity(detail.platform, detail.videoId, detail.page, detail.sourceUrl, detail.mediaType) != expected
+            ) mismatch()
             return detail
         }
 
@@ -117,7 +121,7 @@ class ServerExtractClient(
         val source = original.sourceUrl.ifBlank {
             throw ServerMediaException(ServerProblem.INPUT, "这一条缺少原始链接")
         }
-        val target = ExtractTarget(id, expected.first, expected.second, expected.third)
+        val target = ExtractTarget(id, expected.platform, expected.videoId, expected.page)
         val job = api.startTargetedExtract(source, kind, target)
         val done = poll(job.id, kind) {}
         if (done.trackId != id) mismatch()
@@ -142,19 +146,6 @@ class ServerExtractClient(
                 code = "file_integrity_mismatch")
         }
         file
-    }
-
-    private fun key(platform: String, videoId: String, page: Int): Triple<String, String, Int> {
-        if (platform == "bilibili") {
-            val legacy = LEGACY_BILI_PAGE.matchEntire(videoId)
-            if (legacy != null) {
-                val encoded = legacy.groupValues[2].toInt()
-                if (page != 1 && page != encoded) mismatch()
-                return Triple(platform, legacy.groupValues[1], encoded)
-            }
-        }
-        if (platform.isBlank() || videoId.isBlank() || page !in 1..9999) mismatch()
-        return Triple(platform, videoId, page)
     }
 
     private fun mismatch(): Nothing = throw ServerMediaException(
@@ -247,7 +238,6 @@ class ServerExtractClient(
     }
 
     private companion object {
-        val LEGACY_BILI_PAGE = Regex("(BV[0-9A-Za-z]{10})-p([1-9][0-9]{0,3})")
         const val MAX_RATE_LIMITED = 3
         const val RATE_LIMIT_DELAY_MS = 3_000L
     }

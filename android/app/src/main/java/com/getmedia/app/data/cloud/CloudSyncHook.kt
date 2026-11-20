@@ -1,6 +1,7 @@
 package com.getmedia.app.data.cloud
 
 import android.content.Context
+import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
@@ -40,6 +41,14 @@ interface CloudSyncHook {
 
     /** 登录/切换账号/退出登录后调一次。 */
     fun onAccountChanged(context: Context)
+
+    val supportsManagedRestores: Boolean
+
+    fun managesRestores(session: SessionStore.Session?): Boolean
+
+    fun protectsRecovery(track: TrackEntity, session: SessionStore.Session?): Boolean
+
+    fun onBackupRestored(context: Context)
 
     /** 关闭当前询问，不记录决定。 */
     fun dismissUpload(ask: CloudUploadAsk)

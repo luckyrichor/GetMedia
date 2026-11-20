@@ -5,7 +5,9 @@ import android.net.Uri
 import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.room.withTransaction
+import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.backup.BackupManager
+import com.getmedia.app.data.cloud.cloudSync
 import com.getmedia.app.player.PlayerHolder
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.MediaKind
@@ -21,13 +23,15 @@ import kotlinx.coroutines.sync.withLock
 import java.security.MessageDigest
 import java.io.File
 
-class TrackRepository(private val context: Context) {
+class TrackRepository(
+    private val context: Context,
+    private val db: AppDatabase = AppDatabase.get(context),
+) {
 
     companion object {
         internal val fileMutex = Mutex()
     }
 
-    private val db = AppDatabase.get(context)
     private val trackDao = db.trackDao()
 
     private val audioDir: File
@@ -120,12 +124,19 @@ class TrackRepository(private val context: Context) {
     /** 分享文本由手机直接提取，保存到本地库；不经过任何服务器。 */
     suspend fun extract(text: String, kind: MediaKind = MediaKind.AUDIO, onDiagnostic: (String) -> Unit = {}): Result<TrackEntity> = runCatching {
         withContext(Dispatchers.IO) {
-            val entity = fileMutex.withLock {
-                val extracted = DirectExtractor(context) { line ->
-                    withContext(Dispatchers.Main) { onDiagnostic(line) }
-                }.extract(text, kind)
+            val extractor = DirectExtractor(context) { line ->
+                withContext(Dispatchers.Main) { onDiagnostic(line) }
+            }
+            val entity = if (cloudSync.supportsManagedRestores) {
+                val staged = File.createTempFile("extract-", ".part", context.cacheDir)
+                try {
+                    adoptStaged(extractor.extractTo(text, kind, staged, verifyIdentity = false), staged)
+                } finally {
+                    staged.delete()
+                }
+            } else fileMutex.withLock {
+                val extracted = extractor.extract(text, kind)
                 trackDao.upsertLocal(extracted)
-                // 提取入库是清单变化的头号来源；只标脏，30 秒后统一算指纹
                 BackupManager.noteWrite()
                 extracted
             }
@@ -151,31 +162,36 @@ class TrackRepository(private val context: Context) {
             val video = MediaKind.of(entity.mediaType) == MediaKind.VIDEO
             val dir = File(context.filesDir, if (video) "video" else "audio").apply { mkdirs() }
             val dest = File(dir, if (video) "${entity.id}.mp4" else "${entity.id}.audio")
-            val existing = trackDao.byId(entity.id)
-            val previousPath = existing?.localPath
-            if (dest.exists() && !dest.delete()) error("无法覆盖本地文件")
-            if (!staged.renameTo(dest)) {
-                staged.copyTo(dest, overwrite = true)
-                staged.delete()
+            val (saved, previousPath) = db.withTransaction {
+                val existing = trackDao.byId(entity.id)
+                check(existing == null || !cloudSync.protectsRecovery(existing, SessionStore.current.value)) {
+                    "曲库已有此项，请从原条目或「恢复条目」下载"
+                }
+                if (dest.exists() && !dest.delete()) error("无法覆盖本地文件")
+                if (!staged.renameTo(dest)) {
+                    staged.copyTo(dest, overwrite = true)
+                    staged.delete()
+                }
+                val now = System.currentTimeMillis()
+                val record = entity.copy(
+                    localPath = dest.absolutePath,
+                    audioBytes = dest.length(),
+                    audioSha256 = sha256(dest),
+                    favorite = existing?.favorite ?: false,
+                    localCategoryId = existing?.localCategoryId ?: entity.localCategoryId,
+                    localTitleOverride = existing?.localTitleOverride,
+                    title = existing?.localTitleOverride ?: entity.title,
+                    addedAtMs = existing?.addedAtMs?.takeIf { it > 0 } ?: now,
+                    sortIndex = existing?.sortIndex ?: entity.sortIndex,
+                    updatedAtMs = now,
+                )
+                trackDao.upsertAll(listOf(record))
+                record to existing?.localPath
             }
-            val now = System.currentTimeMillis()
-            val record = entity.copy(
-                localPath = dest.absolutePath,
-                audioBytes = dest.length(),
-                audioSha256 = sha256(dest),
-                favorite = existing?.favorite ?: false,
-                localCategoryId = existing?.localCategoryId ?: entity.localCategoryId,
-                localTitleOverride = existing?.localTitleOverride,
-                title = existing?.localTitleOverride ?: entity.title,
-                addedAtMs = existing?.addedAtMs?.takeIf { it > 0 } ?: now,
-                sortIndex = existing?.sortIndex ?: entity.sortIndex,
-                updatedAtMs = now,
-            )
-            trackDao.upsertAll(listOf(record))
             BackupManager.noteWrite()
             // 覆盖到同一行时，旧路径（例如本机剪辑副本）留着就是孤儿文件
             previousPath?.takeIf { it != dest.absolutePath }?.let { File(it).delete() }
-            record
+            saved
         }
     }
 
@@ -188,6 +204,28 @@ class TrackRepository(private val context: Context) {
         serverSeq: Long,
         serverUpdatedAtMs: Long?,
         sameSession: () -> Boolean,
+    ): TrackEntity = fillOriginal(original, staged, bytes, hash, serverSeq, serverUpdatedAtMs, null, null, sameSession)
+
+    internal suspend fun fillRestoredFile(
+        original: TrackEntity,
+        staged: File,
+        bytes: Long,
+        hash: String,
+        format: String,
+        account: String,
+        sameSession: () -> Boolean,
+    ): TrackEntity = fillOriginal(original, staged, bytes, hash, null, null, account, format, sameSession)
+
+    private suspend fun fillOriginal(
+        original: TrackEntity,
+        staged: File,
+        bytes: Long,
+        hash: String,
+        serverSeq: Long?,
+        serverUpdatedAtMs: Long?,
+        recoveredBy: String?,
+        format: String?,
+        sameSession: () -> Boolean,
     ): TrackEntity = withContext(Dispatchers.IO + NonCancellable) {
         fileMutex.withLock {
             var dest: File? = null
@@ -198,6 +236,12 @@ class TrackRepository(private val context: Context) {
                         existing.accountKey == original.accountKey && existing.platform == original.platform &&
                         existing.videoId == original.videoId && existing.serverPage == original.serverPage &&
                         existing.mediaType == original.mediaType) { "账号或原条目已变化，请重新打开" }
+                    if (recoveredBy != null) {
+                        check(existing.syncState == SyncState.RESTORED.name && existing.serverId == null &&
+                            existing.localPath == null && existing.sourceUrl == original.sourceUrl) {
+                            "恢复条目已变化，请重新核对"
+                        }
+                    }
                     if (existing.localPath?.let { File(it).isFile && File(it).length() > 0 } == true) {
                         return@withTransaction existing
                     }
@@ -211,8 +255,10 @@ class TrackRepository(private val context: Context) {
                     check(sameSession()) { "账号已变化，请重新打开" }
                     val updated = existing.copy(
                         localPath = file.absolutePath, audioBytes = bytes, audioSha256 = hash,
-                        audioFormat = if (video) "mp4" else "m4a",
-                        syncState = SyncState.SYNCED.name, serverSeq = serverSeq,
+                        audioFormat = format ?: if (video) "mp4" else "m4a",
+                        accountKey = recoveredBy ?: existing.accountKey,
+                        syncState = if (recoveredBy == null) SyncState.SYNCED.name else SyncState.LOCAL_ONLY.name,
+                        serverSeq = serverSeq,
                         serverUpdatedAtMs = serverUpdatedAtMs, updatedAtMs = System.currentTimeMillis(),
                     )
                     check(trackDao.updateExisting(updated) == 1) { "原条目已变化，请重新打开" }

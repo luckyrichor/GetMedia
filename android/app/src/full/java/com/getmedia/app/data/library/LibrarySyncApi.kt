@@ -28,6 +28,7 @@ class LibrarySyncApi(
     baseUrl: String = BuildConfig.OWNER_SERVER_BASE,
     private val client: OkHttpClient = AccountApi.defaultClient(),
     private val token: () -> String? = SessionStore::token,
+    private val strictCatalog: Boolean = false,
 ) : LibrarySyncTransport {
 
     private val base = baseUrl.trimEnd('/')
@@ -54,7 +55,7 @@ class LibrarySyncApi(
                         LibrarySyncJson.retryAfterSeconds(response.header("Retry-After")),
                     )
                 }
-                LibrarySyncJson.page(text)
+                LibrarySyncJson.page(text, strictCatalog)
             }
         } catch (e: IOException) {
             // 只捕 IO：上面主动抛的 LibrarySyncException 必须原样穿出去，不能被当成网络问题重试

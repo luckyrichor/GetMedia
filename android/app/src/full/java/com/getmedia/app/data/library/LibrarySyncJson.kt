@@ -13,16 +13,22 @@ object LibrarySyncJson {
     /** 单页条数上限，与服务端 `limit` 的 `le=500` 对齐。 */
     const val MAX_PAGE = 500
 
-    fun page(text: String): PullPage {
+    fun page(text: String, strictCatalog: Boolean = false): PullPage {
         val root = runCatching { JSONObject(text) }.getOrElse {
             throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的内容无法识别")
         }
         val arr = root.optJSONArray("items")
             ?: throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的同步页缺少条目列表")
+        if (strictCatalog && (root.opt("has_more") !is Boolean || root.opt("next_seq") !is Number)) {
+            throw LibrarySyncException(LibrarySyncProblem.SERVER, "云端清单缺少分页信息")
+        }
         val items = ArrayList<CloudTrack>(arr.length())
         for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            items += track(o) ?: continue
+            val item = arr.optJSONObject(i)?.let { track(it, strictCatalog) }
+            if (strictCatalog && (item == null || item.updatedSeq <= 0)) {
+                throw LibrarySyncException(LibrarySyncProblem.SERVER, "云端清单有无法核对的条目")
+            }
+            if (item != null) items += item
         }
         return PullPage(
             items = items,
@@ -50,17 +56,18 @@ object LibrarySyncJson {
     }
 
     /** 解析一条；**键不全的行直接丢掉**（没有 platform/video_id 就没法算本地 id）。 */
-    private fun track(o: JSONObject): CloudTrack? {        val platform = o.optString("platform").trim()
+    private fun track(o: JSONObject, strictCatalog: Boolean = false): CloudTrack? {
+        val platform = o.optString("platform").trim()
         val videoId = o.optString("video_id").trim()
         if (platform.isEmpty() || videoId.isEmpty()) return null
         val id = o.optLong("id", 0)
         if (id <= 0) return null
-        val page = o.optInt("page", 1).coerceIn(1, 9999)
+        val page = if (strictCatalog) o.optInt("page", 0) else o.optInt("page", 1).coerceIn(1, 9999)
         return CloudTrack(
             id = id,
             platform = platform,
             // 服务器把分 P 放在 page 列，video_id 不带后缀；万一带上就先剥掉，统一成规范形态
-            videoId = if (page > 1) videoId.removeSuffix("-p$page") else videoId,
+            videoId = if (page > 1 && !strictCatalog) videoId.removeSuffix("-p$page") else videoId,
             page = page,
             title = o.optString("title").ifBlank { "未命名作品" },
             uploader = o.optString("uploader").ifBlank { null },
@@ -68,7 +75,7 @@ object LibrarySyncJson {
                 o.optDouble("duration_sec").takeUnless { it.isNaN() }
             } else null,
             sourceUrl = o.optString("source_url"),
-            mediaType = o.optString("media_type").ifBlank { "audio" },
+            mediaType = o.optString("media_type").ifBlank { if (strictCatalog) "" else "audio" },
             deleted = o.optBoolean("deleted", false),
             updatedSeq = o.optLong("updated_seq", 0),
             updatedAtSec = o.optLong("updated_at", 0),

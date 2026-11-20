@@ -1,6 +1,7 @@
 package com.getmedia.app.data.cloud
 
 import android.content.Context
+import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +27,14 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
     override fun onForeground(context: Context) = Unit
 
     override fun onAccountChanged(context: Context) = Unit
+
+    override val supportsManagedRestores = false
+
+    override fun managesRestores(session: SessionStore.Session?) = false
+
+    override fun protectsRecovery(track: TrackEntity, session: SessionStore.Session?) = false
+
+    override fun onBackupRestored(context: Context) = Unit
 
     override fun dismissUpload(ask: CloudUploadAsk) = Unit
 

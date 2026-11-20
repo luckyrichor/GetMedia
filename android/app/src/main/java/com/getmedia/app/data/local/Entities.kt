@@ -43,10 +43,8 @@ data class TrackEntity(
 
     // ---------- 服务器来源（P0-1 起写入；本机提取的行保持 null/LOCAL_ONLY） ----------
     //
-    // 从云端清单"恢复"出来的行（RestoreService）是另一回事：serverId / serverSeq /
-    // serverUpdatedAtMs / accountKey 全为 null，serverPage 记快照里的真实页码，
-    // syncState = RESTORED。这四个 null 表示"这行的服务器身份未知"，RESTORED 表示
-    // "别当新条目上传"——两条合起来才是 P0-2 的判断依据。
+    // 从备份恢复时，serverId / serverSeq / serverUpdatedAtMs 仍为空，serverPage 记快照里的页码。
+    // 新版可记录备份所属账号。RESTORED 表示服务器条目身份待核对，且不可作为本机新增上传。
 
     /** 服务器 track id；P0-2 的匹配键。null 表示这行没在服务器上出现过（含恢复出来的行）。 */
     val serverId: Long? = null,
@@ -62,7 +60,7 @@ data class TrackEntity(
     val serverUpdatedAtMs: Long? = null,
     /** 同步状态：`LOCAL_ONLY` / `SYNCED` / `RESTORED`；P0-2 的状态机从这里继续。 */
     @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SyncState.LOCAL_ONLY.name,
-    /** 登录名；P0-2 按账号隔离同步，本机提取与恢复出来的行都留 null。 */
+    /** 登录名；未归属的本机提取和历史恢复行留 null。 */
     val accountKey: String? = null,
 )
 

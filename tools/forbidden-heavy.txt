@@ -68,6 +68,10 @@ LibrarySyncApi
 LibrarySyncJson
 LibrarySyncTransport
 LibrarySyncException
+RestoredMatcher
+RestoredIdentity
+RestoredRedownload
+RestoredControls
 CLOUD_ONLY
 LIB_PENDING_UP
 LIB_DETACHED

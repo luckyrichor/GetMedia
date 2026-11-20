@@ -32,4 +32,10 @@ class LibrarySyncPrefs(context: Context) {
     fun setDecision(account: String, value: SyncUploadDecision) {
         prefs.edit().putString("$account.decision", value.name).apply()
     }
+
+    fun requiresManualUpload(account: String, id: Long): Boolean =
+        prefs.getBoolean("$account.restored.$id.manual", false)
+
+    fun requireManualUpload(account: String, id: Long): Boolean =
+        prefs.edit().putBoolean("$account.restored.$id.manual", true).commit()
 }

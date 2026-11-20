@@ -15,7 +15,7 @@ import com.getmedia.app.data.local.TrackEntity
  *
  * 1. **只新建**：只在本地没有这个键时插入一行 [LibraryMark.CLOUD_ONLY]；
  *    已有的行（`RESTORED` / `LOCAL_ONLY` / `SYNCED`）**一个字段都不动**，连 `updated_seq`
- *    比较都不做——那是阶段 4 匹配与阶段 5 合并的事。
+ *    比较都不做——恢复关联由 [RestoredMatcher] 先处理，其余合并是阶段 5 的事。
  * 2. **只发 GET**：本类拿不到任何写通道，[LibrarySyncTransport] 里只有 `pull`。
  * 3. **不碰备份**：写库直接走 DAO，不经过 `TrackRepository`，因此不会触发 `BackupManager.noteWrite()`
  *    的防抖上传；而且这些行的"无整理痕迹"特征会让它们根本进不了快照（`MetadataSnapshot.keepInSnapshot`）。
@@ -76,6 +76,7 @@ class LibrarySyncEngine(
             val rows = db.trackDao().allNow()
             val knownIds = rows.mapTo(HashSet()) { it.id }
             val knownKeys = rows.mapTo(HashSet()) { keyOf(it) }
+            val normalized = rows.mapNotNullTo(HashSet()) { it.restoredKey() }
 
             var added = 0
             var skipped = 0
@@ -90,10 +91,12 @@ class LibrarySyncEngine(
 
                 val id = LocalIds.localId(item.platform, item.videoId, item.page)
                 val key = Triple(item.platform.lowercase(), item.videoId, item.page)
-                if (id in knownIds || key in knownKeys) { skipped++; continue }
+                val identity = item.restoredKey()
+                if (id in knownIds || key in knownKeys || identity in normalized) { skipped++; continue }
 
                 knownIds += id
                 knownKeys += key
+                if (identity != null) normalized += identity
                 fresh += entity(item, id, account, now)
                 added++
             }

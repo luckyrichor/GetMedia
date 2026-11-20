@@ -74,5 +74,8 @@ __pycache__/
 # 曲库同步部署清单：含服务器路径与可执行命令，只留本地
 /docs/p0-2-golive.md
 /docs/p0-2-download-golive.md
+# 曲库同步私人实施与验收材料，公开 STATUS 只记产品及验证状态
+/docs/STATUS.local.md
+/docs/superpowers/plans/*-getmedia-stage[45].md
 # 隐私说明 v3 草稿：未生效的文本不进公开仓库，生效时以正式文件替换 docs/legal/privacy-policy.md
 /docs/legal/privacy-policy-v3-draft.md

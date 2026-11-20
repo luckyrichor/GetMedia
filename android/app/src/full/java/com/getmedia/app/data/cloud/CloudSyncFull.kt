@@ -6,6 +6,7 @@ import com.getmedia.app.data.library.LibraryMark
 import com.getmedia.app.data.library.LibrarySyncRunner
 import com.getmedia.app.data.library.LibrarySyncGate
 import com.getmedia.app.data.local.TrackEntity
+import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.serverextract.ServerMediaApi
 import com.getmedia.app.data.serverextract.serverExtractClient
@@ -30,7 +31,8 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
     override val uploadAsk: StateFlow<CloudUploadAsk?> get() = LibrarySyncRunner.uploadAsk
 
     override fun awaitingDownload(track: TrackEntity): Boolean =
-        track.syncState == LibraryMark.CLOUD_ONLY
+        track.syncState == LibraryMark.CLOUD_ONLY ||
+            (track.syncState == SyncState.SYNCED.name && track.serverId != null && track.localPath == null)
 
     override suspend fun download(context: Context, track: TrackEntity): File = downloadLock.withLock {
         val session = SessionStore.current.value
@@ -50,6 +52,16 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
         saved.localPath?.let(::File)
             ?: throw IllegalStateException("下载完成但没有落成本地文件")
     }
+
+    override fun managesRestores(session: SessionStore.Session?) = LibrarySyncGate.isOwner(session)
+
+    override val supportsManagedRestores = true
+
+    override fun protectsRecovery(track: TrackEntity, session: SessionStore.Session?) =
+        (track.syncState == SyncState.RESTORED.name && (track.accountKey != null || managesRestores(session))) ||
+            awaitingDownload(track)
+
+    override fun onBackupRestored(context: Context) = LibrarySyncRunner.onBackupRestored(context)
 
     override fun onForeground(context: Context) = LibrarySyncRunner.onForeground(context)
 

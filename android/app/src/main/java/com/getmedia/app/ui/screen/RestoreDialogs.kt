@@ -57,6 +57,8 @@ internal fun RestoreFlow(onClose: () -> Unit) {
     var working by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<RestoreService.Result?>(null) }
     var redownloading by remember { mutableStateOf(false) }
+    var previewing by remember { mutableStateOf(false) }
+    var preview by remember { mutableStateOf<String?>(null) }
 
     fun load() {
         loading = true; error = null
@@ -76,6 +78,7 @@ internal fun RestoreFlow(onClose: () -> Unit) {
 
         result != null -> {
             val r = result!!
+            val managed = BackupManager.usesManagedRestore()
             AlertDialog(
                 onDismissRequest = onClose,
                 title = { Text("恢复完成") },
@@ -92,14 +95,15 @@ internal fun RestoreFlow(onClose: () -> Unit) {
                         if (r.addedTracks > 0) {
                             Spacer(Modifier.height(6.dp))
                             Text(
-                                "新增的条目还没有本地文件，先标为「待下载」；点「全部重新下载」会逐条重新提取。",
+                                if (managed) "新增条目还没有本地文件。请到「曲库同步」核对云端匹配。"
+                                else "新增的条目还没有本地文件，先标为「待下载」；点「全部重新下载」会逐条重新提取。",
                                 fontSize = 13.sp, color = uiMuted(),
                             )
                         }
                     }
                 },
                 confirmButton = {
-                    if (r.addedTracks > 0) {
+                    if (r.addedTracks > 0 && !managed) {
                         TextButton(onClick = {
                             scope.launch {
                                 val ids = BackupManager.pendingDownloadIds()
@@ -111,7 +115,7 @@ internal fun RestoreFlow(onClose: () -> Unit) {
                         TextButton(onClick = onClose) { Text("好") }
                     }
                 },
-                dismissButton = if (r.addedTracks > 0) {
+                dismissButton = if (r.addedTracks > 0 && !managed) {
                     { TextButton(onClick = onClose) { Text("稍后") } }
                 } else null,
             )
@@ -154,8 +158,27 @@ internal fun RestoreFlow(onClose: () -> Unit) {
         else -> BackupPickerDialog(
             items = items,
             selected = selected,
-            onSelect = { selected = it },
+            onSelect = { selected = it; preview = null },
             onDismiss = onClose,
+            previewText = preview,
+            previewing = previewing,
+            onPreview = if (BackupManager.usesManagedRestore()) { {
+                val target = selected
+                if (target != null && !previewing) {
+                    previewing = true
+                    preview = null
+                    scope.launch {
+                        val checked = BackupManager.previewRestore(target.id)
+                        if (selected?.id == target.id) {
+                            preview = checked.fold(
+                                onSuccess = { restorePreviewMessage(it.verifiablePlatformIds) },
+                                onFailure = { "暂时无法预览这份备份，请稍后重试。" },
+                            )
+                        }
+                        previewing = false
+                    }
+                }
+            } } else null,
             onConfirm = {
                 val target = selected ?: return@BackupPickerDialog
                 if (target.tracks <= 0) return@BackupPickerDialog
@@ -171,6 +194,15 @@ internal fun RestoreFlow(onClose: () -> Unit) {
     }
 }
 
+internal fun restorePreviewMessage(workCount: Int): String {
+    val summary = if (workCount == 0) {
+        "这份备份里没有发现可补回的 B 站或抖音作品。"
+    } else {
+        "这份备份可能补回 $workCount 项带原链接的 B 站或抖音作品。"
+    }
+    return "$summary 备份只有曲库清单。以前从手机导入的媒体文件如需找回，请用原文件重新导入。"
+}
+
 /** 选一份备份。抽出来单独一个函数，渲染回归测试才好直接拍它。 */
 @Composable
 internal fun BackupPickerDialog(
@@ -179,15 +211,30 @@ internal fun BackupPickerDialog(
     onSelect: (BackupItem) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
+    previewText: String? = null,
+    previewing: Boolean = false,
+    onPreview: (() -> Unit)? = null,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("选择要恢复的备份") },
-        text = { BackupPickerContent(items, selected, onSelect) },
+        text = {
+            Column {
+                BackupPickerContent(items, selected, onSelect)
+                if (previewing || previewText != null) {
+                    Text(previewText ?: "正在核对此备份…", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        },
         confirmButton = {
             TextButton(enabled = selected != null, onClick = onConfirm) { Text("恢复") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = {
+            if (onPreview != null) {
+                TextButton(onClick = onPreview, enabled = selected != null && !previewing) { Text("预览可补回的作品") }
+            }
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
     )
 }
 
