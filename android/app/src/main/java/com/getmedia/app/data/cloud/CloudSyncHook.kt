@@ -56,8 +56,18 @@ interface CloudSyncHook {
     /**
      * 把"云端有、本机没文件"的这一条下载到本机，返回落盘后的文件。
      * 失败抛异常，由调用方统一提示（[awaitingDownload] 为 false 时不该走到这里）。
+     *
+     * 这是**唯一**的下载入口（阶段 6）：条目菜单、恢复条目页、导出确认页的「先下载这 N 项」、
+     * 批量重新下载全部走它，按行状态分派（服务器已存文件直取 / 服务器带 target 提取 /
+     * 抖音本机提取 / 恢复空壳本机提取）。调用前不做任何隐式网络动作。
      */
     suspend fun download(context: Context, track: TrackEntity): File
+
+    /** 这一条现在能做哪些补救（下载 / 只能移除空壳）；`free` 恒为 [RepairOptions.NONE]。 */
+    fun repairOptions(track: TrackEntity): RepairOptions
+
+    /** 重置本设备这个账号的"云端备份要不要恢复"决策，用于诊断与复验；不动云端与曲库。 */
+    fun resetRestoreDecision(context: Context, account: String)
 
     /** App 回到前台：实现里自己判断闸门、节流与单飞，调用方不用关心。 */
     fun onForeground(context: Context)

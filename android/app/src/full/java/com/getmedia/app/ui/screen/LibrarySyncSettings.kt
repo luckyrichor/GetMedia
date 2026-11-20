@@ -16,12 +16,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.cloud.cloudSync
 import com.getmedia.app.data.library.LibraryMark
 import com.getmedia.app.data.library.LibrarySyncClient
 import com.getmedia.app.data.library.LibrarySyncGate
@@ -31,10 +33,12 @@ import com.getmedia.app.data.library.LibraryUploader
 import com.getmedia.app.data.library.RestoreMatchIssue
 import com.getmedia.app.data.library.needsRestoreMatch
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.ui.components.RowDivider
 import com.getmedia.app.ui.components.SectionCard
 import com.getmedia.app.ui.components.SectionTitle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -90,14 +94,55 @@ internal fun LibrarySyncSettings() {
     )
 
     val status = restoreStatus?.takeIf { it.account == account && LibrarySyncGate.maySync(session) }
+    val scope = rememberCoroutineScope()
+    var actionMessage by remember { mutableStateOf<String?>(null) }
+    var shellToRemove by remember { mutableStateOf<Long?>(null) }
+    fun downloadOne(id: Long) {
+        actionMessage = null
+        scope.launch {
+            val row = TrackRepository(context).byId(id)
+            actionMessage = if (row == null) {
+                "这一条已被移除"
+            } else {
+                runCatching { cloudSync.download(context, row) }
+                    .fold({ "已下载到原条目" }, { "没取到：${it.message ?: "请稍后再试"}" })
+            }
+        }
+    }
     if (hasRestored || status?.message != null) {
         RestoredControls(
             status = status,
             canCheck = hasRestored && LibrarySyncGate.maySync(session),
             onCheck = { LibrarySyncRunner.checkRestored(context, includeLegacy) },
             onConfirmAccount = { confirmLegacy = true },
-            onRedownload = { LibrarySyncRunner.redownloadRestored(context, it, includeLegacy) },
+            // 阶段 6：这里也走统一下载入口。以前是 redownloadRestored，它会先拉一遍云端清单
+            // 做预检——下载前不该有这种隐式网络动作，身份核对在回填时照样做。
+            onRedownload = ::downloadOne,
+            onRemoveShell = { shellToRemove = it },
+            actionMessage = actionMessage,
         )
+        shellToRemove?.let { id ->
+            AlertDialog(
+                onDismissRequest = { shellToRemove = null },
+                title = { Text("移除这条？") },
+                text = {
+                    Text(
+                        "云端有这项的删除记录，这台手机也没有它的文件。移除只影响这台手机，" +
+                            "云端记录不动，也不会删任何文件。",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        shellToRemove = null
+                        scope.launch {
+                            actionMessage = runCatching { TrackRepository(context).removeShell(id) }
+                                .fold({ "已移除这条" }, { "移除失败：${it.message ?: "请稍后再试"}" })
+                        }
+                    }) { Text("移除", color = MaterialTheme.colorScheme.error) }
+                },
+                dismissButton = { TextButton(onClick = { shellToRemove = null }) { Text("取消") } },
+            )
+        }
     }
     if (confirmLegacy && LibrarySyncGate.maySync(session)) {
         AlertDialog(
@@ -123,6 +168,8 @@ internal fun RestoredControls(
     onCheck: () -> Unit,
     onConfirmAccount: () -> Unit,
     onRedownload: (Long) -> Unit,
+    onRemoveShell: ((Long) -> Unit)? = null,
+    actionMessage: String? = null,
 ) {
     SectionTitle("恢复条目")
     SectionCard {
@@ -130,6 +177,7 @@ internal fun RestoredControls(
         if (canCheck) TextButton(onClick = onCheck, enabled = enabled) { Text("核对云端匹配") }
         if (status?.working == true) Text("正在核对或重新下载…", Modifier.padding(horizontal = 14.dp))
         status?.message?.let { Text(it, Modifier.padding(14.dp)) }
+        actionMessage?.let { Text(it, Modifier.padding(horizontal = 14.dp, vertical = 4.dp)) }
         status?.notices?.forEach { notice ->
             RowDivider(startIndent = 14.dp)
             Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
@@ -140,6 +188,13 @@ internal fun RestoredControls(
                         TextButton(onClick = onConfirmAccount, enabled = enabled) { Text("确认使用当前账号") }
                     RestoreMatchIssue.UNMATCHED ->
                         TextButton(onClick = { onRedownload(notice.id) }, enabled = enabled) { Text("重新下载") }
+                    // 阶段 6：云端有删除记录的恢复空壳，只给"移除这条"——它没有文件可取，
+                    // 也不该出现在"重新下载"那里。确认与副作用由调用方负责。
+                    RestoreMatchIssue.TOMBSTONE -> if (onRemoveShell != null) {
+                        TextButton(onClick = { onRemoveShell(notice.id) }, enabled = enabled) {
+                            Text("移除这条", color = MaterialTheme.colorScheme.error)
+                        }
+                    }
                     else -> Unit
                 }
             }

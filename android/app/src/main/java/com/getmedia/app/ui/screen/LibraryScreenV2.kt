@@ -427,12 +427,14 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
     fun operate(block: suspend () -> Unit) { scope.launch { runCatching { DiagnosticsStore.operation("媒体库操作", block) }.onFailure { notice = it.message ?: "操作失败" } } }
     fun queueItems(tracks: List<TrackEntity>, play: Boolean, sourceId: Long? = null) = operate {
         val ready = mutableListOf<PlayerHolder.QueueItem>()
-        // 云端行（服务器有、本机没文件）要先下载再入队；其它缺文件的照旧走仓库的本地检查，
-        // 由它给出"已丢失，请重新提取"这类明确结论。下载可能几十秒，先说一声再动手。
-        if (tracks.any { cloudSync.awaitingDownload(it) }) notice = "正在从云端下载…"
+        // 缺文件的行走统一入口补下载（阶段 6）：云端行与恢复空壳都由 cloudSync 分派，
+        // 失败原因由它如实给出，这里不再自己猜。
+        if (tracks.any { it.localPath?.let { p -> File(p).exists() } != true && cloudSync.repairOptions(it).canDownload }) {
+            notice = "正在下载到本机…"
+        }
         for (track in tracks) {
             val local = track.localPath?.takeIf { File(it).exists() }
-            val path = local ?: if (cloudSync.awaitingDownload(track)) {
+            val path = local ?: if (cloudSync.repairOptions(track).canDownload) {
                 cloudSync.download(context, track).absolutePath
             } else {
                 trackRepo.download(track).getOrThrow().absolutePath
@@ -740,6 +742,48 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
             confirmText = "完成",
             onConfirm = { target = null },
         ) {
+            // 阶段 6：缺文件的这一条要有一个点了能推进的地方。判定全在 full/free 的实现里
+            //（free 恒为 NONE），这里只按它给出的选项画；有本机文件的行一个字都不多。
+            audio?.let { row ->
+                val track = row.track
+                val repair = cloudSync.repairOptions(track)
+                if (repair.canDownload) {
+                    SheetGroup("补齐文件") {
+                        SheetRow(
+                            "下载到本机", Icons.Default.CloudDownload,
+                            featured = true,
+                            subtitle = if (cloudSync.awaitingDownload(track)) {
+                                "服务器上有这一条，这台手机还没有文件"
+                            } else {
+                                "这条是从清单恢复的，本机还没有文件"
+                            },
+                            onClick = {
+                                target = null
+                                operate {
+                                    cloudSync.download(context, track)
+                                    notice = "已下载到本机"
+                                }
+                            },
+                        )
+                        if (repair.canRemoveShell) {
+                            SheetDivider()
+                            SheetRow(
+                                "移除这条", Icons.Default.DeleteSweep, destructive = true, chevron = false,
+                                onClick = { dialog = "removeShell" },
+                            )
+                        }
+                    }
+                } else if (repair.canRemoveShell) {
+                    // 取不回来（没有来源链接 / 身份信息不足）：不摆一个必然失败的按钮，只给移除。
+                    SheetGroup("补齐文件") {
+                        SheetRow(
+                            "移除这条", Icons.Default.DeleteSweep, destructive = true, chevron = false,
+                            subtitle = repair.note,
+                            onClick = { dialog = "removeShell" },
+                        )
+                    }
+                }
+            }
             SheetGroup("播放") {
                 SheetRow(
                     "加入当前播放列表", Icons.AutoMirrored.Filled.PlaylistAdd,
@@ -914,6 +958,29 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                     }, tone = ActionTone.DESTRUCTIVE) { Text("删除") }
                 },
                 dismissButton = { AreaButton(onClick = { dialog = null; target = null }) { Text("取消") } })
+        }
+        // 阶段 6：只对"清单恢复出来、没有服务器身份、这台手机也没有文件"的空壳开放。
+        // 不走普通删除那条路（那里会问"要不要同时从云端移除"），也不写云端删除队列。
+        "removeShell" -> {
+            val shell = (target as? LibraryTarget.Audio)?.track
+            AlertDialog(
+                onDismissRequest = { dialog = null; target = null },
+                title = { Text("移除这条？") },
+                text = {
+                    Text(
+                        "「${shell?.title.orEmpty()}」是清单恢复出来的空壳：云端没有对应的记录（或已删除），" +
+                            "这台手机也没有它的文件。移除只影响这台手机，云端记录不动，也不会删任何文件。",
+                    )
+                },
+                confirmButton = {
+                    AreaButton(onClick = {
+                        val id = shell?.id
+                        dialog = null; target = null
+                        if (id != null) operate { trackRepo.removeShell(id); notice = "已移除这条" }
+                    }, tone = ActionTone.DESTRUCTIVE) { Text("移除") }
+                },
+                dismissButton = { AreaButton(onClick = { dialog = null; target = null }) { Text("取消") } },
+            )
         }
         "deletePlaylist" -> {
             val list = playlists.firstOrNull { it.id == deletePlaylistId }

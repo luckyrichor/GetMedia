@@ -2,16 +2,19 @@ package com.getmedia.app.ui.screen
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.getmedia.app.data.cloud.CloudRemovedAsk
@@ -52,7 +55,33 @@ internal fun CloudRemovedDialog(ask: CloudRemovedAsk, onKeep: () -> Unit, onDism
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onKeep) { Text("保留本机文件") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("稍后处理") } },
+        // 主操作必须看得出来：填充底色的胶囊 + 加粗，和右侧的纯文字「稍后处理」一眼能分。
+        // 之前两个都是 TextButton，源码里 confirm 在右、视觉上却完全对等，用户不知道该点哪个（0.1.14）。
+        confirmButton = { CloudRemovedKeepButton(onKeep) },
+        dismissButton = { CloudRemovedSnoozeButton(onDismiss) },
     )
+}
+
+/**
+ * 主按钮：「保留本机文件」。填充底色 + 半粗，是弹窗里唯一的强调项。
+ *
+ * 单独抽出来是为了能在 JVM 测试里截图比对填充占比——`AlertDialog` 是独立窗口，
+ * Robolectric 下 `captureToImage` 抓不到它（forceRedraw 超时），只能把按钮本身放进普通布局里测。
+ */
+@Composable
+internal fun CloudRemovedKeepButton(onKeep: () -> Unit) {
+    Button(
+        onClick = onKeep,
+        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+    ) {
+        Text("保留本机文件", fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** 次要按钮：「稍后处理」。纯文字、不加粗，视觉上刻意比主按钮轻。 */
+@Composable
+internal fun CloudRemovedSnoozeButton(onDismiss: () -> Unit) {
+    TextButton(onClick = onDismiss) {
+        Text("稍后处理", fontWeight = FontWeight.Normal)
+    }
 }

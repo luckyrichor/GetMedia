@@ -35,6 +35,13 @@ class RedownloadRunner(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
     private val random: Random = Random.Default,
     private val canRedownload: (TrackEntity) -> Boolean = { true },
+    /**
+     * 阶段 6：给了它就走**统一下载入口**（按行状态分派：B 站云端行走服务器、抖音与恢复空壳走本机提取），
+     * 落库也由下载入口自己做，这里不再按 `extract` 的结果回写。
+     *
+     * 没给（单测的既有用法）就还是老路径：本机直提取 + 按原 id 回写。
+     */
+    private val downloadRow: (suspend (TrackEntity) -> Unit)? = null,
 ) {
     data class State(
         val running: Boolean = false,
@@ -103,26 +110,37 @@ class RedownloadRunner(
             }
 
             _state.value = _state.value.copy(current = track.title)
-            val result = try {
-                extract(withPage(track.sourceUrl, track.serverPage), runCatching { MediaKind.valueOf(track.mediaType) }.getOrDefault(MediaKind.AUDIO))
+            val ok = try {
+                val dispatch = downloadRow
+                if (dispatch != null) {
+                    // 统一下载入口：分派、身份核对、落库都在里面，这里只要成败
+                    dispatch(track)
+                    true
+                } else {
+                    val result = extract(
+                        withPage(track.sourceUrl, track.serverPage),
+                        runCatching { MediaKind.valueOf(track.mediaType) }.getOrDefault(MediaKind.AUDIO),
+                    )
+                    db.withTransaction {
+                        val dao = db.trackDao()
+                        val existing = dao.byId(track.id)
+                        if (existing != null && existing.localPath == null && canRedownload(existing)) {
+                            dao.updateExisting(existing.copy(
+                                localPath = result.localPath, audioBytes = result.audioBytes,
+                                audioSha256 = result.audioSha256, audioFormat = result.audioFormat,
+                            ))
+                        }
+                    }
+                    true
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
                 DiagnosticsStore.event("重新下载", "${track.title}：${error.message ?: "失败"}", false)
-                null
+                false
             }
 
-            if (result != null) {
-                db.withTransaction {
-                    val dao = db.trackDao()
-                    val existing = dao.byId(track.id)
-                    if (existing != null && existing.localPath == null && canRedownload(existing)) {
-                        dao.updateExisting(existing.copy(
-                            localPath = result.localPath, audioBytes = result.audioBytes,
-                            audioSha256 = result.audioSha256, audioFormat = result.audioFormat,
-                        ))
-                    }
-                }
+            if (ok) {
                 queue.removeAt(0)
                 consecutive = 0
                 _state.value = _state.value.copy(

@@ -2,16 +2,19 @@ package com.getmedia.app.data.cloud
 
 import android.content.Context
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.backup.BackupManager
+import com.getmedia.app.data.library.DownloadCenter
 import com.getmedia.app.data.library.LibraryLocalEdits
 import com.getmedia.app.data.library.LibraryMark
 import com.getmedia.app.data.library.LibrarySyncRunner
 import com.getmedia.app.data.library.LibrarySyncGate
+import com.getmedia.app.data.library.LibrarySyncPrefs
+import com.getmedia.app.data.library.RepairRules
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.serverextract.ServerMediaApi
-import com.getmedia.app.data.serverextract.serverExtractClient
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -51,6 +54,10 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
         track.syncState == LibraryMark.CLOUD_ONLY ||
             (track.syncState == SyncState.SYNCED.name && track.serverId != null && track.localPath == null)
 
+    /**
+     * 统一下载入口（阶段 6）。分派规则见 [RepairRules] / [DownloadCenter]：
+     * B 站云端行走服务器、抖音云端行与恢复空壳走本机提取，落库永远按原主键回填。
+     */
     override suspend fun download(context: Context, track: TrackEntity): File = downloadLock.withLock {
         val session = SessionStore.current.value
         check(session != null && track.accountKey == session.loginName && LibrarySyncGate.maySync(session)) {
@@ -59,16 +66,27 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
         fun sameSession(): Boolean = SessionStore.current.value.let {
             it?.token == session.token && it.loginName == session.loginName && LibrarySyncGate.maySync(it)
         }
-        val repo = TrackRepository(context.applicationContext)
-        repo.download(track).getOrNull()?.let { return@withLock it }
+        val app = context.applicationContext
+        val repo = TrackRepository(app)
         val api = ServerMediaApi(token = { session.token.takeIf { sameSession() } })
-        val saved = serverExtractClient(repo, api, context.cacheDir).refillOriginal(track) { original, detail, file ->
-            repo.fillExistingFile(original, file.file, file.bytes, file.sha256, detail.updatedSeq,
-                detail.updatedAtSec?.times(1000), ::sameSession)
-        }
-        saved.localPath?.let(::File)
-            ?: throw IllegalStateException("下载完成但没有落成本地文件")
+        DownloadCenter(
+            app = app,
+            repo = repo,
+            api = api,
+            prefs = LibrarySyncPrefs(app),
+            session = session,
+            sameSession = ::sameSession,
+        ).download(track)
     }
+
+    override fun repairOptions(track: TrackEntity): RepairOptions = RepairRules.options(
+        track = track,
+        // 菜单里的判断可以读磁盘：`localPath` 指向的文件可能已经被系统清理。
+        hasFile = track.localPath?.let { File(it).let { f -> f.isFile && f.length() > 0 } } == true,
+    )
+
+    override fun resetRestoreDecision(context: Context, account: String) =
+        BackupManager.resetRestoreDecision(account)
 
     override fun managesRestores(session: SessionStore.Session?) = LibrarySyncGate.isOwner(session)
 

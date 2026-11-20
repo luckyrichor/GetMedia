@@ -39,8 +39,19 @@ val ownerGate: OwnerGate = object : OwnerGate {
 
     /** 真实实现只存在于 full 源码集（`ExportMissingNoticeBody`），free 产物里查不到这个类名。 */
     @Composable
-    override fun ExportMissingNotice(missingCount: Int, onSkip: () -> Unit) =
-        ExportMissingNoticeBody(missingCount = missingCount, onSkip = onSkip)
+    override fun ExportMissingNotice(
+        missingCount: Int,
+        busy: Boolean,
+        message: String?,
+        onDownload: () -> Unit,
+        onSkip: () -> Unit,
+    ) = ExportMissingNoticeBody(
+        missingCount = missingCount,
+        busy = busy,
+        message = message,
+        onDownload = onDownload,
+        onSkip = onSkip,
+    )
 
     /** 上传确认弹窗：文案与按钮都在 `UploadAskDialog` 里，free 产物里没有这个类。 */
     @Composable

@@ -32,10 +32,26 @@ data class ExportTrack(
      * 没有 `serverId` = 本机产物真的丢了（要重新提取）。免费版永远是 null。
      */
     val serverId: Long? = null,
+    /**
+     * 同步状态原值（`LOCAL_ONLY` / `RESTORED` / …）。只用来判断"这一条能不能补下载"，
+     * 导出链路不据此做别的决定；免费版的行都是 `LOCAL_ONLY`。
+     *
+     * 为什么不在这里直接算 `RepairOptions`：判定要读只在 full 出现的同步状态常量，
+     * 而 [ExportTrack] 是纯数据（JVM 单测直接构造）。真正的闸门在下载入口里，这里只管显示。
+     */
+    val syncState: String? = null,
 ) {
     /** 云端有、本机没下过：导出失败原因要说"尚未下载"，不能让人去重提取一遍。 */
     val awaitingDownload: Boolean
         get() = localPath.isNullOrBlank() && serverId != null
+
+    /**
+     * 缺文件、但能通过统一下载入口补回来（阶段 6）：云端行，或清单恢复出来的空壳。
+     * 本机产物真的丢了的行不在此列——那种只能重新提取或重新导入。
+     */
+    val refillable: Boolean
+        get() = localPath.isNullOrBlank() &&
+            (serverId != null || syncState == "RESTORED")
 
     /** 显示名：重命名优先，空串仍回落到原标题。 */
     val displayTitle: String
@@ -56,6 +72,7 @@ data class ExportTrack(
             audioBytes = entity.audioBytes,
             localPath = entity.localPath,
             serverId = entity.serverId,
+            syncState = entity.syncState,
         )
     }
 }

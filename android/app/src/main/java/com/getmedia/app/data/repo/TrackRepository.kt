@@ -132,6 +132,30 @@ class TrackRepository(
         }
     }
 
+    /**
+     * 移除一条「恢复空壳」（阶段 6）：清单恢复出来、没有服务器身份、本机也没有文件的行。
+     *
+     * 与普通删除的区别有两个：
+     * - **不写云端删除队列**（`cloudIds` 留空）：云端本来就没有这一条（或已经是墓碑），再删一次是多余请求；
+     * - **不碰播放队列**：空壳没有文件，本来就进不了队列（入队必须先取到文件），
+     *   所以这里不需要 `PlayerHolder` 的那次主线程调度，避免为了删一行把主线程拉进来。
+     *
+     * 有本机文件的行一律拒绝：那种情况要走普通删除，那里才有"文件也删掉吗"的确认。
+     */
+    suspend fun removeShell(id: Long): Int = withContext(Dispatchers.IO) {
+        val row = trackDao.byId(id) ?: return@withContext 0
+        require(row.localPath == null || !File(row.localPath).exists()) {
+            "这条有本机文件，请用普通删除"
+        }
+        db.withTransaction {
+            trackDao.removePlaylistReferences(listOf(id))
+            trackDao.deleteByIds(listOf(id))
+        }
+        CoverCache.forget(context, id)
+        BackupManager.noteWrite()
+        1
+    }
+
     suspend fun setFavorite(id: Long, fav: Boolean) {
         trackDao.setFavorite(id, fav)
         BackupManager.noteWrite()
@@ -219,7 +243,7 @@ class TrackRepository(
         staged: File,
         bytes: Long,
         hash: String,
-        serverSeq: Long,
+        serverSeq: Long?,
         serverUpdatedAtMs: Long?,
         sameSession: () -> Boolean,
     ): TrackEntity = fillOriginal(original, staged, bytes, hash, serverSeq, serverUpdatedAtMs, null, null, sameSession)

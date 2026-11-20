@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.getmedia.app.data.export.ExportNaming
 import com.getmedia.app.data.export.ExportPlan
+import com.getmedia.app.data.cloud.cloudSync
 import com.getmedia.app.data.export.ExportController
 import com.getmedia.app.data.export.ExportPrefs
 import com.getmedia.app.data.export.ExportSession
@@ -56,6 +58,7 @@ import com.getmedia.app.ui.components.uiMuted
 import com.getmedia.app.ui.formatSize
 import com.getmedia.app.ui.ownerGate
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -94,6 +97,7 @@ fun ExportSheet(
     var skipIds by remember { mutableStateOf(emptySet<Long>()) }
     var notice by remember { mutableStateOf<String?>(null) }
     val folderFocus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
 
     // 会话与状态住在 ExportController 里：重进这个页面能接回正在跑的导出
     val runState = ExportController.state
@@ -129,7 +133,9 @@ fun ExportSheet(
     val required = remember(sized) { ExportPlan.requiredBytes(sized) }
     val (waitingForDownload, missingLocalFiles) = remember(usable) {
         usable.filter { track -> track.localPath.isNullOrBlank() || !File(track.localPath).isFile }
-            .partition { it.awaitingDownload }
+            // 阶段 6：能补回来的（云端行、清单恢复的空壳）都归到「先下载这 N 项」那一块；
+            // 只有本机产物真的丢了的才标"本机文件缺失"。
+            .partition { it.refillable }
     }
     val sanitizedFolder = folderName?.let {
         ExportNaming.sanitize(it, ExportNaming.MAX_FOLDER_CHARS, ExportNaming.MAX_FOLDER_BYTES)
@@ -188,6 +194,35 @@ fun ExportSheet(
 
     fun retryFailed() {
         if (!ExportController.retry(context)) notice = "没有可重试的项"
+    }
+
+    // 阶段 6：「先下载这 N 项」逐条走统一下载入口（云端行 / 恢复空壳都在里面分派）。
+    // 失败原因如实回报——`resolve_error` 就说取不到，不写成"已丢失"。
+    var fetching by remember { mutableStateOf(false) }
+    var fetchNote by remember { mutableStateOf<String?>(null) }
+    fun fillMissing() {
+        if (fetching) return
+        fetching = true
+        fetchNote = null
+        scope.launch {
+            val repo = com.getmedia.app.data.repo.TrackRepository(context)
+            var ok = 0
+            var failed = 0
+            var lastError: String? = null
+            for (item in waitingForDownload) {
+                val row = repo.byId(item.id)
+                if (row == null) { failed++; lastError = "这一条已被移除"; continue }
+                runCatching { cloudSync.download(context, row) }
+                    .onSuccess { ok++ }
+                    .onFailure { failed++; lastError = it.message ?: "这次没取到" }
+            }
+            fetching = false
+            fetchNote = when {
+                failed == 0 -> "已下载 $ok 项，可以开始导出了"
+                ok == 0 -> "这 $failed 项没取到：$lastError"
+                else -> "已下载 $ok 项，另有 $failed 项没取到：$lastError"
+            }
+        }
     }
 
     val running = runState is ExportSession.State.Running
@@ -344,15 +379,21 @@ fun ExportSheet(
 
                 if (waitingForDownload.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
-                    ownerGate.ExportMissingNotice(waitingForDownload.size) {
-                        skipIds = skipIds + waitingForDownload.map { it.id }
-                    }
+                    ownerGate.ExportMissingNotice(
+                        missingCount = waitingForDownload.size,
+                        busy = fetching,
+                        message = fetchNote,
+                        onDownload = ::fillMissing,
+                        onSkip = { skipIds = skipIds + waitingForDownload.map { it.id } },
+                    )
                 }
                 if (missingLocalFiles.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
-                    ExportUnavailableNotice(missingLocalFiles.size, ExportPlan.REASON_MISSING_LOCAL) {
-                        skipIds = skipIds + missingLocalFiles.map { it.id }
-                    }
+                    ExportUnavailableNotice(
+                        missingCount = missingLocalFiles.size,
+                        reason = ExportPlan.REASON_MISSING_LOCAL,
+                        onSkip = { skipIds = skipIds + missingLocalFiles.map { it.id } },
+                    )
                 }
 
                 when (verdict) {

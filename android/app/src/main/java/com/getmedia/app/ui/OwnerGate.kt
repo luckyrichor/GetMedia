@@ -46,13 +46,21 @@ interface OwnerGate {
      * 导出确认页里「其中 N 项在本机找不到文件」整块（那句文案只存在于 full 源码集）。
      *
      * - `free`：空实现，不渲染、不持有任何文案；这些项只会在摘要里按"本机文件缺失"记失败。
-     * - `full`：显示条数并给「跳过这 N 项」——本期**只做跳过**，不提供会失败的"先下载再导出"按钮
-     *   （补下载导出已记进 `docs/p0-2-sync-design.md` §17）。
+     * - `full`：显示条数，给「先下载这 N 项」（走阶段 6 的统一下载入口）与「跳过这 N 项」。
      *
+     * @param busy 正在下载：按钮禁用并显示进度，避免重复点。
+     * @param message 上一次下载的结果（含失败原因），成功后为空。
+     * @param onDownload 点了先下载：父级按统一入口逐条补齐，再让列表自然刷新。
      * @param onSkip 点了跳过：父级把这批 id 从本次导出里剔掉，计数重算。
      */
     @Composable
-    fun ExportMissingNotice(missingCount: Int, onSkip: () -> Unit)
+    fun ExportMissingNotice(
+        missingCount: Int,
+        busy: Boolean,
+        message: String?,
+        onDownload: () -> Unit,
+        onSkip: () -> Unit,
+    )
 
     /**
      * 「有 N 条只在这台手机上，上传到账号 X？」的一次性确认（P0-2 阶段 3）。
