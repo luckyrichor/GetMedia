@@ -302,6 +302,9 @@ class TrackRepository(
      * （`serverId` 非空，即"云端有、本机没下过"）→ 是"还没下载"，不是"文件丢了"。
      * 说成"已丢失，请重新提取"会让人去重提取一遍，白做；真正的丢失是下面那条：
      * 有 `localPath` 但文件不在了。
+     *
+     * 0.1.13 又拆出第三种：从云端清单恢复出来的空壳（`RESTORED`、没有 `serverId`、
+     * 也没有 `localPath`）。它本来就没有过文件，说"已丢失"同样会误导。
      */
     suspend fun download(track: TrackEntity): Result<File> = runCatching {
         withContext(Dispatchers.IO) { fileMutex.withLock {
@@ -310,6 +313,11 @@ class TrackRepository(
             if (file != null && file.exists() && file.length() > 0) return@withLock file
             if (current.locallyEdited) error("本地剪辑文件已丢失，请重新剪辑")
             if (current.localPath == null && current.serverId != null) error("尚未下载到本机，请先下载")
+            // 恢复出来的空壳（清单回来了、文件从没下过）以前也落到最后一条"已丢失"，
+            // 让人以为文件被系统清了。它本来就没有过文件，说法要分开（0.1.13）。
+            if (current.localPath == null && SyncState.of(current.syncState) == SyncState.RESTORED) {
+                error("这条是从云端清单恢复的，本机还没有文件")
+            }
             error("本机音频文件已丢失，请重新提取")
         } }
     }

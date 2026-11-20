@@ -8,6 +8,7 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.getmedia.app.data.local.TrackEntity
+import com.getmedia.app.data.repo.DiagnosticsStore
 import com.getmedia.app.data.repo.PlaylistRepository
 import com.getmedia.app.data.repo.TrackRepository
 import kotlinx.coroutines.sync.Mutex
@@ -153,11 +154,22 @@ object PlayerHolder {
         val lists = PlaylistRepository(context)
         val sourceId = lists.resolve(sourcePlaylistIdState.value)
         if (queueState.value.isEmpty()) {
-            val saved = lists.tracks(sourceId).map { track ->
-                val path = track.localPath?.takeIf { File(it).exists() }
-                    ?: TrackRepository(context).download(track).getOrThrow().absolutePath
-                QueueItem(track, path)
+            // 列表里可能混着"本机没有文件"的行（恢复出来的空壳、"云端未下载"）。以前这里
+            // 是 `getOrThrow()`：只要列表里有一条这样的行，点**任意**一首播放都会失败，
+            // 提示还是"本机音频文件已丢失"——点的那一首文件其实是好的（0.1.13 修）。
+            val members = lists.tracks(sourceId)
+            val seeds = seedQueueItems(members) { track ->
+                track.localPath?.takeIf { File(it).isFile && File(it).length() > 0 }
+                    ?: TrackRepository(context).download(track).getOrNull()?.absolutePath
             }
+            if (seeds.size < members.size) {
+                DiagnosticsStore.event(
+                    "播放",
+                    "播放列表里有 ${members.size - seeds.size} 条本机没有可用文件，本次已跳过",
+                    false,
+                )
+            }
+            val saved = seeds.map { (track, path) -> QueueItem(track, path) }
             val restoredIds = newQueueTracks(emptyList(), saved.map { it.track }).map { it.id }.toSet()
             val restored = saved.filter { it.track.id in restoredIds }.distinctBy { it.track.id }
             queueState.value = restored

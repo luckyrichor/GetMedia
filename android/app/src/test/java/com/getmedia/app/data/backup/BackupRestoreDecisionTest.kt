@@ -86,6 +86,15 @@ class BackupRestoreDecisionTest {
         localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
     )
 
+    /** 同步拉下来的纯云端行：没有文件、没有收藏、没有改名、不在任何列表里。 */
+    private fun cloudOnlyTrack(serverId: Long) = TrackEntity(
+        id = -9500 - serverId, platform = "bilibili", videoId = "BVcloud$serverId", title = "云端第 $serverId 条",
+        uploader = null, durationSec = 1.0, audioBytes = null, audioFormat = "m4a",
+        sourceUrl = "https://www.bilibili.com/video/BVcloud$serverId", favorite = false,
+        localPath = null, serverId = serverId, syncState = "CLOUD_ONLY",
+        localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
+    )
+
     private fun seedTrack(videoId: String = "BVdecision") = runBlocking {
         AppDatabase.get(context).trackDao().upsertAll(listOf(syncTrack(videoId)))
     }
@@ -119,6 +128,39 @@ class BackupRestoreDecisionTest {
         assertTrue(state.restoreDecisionPending)
         assertEquals("弹窗上要显示云端那份的条数", 5, state.restoreCloudTracks)
         assertEquals("用户没选之前一个字节都不能传", 0, transport.uploads.get())
+        assertEquals(
+            "没做决策就不能落决策",
+            BackupPrefs.RESTORE_UNKNOWN,
+            BackupPrefs(context).read("u1").restoreDecision,
+        )
+    }
+
+    // ---------- ①b 全新安装：同步先把云端行拉下来，库不是空的 ----------
+
+    /**
+     * 真机上是这个顺序：登录 → 同步先把 35 条"云端未下载"的行写进库 → 库不再是空的。
+     * 决策框的判定从来不看本机行数，但它只在"进前台 5 秒 / 退后台 / 10 分钟周期 /
+     * 写操作防抖"这四个点检查——登录发生在 5 秒检查之后，就一个点都赶不上，
+     * 于是全新安装后一直不弹恢复框（0.1.13 补了"登录后"这个触发点）。
+     */
+    @Test
+    fun freshLoginWithOnlyCloudRowsStillAsksAndPausesBackup() {
+        clearLibrary()
+        runBlocking {
+            AppDatabase.get(context).trackDao().upsertAll((1L..35L).map(::cloudOnlyTrack))
+        }
+        val transport = FakeTransport(cloud = listOf(cloudItem(tracks = 61)))
+        start(BackupPrefs.State(enabled = true), transport)
+
+        // 只模拟"登录完成"，不碰前台/后台：这正是全新安装后发生的事。
+        BackupManager.onSessionSettled(session("u1"))
+
+        await { BackupManager.state.value.restoreDecisionPending }
+        Thread.sleep(300)
+
+        assertTrue("库里躺着 35 条纯云端行，也必须弹恢复框", BackupManager.state.value.restoreAskVisible)
+        assertEquals("弹窗上显示的是云端那份的条数", 61, BackupManager.state.value.restoreCloudTracks)
+        assertEquals("决定之前自动备份必须暂停", 0, transport.uploads.get())
         assertEquals(
             "没做决策就不能落决策",
             BackupPrefs.RESTORE_UNKNOWN,

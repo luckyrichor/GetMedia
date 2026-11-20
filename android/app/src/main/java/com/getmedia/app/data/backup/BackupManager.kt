@@ -85,6 +85,12 @@ object BackupManager {
     private var debounce: Job? = null
     private var redownload: RedownloadRunner? = null
 
+    /** 登录后那一次检查（[onSessionSettled]）。 */
+    private var loginCheck: Job? = null
+
+    /** 上一次看到的登录名；同一账号的 token 刷新不该重跑登录检查。 */
+    private var lastSessionLogin: String? = null
+
     /** 决策闸的结论。暂停与"本轮先不传"在界面上不一样，所以分开。 */
     private enum class Decision { Allow, Paused, Deferred }
 
@@ -111,7 +117,34 @@ object BackupManager {
         this.context = app
         prefs = BackupPrefs(app)
         api = transportOverride ?: BackupApi()
-        scope.launch { SessionStore.current.collect { publish() } }
+        scope.launch {
+            SessionStore.current.collect { session ->
+                publish()
+                // 登录（或换账号）本身就是一次触发点：前台那条 5 秒检查在没登录时早就
+                // 返回了，之后要等 10 分钟周期才会再跑一遍，恢复决策框就会迟迟不出现
+                // （全新安装后"库被同步拉满、却没弹过恢复框"就是这么来的，0.1.13 修）。
+                onSessionSettled(session)
+            }
+        }
+    }
+
+    /**
+     * 登录名变化后补一次检查。同一账号的 token 刷新不重跑。
+     *
+     * 只在**登录名变化**时排程：换账号要各自走一遍自己的决策；同一账号反复触发没有意义。
+     * 给单测也留了入口（生产由 [initialize] 里的会话收集调用）。
+     */
+    @VisibleForTesting
+    internal fun onSessionSettled(session: SessionStore.Session?) {
+        val login = session?.loginName
+        if (login == lastSessionLogin) return
+        lastSessionLogin = login
+        loginCheck?.cancel(); loginCheck = null
+        if (session == null || session.consentRequired) return
+        loginCheck = scope.launch {
+            delay(BackupRules.LOGIN_CHECK_DELAY_MS)
+            runCheck("登录后")
+        }
     }
 
     /** 只给单测：清掉 context/prefs/api 与在跑的定时任务，让下一个用例重新初始化。 */
@@ -119,6 +152,8 @@ object BackupManager {
     internal fun resetForTest() {
         ticker?.cancel(); ticker = null
         debounce?.cancel(); debounce = null
+        loginCheck?.cancel(); loginCheck = null
+        lastSessionLogin = null
         context = null; prefs = null; api = null; redownload = null
         sessionOverride = null; transportOverride = null
         decisionLogin = null; decisionOutcome = Decision.Allow
@@ -205,7 +240,7 @@ object BackupManager {
     fun backupNow() {
         if (gate() == null) return
         scope.launch {
-            if (localTrackCount() == 0) {
+            if (localContentCount() == 0) {
                 _state.value = _state.value.copy(emptyConfirmPending = true)
                 return@launch
             }
@@ -224,9 +259,21 @@ object BackupManager {
         _state.value = _state.value.copy(emptyConfirmPending = false)
     }
 
-    private suspend fun localTrackCount(): Int {
+    /**
+     * 本机**有内容**的条目数——与快照同一个口径（[MetadataSnapshot.keepInSnapshot]）。
+     *
+     * 不能数 `allNow().size`：同步会把"云端未下载"的行也写进 `tracks`，登录后本机一行
+     * 文件都没有时总行数却是几十。用总行数会让"空清单要先确认"这条静默失效——
+     * 既不弹确认、`runCheck` 里又按空清单拦掉上传，用户点「立即备份」什么都看不到
+     * （0.1.13 修）。这里与 `runCheck` 的 `snapshot.counts.tracks == 0` 必须是同一口径。
+     */
+    private suspend fun localContentCount(): Int {
         val c = context ?: return 0
-        return runCatching { AppDatabase.get(c).trackDao().allNow().size }.getOrDefault(0)
+        return runCatching {
+            val db = AppDatabase.get(c)
+            val items = db.playlistDao().itemsAll()
+            db.trackDao().allNow().count { MetadataSnapshot.keepInSnapshot(it, items) }
+        }.getOrDefault(0)
     }
 
     /**
@@ -526,6 +573,10 @@ object BackupManager {
             // 空清单本身是合法快照，但它没有任何恢复价值，却会占掉云端 3 份里的一份
             // （够了 3 份就把最旧的挤掉）。新设备 / 重装后先登录的场景正好是空库，
             // 这里必须挡住。用户明确点「立即备份」并确认后才走 allowEmpty。
+            //
+            // 口径：`counts.tracks` 是**过滤后**的条数（[MetadataSnapshot.keepInSnapshot]），
+            // 不含"云端未下载且没有任何整理痕迹"的行——同步拉下来的纯云端行不算本机内容。
+            // 界面上「立即备份」的确认用的是同一个口径（[localContentCount]）。
             if (!allowEmpty && snapshot.counts.tracks == 0) return
 
             if (!BackupRules.shouldUpload(stored, snapshot.fingerprint, System.currentTimeMillis(), force)) {

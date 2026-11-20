@@ -17,6 +17,14 @@ object BackupRules {
     /** 进入前台先等一会儿：冷启动时库和会话都还没稳。 */
     const val FOREGROUND_DELAY_MS = 5_000L
 
+    /**
+     * 登录后补检查的等待时间。
+     *
+     * 比前台那次短：登录时 App 早就起来了，不需要等冷启动那 5 秒；留一点时间让
+     * 首次登录告知先弹出来（两个弹窗不叠在一起，先告知、关掉再问恢复）。
+     */
+    const val LOGIN_CHECK_DELAY_MS = 1_500L
+
     /** 前台停留时的检查周期，与限频窗口一致。 */
     const val TICK_MS = 10 * 60_000L
 

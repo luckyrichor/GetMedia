@@ -176,4 +176,39 @@ class BackupEmptyLibraryTest {
         assertFalse(BackupManager.state.value.emptyConfirmPending)
         assertNull(BackupPrefs(context).read("u1").lastHash)
     }
+
+    /**
+     * 库里只有同步拉下来的"云端未下载"行时，本机其实一首都没有。
+     *
+     * 以前这里数的是 `tracks` 总行数：35 条云端行 → 判定"不是空库" → 不弹确认；
+     * 紧接着 `runCheck` 又按快照的 0 首把上传拦掉，于是点「立即备份」什么都不会发生。
+     * 0.1.13 把两处口径统一成"本机有内容的条目数"（[MetadataSnapshot.keepInSnapshot]）。
+     */
+    @Test
+    fun onlyCloudRowsCountAsEmptyAndAskFirst() {
+        clearLibrary()
+        seedCloudOnlyRows(3)
+        start(BackupPrefs.State(enabled = true))
+
+        BackupManager.backupNow()
+        awaitConfirmPending()
+
+        assertTrue("只有云端行也算空清单，必须先确认", BackupManager.state.value.emptyConfirmPending)
+        Thread.sleep(400)
+        assertEquals("确认之前不能上传", 0, uploads.get())
+    }
+
+    private fun seedCloudOnlyRows(count: Int) = runBlocking {
+        AppDatabase.get(context).trackDao().upsertAll(
+            (1L..count).map { i ->
+                TrackEntity(
+                    id = -9600 - i, platform = "bilibili", videoId = "BVcloud$i", title = "云端第 $i 条",
+                    uploader = null, durationSec = 1.0, audioBytes = null, audioFormat = "m4a",
+                    sourceUrl = "https://www.bilibili.com/video/BVcloud$i", favorite = false,
+                    localPath = null, serverId = i, syncState = "CLOUD_ONLY",
+                    localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
+                )
+            },
+        )
+    }
 }

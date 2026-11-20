@@ -62,6 +62,17 @@ class TrackDownloadWordingTest {
         assertEquals("本机音频文件已丢失，请重新提取", error?.message)
     }
 
+    /**
+     * 从云端清单恢复出来的空壳：它**从来没有过**文件，说"已丢失"会让人以为被系统清了。
+     */
+    @Test
+    fun restoredShellSaysItNeverHadAFile() = runBlocking {
+        val track = row(id = -9007L).copy(syncState = "RESTORED")
+        seed(track)
+        val error = repo.download(track).exceptionOrNull()
+        assertEquals("这条是从云端清单恢复的，本机还没有文件", error?.message)
+    }
+
     @Test
     fun lostEditCopyKeepsItsOwnWording() = runBlocking {
         val track = row(id = -9003L, localPath = File(context.cacheDir, "gone-edit.audio").absolutePath, locallyEdited = true)
