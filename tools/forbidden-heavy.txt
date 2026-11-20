@@ -61,6 +61,12 @@ ExportMissingNoticeBody
 LibraryMark
 LibrarySyncClient
 LibrarySyncEngine
+LibrarySyncApi
+LibrarySyncJson
+LibrarySyncTransport
+LibrarySyncException
 CLOUD_ONLY
 LIB_PENDING_UP
 LIB_DETACHED
+TRACK_DELETED
+LIBRARY_FULL

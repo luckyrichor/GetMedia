@@ -128,6 +128,7 @@ class BackupGateTest {
                         id = -9002, platform = "bilibili", videoId = "BVgate", title = "门开着的证据",
                         uploader = null, durationSec = 1.0, audioBytes = 10, audioFormat = "m4a",
                         sourceUrl = "https://www.bilibili.com/video/BVgate", favorite = false,
+                        localPath = "/files/-9002.m4a",
                         localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
                     ),
                 ),

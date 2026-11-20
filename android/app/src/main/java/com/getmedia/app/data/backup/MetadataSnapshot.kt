@@ -34,6 +34,9 @@ object MetadataSnapshot {
     const val UPLOADER_MAX = 120
     const val URL_MAX = 2048
 
+    /** 默认类别（"未分类"）的 id：实体默认值、恢复服务、这里三处必须是同一个数。 */
+    const val DEFAULT_CATEGORY_ID = 1L
+
     private val PAGE = Regex("[?&]p=(\\d+)")
     private val PAGE_SUFFIX = Regex("-p(\\d+)$")
 
@@ -72,10 +75,15 @@ object MetadataSnapshot {
         appVersion: String,
         nowSec: Long,
     ): Snapshot {
-        val sortedTracks = tracks.sortedBy { it.id }
+        // 先按"这一行值不值得备份"筛一遍，再排序、算指纹。
+        // 筛选必须发生在指纹之前：否则每同步来一批云端行都会改变指纹，等于每页触发一次上传。
+        val keptTracks = tracks.filter { keepInSnapshot(it, items) }
+        val keptIds = keptTracks.mapTo(HashSet()) { it.id }
+        val keptItems = items.filter { it.trackId in keptIds }
+        val sortedTracks = keptTracks.sortedBy { it.id }
         val sortedCategories = categories.sortedBy { it.id }
         val sortedPlaylists = playlists.sortedBy { it.id }
-        val sortedItems = items.sortedWith(compareBy({ it.playlistId }, { it.trackId }))
+        val sortedItems = keptItems.sortedWith(compareBy({ it.playlistId }, { it.trackId }))
         val byTrack = sortedItems.groupBy { it.trackId }
 
         val counts = SnapshotCounts(
@@ -101,6 +109,29 @@ object MetadataSnapshot {
     }
 
     // ---------- JSON ----------
+
+    /**
+     * 这一行要不要进备份快照。
+     *
+     * 规则（P0-2 §18.4 ①）：**本机没文件、且没有任何自己整理过的痕迹**的行走开——
+     * 这类行服务器上本来就有，重装后同步一遍就回来了，备份它们只会白白占体积，
+     * 把有用的快照挤到 8000 行 / 512 KiB 的上限外面。
+     *
+     * 四条痕迹，沾一条就得备份：
+     * 1. 本机有文件（`localPath` 非空）——文件没有第二份，只能靠它自己；
+     * 2. 收藏过；
+     * 3. 挪到了非默认类别（`localCategoryId != 1`）；
+     * 4. 在任何一个播放列表里（含默认列表，顺序只在手机上）；
+     * 5. 在本机改过名。改名不在最初列的"三条痕迹"里，但不备份就会在恢复后丢：
+     *    阶段 5 才把改名推给服务器，在那之前它是纯本机数据。
+     */
+    fun keepInSnapshot(t: TrackEntity, items: List<PlaylistItemEntity>): Boolean {
+        if (!t.localPath.isNullOrBlank()) return true
+        if (t.favorite) return true
+        if (t.localCategoryId != DEFAULT_CATEGORY_ID) return true
+        if (t.localTitleOverride != null) return true
+        return items.any { it.trackId == t.id }
+    }
 
     private fun categoryJson(c: CategoryEntity) = JSONObject()
         .put("id", c.id).put("name", c.name)

@@ -52,6 +52,15 @@ interface TrackDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(items: List<TrackEntity>)
 
+    /**
+     * 只补缺失：主键已存在就整行丢弃，**绝不覆盖**。
+     *
+     * 同步写回必须走这个，不能走 [upsertAll]：`REPLACE` 会先删后插，把本地收藏、类别、
+     * 重命名、`localPath` 一起抹成新值。返回插入成功的 rowid，已存在的不在里面。
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(items: List<TrackEntity>): List<Long>
+
     @Query("DELETE FROM tracks WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<Long>)
 

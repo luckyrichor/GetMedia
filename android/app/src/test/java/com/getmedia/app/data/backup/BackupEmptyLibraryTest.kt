@@ -80,6 +80,7 @@ class BackupEmptyLibraryTest {
                     id = -9001, platform = "bilibili", videoId = "BVempty", title = "有内容的一首",
                     uploader = null, durationSec = 1.0, audioBytes = 10, audioFormat = "m4a",
                     sourceUrl = "https://www.bilibili.com/video/BVempty", favorite = false,
+                    localPath = "/files/-9001.m4a",
                     localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
                 ),
             ),

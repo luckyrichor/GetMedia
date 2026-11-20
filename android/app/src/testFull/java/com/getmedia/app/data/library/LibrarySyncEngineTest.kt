@@ -1,0 +1,288 @@
+package com.getmedia.app.data.library
+
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.LibraryCursorEntity
+import com.getmedia.app.data.local.LocalIds
+import com.getmedia.app.data.local.SyncState
+import com.getmedia.app.data.local.TrackEntity
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * 阶段 2 的拉取：只建 `CLOUD_ONLY` 行、不碰任何已有行、水位按整页推进、重跑不重复。
+ *
+ * 用内存库直接看落库结果，不经过 UI 也不出网（[FakeTransport] 记账）。
+ */
+@RunWith(AndroidJUnit4::class)
+class LibrarySyncEngineTest {
+
+    private lateinit var db: AppDatabase
+    private val account = "boss"
+
+    @Before fun setUp() {
+        db = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext<Context>(), AppDatabase::class.java,
+        ).allowMainThreadQueries().build()
+    }
+
+    @After fun tearDown() = db.close()
+
+    // ---------- 夹具 ----------
+
+    private fun cloud(
+        id: Long,
+        videoId: String = "BV$id",
+        page: Int = 1,
+        deleted: Boolean = false,
+        seq: Long = id,
+        title: String = "云端 $id",
+        mediaType: String = "audio",
+    ) = CloudTrack(
+        id = id, platform = "bilibili", videoId = videoId, page = page, title = title,
+        uploader = "某UP", durationSec = 12.5,
+        sourceUrl = "https://www.bilibili.com/video/$videoId?p=$page",
+        mediaType = mediaType, deleted = deleted, updatedSeq = seq, updatedAtSec = 1_700_000_000 + id,
+    )
+
+    private class FakeTransport(private val pages: MutableList<Any>) : LibrarySyncTransport {
+        val calls = mutableListOf<Long>()
+        override suspend fun pull(sinceSeq: Long, limit: Int): PullPage {
+            calls += sinceSeq
+            val next = pages.removeFirstOrNull() ?: error("多打了一次请求：since=$sinceSeq")
+            if (next is LibrarySyncException) throw next
+            return next as PullPage
+        }
+    }
+
+    private fun engine(pages: List<Any>, size: Int = 2): Pair<LibrarySyncEngine, FakeTransport> {
+        val t = FakeTransport(pages.toMutableList())
+        return LibrarySyncEngine(db, t, pageSize = size, nowMs = { 1_800_000_000_000 }) to t
+    }
+
+    private fun page(items: List<CloudTrack>, hasMore: Boolean) =
+        PullPage(items, items.maxOfOrNull { it.updatedSeq } ?: 0, hasMore)
+
+    private suspend fun rows() = db.trackDao().allNow()
+
+    private suspend fun cursor() = db.libraryAuxDao().cursor(account)?.lastPos
+
+    // ---------- 建行 ----------
+
+    @Test fun createsCloudOnlyRowsWithServerIdentity() = runBlocking {
+        val (e, t) = engine(listOf(page(listOf(cloud(1, page = 2), cloud(2)), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals(2, result.added)
+        assertEquals(0, result.skipped)
+        assertEquals(listOf(0L), t.calls)
+
+        val rows = rows().associateBy { it.id }
+        val p2 = rows.getValue(LocalIds.localId("bilibili", "BV1", 2))
+        assertEquals(LibraryMark.CLOUD_ONLY, p2.syncState)
+        assertEquals("BV1-p2", p2.videoId)
+        assertEquals(1L, p2.serverId)
+        assertEquals(2, p2.serverPage)
+        assertEquals(1L, p2.serverSeq)
+        assertEquals(account, p2.accountKey)
+        assertNull("云端未下载：没有本地文件", p2.localPath)
+        assertNull(p2.audioBytes)
+        assertEquals("", p2.audioFormat)
+        // 收藏与类别保持默认，否则会被当成"整理痕迹"进备份
+        assertEquals(MetadataDefaults.FAVORITE, p2.favorite)
+        assertEquals(MetadataDefaults.CATEGORY, p2.localCategoryId)
+    }
+
+    @Test fun pulledRowIsAddressedLikeLocallyExtractedOne() = runBlocking {
+        // 与直提取同一套 id/键：同一作品下次从手机提取会落回这一行，而不是新增一条
+        val (e, _) = engine(listOf(page(listOf(cloud(5, videoId = "BVxx", page = 3)), hasMore = false)))
+        e.pull(account)
+        val row = rows().single()
+        assertEquals(LocalIds.localId("bilibili", "BVxx", 3), row.id)
+        assertEquals("BVxx-p3", row.videoId)
+        assertEquals(3, row.serverPage)
+    }
+
+    // ---------- 不碰已有行 ----------
+
+    @Test fun existingRowsAreNotTouched() = runBlocking {
+        val restoredId = LocalIds.localId("bilibili", "BV1", 1)
+        val localOnlyId = LocalIds.localId("bilibili", "BV2", 1)
+        val syncedId = LocalIds.localId("bilibili", "BV3", 1)
+        db.trackDao().upsertAll(
+            listOf(
+                TrackEntity(
+                    id = restoredId, platform = "bilibili", videoId = "BV1", title = "恢复来的名字",
+                    uploader = "UP", durationSec = 10.0, audioBytes = 999, audioFormat = "m4a",
+                    sourceUrl = "https://b/1", localPath = "/files/-1.audio", favorite = true,
+                    localCategoryId = 2, localTitleOverride = "我改的名字", sortIndex = 7,
+                    syncState = SyncState.RESTORED.name,
+                ),
+                TrackEntity(
+                    id = localOnlyId, platform = "bilibili", videoId = "BV2", title = "手机提取的",
+                    uploader = "UP", durationSec = 10.0, audioBytes = 888, audioFormat = "m4a",
+                    sourceUrl = "https://b/2", localPath = "/files/-2.audio",
+                    syncState = SyncState.LOCAL_ONLY.name,
+                ),
+                TrackEntity(
+                    id = syncedId, platform = "bilibili", videoId = "BV3", title = "已同步的",
+                    uploader = "UP", durationSec = 10.0, audioBytes = 777, audioFormat = "m4a",
+                    sourceUrl = "https://b/3", localPath = "/files/-3.audio",
+                    syncState = SyncState.SYNCED.name, serverId = 30, serverSeq = 3, accountKey = account,
+                ),
+            ),
+        )
+        val before = rows().associateBy { it.id }
+
+        val (e, _) = engine(
+            listOf(page(listOf(cloud(1, videoId = "BV1"), cloud(2, videoId = "BV2"), cloud(3, videoId = "BV3")), hasMore = false)),
+        )
+        val result = e.pull(account)
+
+        assertEquals("一条都不该新增", 0, result.added)
+        assertEquals(3, result.skipped)
+        val after = rows().associateBy { it.id }
+        assertEquals("已有行必须逐字段一致", before, after)
+        // 具体到最容易被覆盖的两个字段
+        assertEquals("我改的名字", after.getValue(restoredId).localTitleOverride)
+        assertEquals("/files/-2.audio", after.getValue(localOnlyId).localPath)
+    }
+
+    @Test fun tombstoneDoesNotRemoveLocalRow() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(
+            listOf(
+                TrackEntity(
+                    id = id, platform = "bilibili", videoId = "BV1", title = "本机有文件",
+                    uploader = null, durationSec = 10.0, audioBytes = 100, audioFormat = "m4a",
+                    sourceUrl = "https://b/1", localPath = "/files/-1.audio",
+                    syncState = SyncState.SYNCED.name, serverId = 1, serverSeq = 1, accountKey = account,
+                ),
+            ),
+        )
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", deleted = true)), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals(1, result.tombstones)
+        assertEquals(0, result.added)
+        assertNotNull("云端删了也不许动本机这一行（阶段 5 才弹确认）", rows().firstOrNull { it.id == id })
+        assertEquals(1, rows().size)
+    }
+
+    // ---------- 水位 ----------
+
+    @Test fun fullPagingWalksTheWholeLibrary() = runBlocking {
+        val (e, t) = engine(
+            listOf(
+                page(listOf(cloud(1), cloud(2)), hasMore = true),
+                page(listOf(cloud(3)), hasMore = false),
+            ),
+        )
+        val result = e.pull(account)
+        assertEquals(3, result.added)
+        assertEquals(2, result.pages)
+        assertEquals("第二页要从第一页末尾的 seq 起", listOf(0L, 2L), t.calls)
+        assertEquals(3L, cursor())
+    }
+
+    @Test fun waterMarkStaysWhenALaterPageFails() = runBlocking {
+        val (e, _) = engine(
+            listOf(
+                page(listOf(cloud(1), cloud(2)), hasMore = true),
+                LibrarySyncException(LibrarySyncProblem.NETWORK, "网络断了"),
+            ),
+        )
+        try {
+            e.pull(account)
+            fail("第二页失败要抛出去")
+        } catch (e: LibrarySyncException) {
+            assertEquals(LibrarySyncProblem.NETWORK, e.problem)
+        }
+        assertEquals("第一页的成果与水位都在", 2, rows().size)
+        assertEquals(2L, cursor())
+    }
+
+    @Test fun resumesAfterFailureWithoutDuplicates() = runBlocking {
+        val (failed, _) = engine(
+            listOf(
+                page(listOf(cloud(1), cloud(2)), hasMore = true),
+                LibrarySyncException(LibrarySyncProblem.SERVER, "500"),
+            ),
+        )
+        runCatching { failed.pull(account) }
+
+        // 恢复后续跑：只从水位 2 开始，补上第 3 条
+        val (resumed, t) = engine(listOf(page(listOf(cloud(3)), hasMore = false)))
+        val result = resumed.pull(account)
+
+        assertEquals(listOf(2L), t.calls)
+        assertEquals(1, result.added)
+        assertEquals(3, rows().size)
+        assertEquals(3L, cursor())
+    }
+
+    @Test fun restartFromScratchAddsNothing() = runBlocking {
+        val pages = listOf(
+            page(listOf(cloud(1), cloud(2)), hasMore = true),
+            page(listOf(cloud(3)), hasMore = false),
+        )
+        val (first, _) = engine(pages)
+        first.pull(account)
+        val snapshotBefore = rows()
+
+        // 模拟"行写进去了、水位没来得及落"：把水位清零再拉一遍
+        db.libraryAuxDao().putCursor(LibraryCursorEntity(account, 0, 0))
+        val (again, t) = engine(pages)
+        val result = again.pull(account)
+
+        assertEquals(0, result.added)
+        assertEquals(3, result.skipped)
+        assertEquals("一页都不能少地重走一遍", listOf(0L, 2L), t.calls)
+        assertEquals("重跑后库里还是那 3 行", snapshotBefore, rows())
+    }
+
+    @Test fun anotherAccountsRowsAreNotAdopted() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(
+            listOf(
+                TrackEntity(
+                    id = id, platform = "bilibili", videoId = "BV1", title = "前一个账号的",
+                    uploader = null, durationSec = 10.0, audioBytes = 100, audioFormat = "m4a",
+                    sourceUrl = "https://b/1", localPath = "/files/-1.audio",
+                    syncState = SyncState.SYNCED.name, serverId = 1, serverSeq = 1, accountKey = "someone-else",
+                ),
+            ),
+        )
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1")), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals(0, result.added)
+        assertEquals(1, result.skipped)
+        assertEquals("不许把别人的行认成自己的", "someone-else", rows().single().accountKey)
+    }
+
+    @Test fun emptyLibraryPullsUntilHasMoreIsFalse() = runBlocking {
+        val (e, t) = engine(listOf(page(emptyList(), hasMore = false)))
+        val result = e.pull(account)
+        assertEquals(0, result.added)
+        assertEquals("空库也走完整的一页，水位保持 0", 0L, result.cursor)
+        assertEquals(1, t.calls.size)
+    }
+}
+
+/** 拉取建行时该用的默认值，写在这里是为了让断言有名字可读。 */
+private object MetadataDefaults {
+    const val FAVORITE = false
+    const val CATEGORY = 1L
+}

@@ -54,6 +54,7 @@ class BackupThrottleTest {
                         id = -9003, platform = "bilibili", videoId = "BVthrottle", title = "限频用",
                         uploader = null, durationSec = 1.0, audioBytes = 10, audioFormat = "m4a",
                         sourceUrl = "https://www.bilibili.com/video/BVthrottle", favorite = false,
+                        localPath = "/files/-9003.m4a",
                         localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
                     ),
                 ),

@@ -81,7 +81,8 @@ class BackupRestoreDecisionTest {
     private fun syncTrack(videoId: String) = TrackEntity(
         id = -9100, platform = "bilibili", videoId = videoId, title = "本机这一首",
         uploader = null, durationSec = 1.0, audioBytes = 10, audioFormat = "m4a",
-        sourceUrl = "https://www.bilibili.com/video/$videoId", favorite = false,
+        sourceUrl = "https://www.bilibili.com/video/$videoId", favorite = true,
+        localPath = "/files/-9100.m4a",
         localCategoryId = 1, addedAtMs = 1, sortIndex = 0, mediaType = "AUDIO",
     )
 

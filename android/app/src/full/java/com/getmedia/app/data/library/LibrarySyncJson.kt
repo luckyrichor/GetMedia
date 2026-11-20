@@ -1,0 +1,108 @@
+package com.getmedia.app.data.library
+
+import org.json.JSONObject
+
+/**
+ * 同步接口的 JSON ⇄ 模型，以及 HTTP 失败 → [LibrarySyncException]。
+ *
+ * 纯字符串进出、不碰网络与 Android：两个 409 的区分、"裸 404 算什么"这类最容易写反的映射
+ * 都在这里用固定用例钉住（`LibrarySyncJsonTest`）。
+ */
+object LibrarySyncJson {
+
+    /** 单页条数上限，与服务端 `limit` 的 `le=500` 对齐。 */
+    const val MAX_PAGE = 500
+
+    fun page(text: String): PullPage {
+        val root = runCatching { JSONObject(text) }.getOrElse {
+            throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的内容无法识别")
+        }
+        val arr = root.optJSONArray("items")
+            ?: throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的同步页缺少条目列表")
+        val items = ArrayList<CloudTrack>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            items += track(o) ?: continue
+        }
+        return PullPage(
+            items = items,
+            nextSeq = root.optLong("next_seq", 0),
+            // 服务端就是 `len(items) >= limit`：恰好一页满时会多打一次空请求，可接受
+            hasMore = root.optBoolean("has_more"),
+        )
+    }
+
+    /** 解析一条；**键不全的行直接丢掉**（没有 platform/video_id 就没法算本地 id）。 */
+    private fun track(o: JSONObject): CloudTrack? {
+        val platform = o.optString("platform").trim()
+        val videoId = o.optString("video_id").trim()
+        if (platform.isEmpty() || videoId.isEmpty()) return null
+        val id = o.optLong("id", 0)
+        if (id <= 0) return null
+        val page = o.optInt("page", 1).coerceIn(1, 9999)
+        return CloudTrack(
+            id = id,
+            platform = platform,
+            // 服务器把分 P 放在 page 列，video_id 不带后缀；万一带上就先剥掉，统一成规范形态
+            videoId = if (page > 1) videoId.removeSuffix("-p$page") else videoId,
+            page = page,
+            title = o.optString("title").ifBlank { "未命名作品" },
+            uploader = o.optString("uploader").ifBlank { null },
+            durationSec = if (o.has("duration_sec") && !o.isNull("duration_sec")) {
+                o.optDouble("duration_sec").takeUnless { it.isNaN() }
+            } else null,
+            sourceUrl = o.optString("source_url"),
+            mediaType = o.optString("media_type").ifBlank { "audio" },
+            deleted = o.optBoolean("deleted", false),
+            updatedSeq = o.optLong("updated_seq", 0),
+            updatedAtSec = o.optLong("updated_at", 0),
+        )
+    }
+
+    /**
+     * HTTP 失败 → 异常。**409 必须按 `code` 分**：两个 409 的处理完全不同——
+     * `track_deleted` 是"这一条在云端被删了"（带那一行，弹确认），
+     * `library_full` 是"整个账号满了"（停手、提示清理）。
+     */
+    fun error(status: Int, body: String, retryAfterSeconds: Long? = null): LibrarySyncException {
+        val json = runCatching { JSONObject(body) }.getOrNull()
+        val code = json?.optString("code").orEmpty()
+        val detail = json?.optString("detail").orEmpty()
+        return when {
+            status == 401 -> LibrarySyncException(
+                LibrarySyncProblem.LOGIN_REQUIRED, "登录已失效，请重新登录", code,
+            )
+            // owner 通道把"未登录 / 非 owner / 路由不存在"压成无 body 的裸 404
+            status == 404 && code.isBlank() -> LibrarySyncException(
+                LibrarySyncProblem.NOT_AVAILABLE, "当前账号无法同步，或服务器还没开这个功能",
+            )
+            status == 404 -> LibrarySyncException(
+                LibrarySyncProblem.INPUT, detail.ifBlank { "服务器上找不到这条" }, code,
+            )
+            status == 409 && code == "track_deleted" -> LibrarySyncException(
+                LibrarySyncProblem.TRACK_DELETED, "这条在云端已被删除", code,
+                conflict = json?.optJSONObject("track"),
+            )
+            status == 409 && code == "library_full" -> LibrarySyncException(
+                LibrarySyncProblem.LIBRARY_FULL,
+                detail.ifBlank { "云端曲库已满，请先在网页端清理" }, code,
+            )
+            // 认不出的 409 不猜：按服务器错误处理，宁可重试也不误删
+            status == 409 -> LibrarySyncException(
+                LibrarySyncProblem.SERVER, detail.ifBlank { "服务器拒绝了这次同步" }, code,
+            )
+            status == 429 -> LibrarySyncException(
+                LibrarySyncProblem.RATE_LIMITED, "同步太频繁，稍后自动重试", code, retryAfterSeconds,
+            )
+            status in 400..499 -> LibrarySyncException(
+                LibrarySyncProblem.INPUT, detail.ifBlank { "请求被服务器拒绝" }, code,
+            )
+            else -> LibrarySyncException(
+                LibrarySyncProblem.SERVER, detail.ifBlank { "服务器暂时不可用，请稍后重试" }, code,
+            )
+        }
+    }
+
+    /** `Retry-After` 只认秒数；HTTP 日期形式不支持，缺省交给调用方按默认间隔退避。 */
+    fun retryAfterSeconds(raw: String?): Long? = raw?.trim()?.toLongOrNull()?.takeIf { it in 1..3600 }
+}
