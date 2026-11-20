@@ -129,6 +129,39 @@ class LibraryUploaderTest {
         assertEquals(listOf(good.id), candidates.map { it.id })
     }
 
+    /**
+     * 脱钩行（`LIB_DETACHED`）即使没有 `accountKey`，也绝不能进入自动或手动候选；
+     * 换成另一个账号登录后同样不行。这是阶段 5 "保留本机文件、不再上传"的底线。
+     */
+    @Test fun detachedRowsNeverBecomeCandidatesEvenWithoutAccountOrAfterAccountSwitch() = runBlocking {
+        val path = file()
+        val detached = track(
+            state = LibraryMark.DETACHED,
+            localPath = path.absolutePath,
+            accountKey = null,
+        )
+        insert(detached)
+        val transport = FakeUploader(mapOf("*" to created()))
+
+        // 原账号：自动候选为空
+        assertEquals(0, LibraryUploader(db, transport, account).candidates().size)
+        // 换账号：同样为空
+        assertEquals(0, LibraryUploader(db, transport, "another").candidates().size)
+        // 手动入口（allowCandidate 放行所有 id）：仍然为空
+        assertEquals(0,
+            LibraryUploader(db, transport, "another", allowCandidate = { true }).candidates().size)
+
+        // 真正跑一轮上传：一个请求都不发，行也不变
+        val summary = LibraryUploader(db, transport, "another", allowCandidate = { true }).upload()
+        assertEquals(0, summary.attempted)
+        assertTrue("不允许发任何 POST", transport.sent.isEmpty())
+        val after = requireNotNull(db.trackDao().byId(detached.id))
+        assertEquals(LibraryMark.DETACHED, after.syncState)
+        assertNull(after.serverId)
+        assertNull(after.accountKey)
+        assertTrue(path.exists())
+    }
+
     // ---------- 写回 ----------
 
     @Test fun uploadWritesBackWithoutLosingLocalEdits() = runBlocking {

@@ -58,7 +58,7 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 当前进度（2026-11-20）
 
-- 阶段 5 已实现（0.1.11 / versionCode 12，已签名归档，未安装、未部署）：手机删除已绑定条目可选「同时从云端曲库移除」，服务端条件 DELETE 保护 archive；墓碑批量确认默认保留本机文件；绑定行改名走条件 PATCH，服务器为准。服务端小补丁未部署，真机验收等部署后另行批准。单测 free 325 / full 506，pytest 408 passed / 50 skipped，Lint 0 错误 / 26 警告。下一次 full versionCode ≥ 13。
+- 阶段 5 已实现（0.1.11 / versionCode 12，已签名归档，未安装、未部署）：手机删除已绑定条目可选「同时从云端曲库移除」，服务端条件 DELETE 保护 archive；墓碑批量确认默认保留本机文件；绑定行改名走条件 PATCH，服务器为准。服务端小补丁未部署，真机验收等部署后另行批准。单测 free 326 / full 508，pytest 408 passed / 50 skipped，Lint 0 错误 / 26 警告。下一次 full versionCode ≥ 13。
 - 阶段 4 已实现。唯一匹配只关联原 Room 行。无匹配项经主动重新下载、校验后可由用户确认上传。冲突和证据不足均保留原样。0.1.10 / versionCode 11 已签名归档；恢复、匹配、直取和重新下载纳入 [整体验收清单](docs/acceptance-report.md)。下一次 full versionCode ≥ 12。
 - 阶段 3 已获用户认可，原条目直取通过。仅有元数据的分 P 真机未验，单测已覆盖。网页短链与显式分 P 问题列在 STATUS 待办。
 - 0.1.9 / versionCode 10 已签名归档。点云端行按原服务器条目 ID 直取已存文件，元数据或已清理缓存才走带目标的提取。两端核对作品、分 P 和类型，手机核对长度和可用 SHA-256 后只更新原 Room 行。旧调用保持原行为。

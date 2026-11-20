@@ -14,7 +14,7 @@
 - 拉到云端墓碑时**不自动删任何本机文件**，只摆一次批量确认，默认「保留本机文件」。
 - 已绑定行改名只写待推送草稿，条件 PATCH 以服务器为准；待推送草稿与已确认标题分开存；
   备份恢复不生成 PATCH。
-- 单测 free 325 / full 506 通过；pytest 408 passed / 50 skipped；双风味 Lint 0 错误 / 26 警告；
+- 单测 free 326 / full 508 通过；pytest 408 passed / 50 skipped；双风味 Lint 0 错误 / 26 警告；
   源码与 free/full release APK 的 heavy 扫描、`scan_leaks --all` 通过。
 
 ## 服务端改了什么
@@ -74,13 +74,51 @@
 - 备份：待推送草稿不覆盖 `confirmedTitle`，`title_override` 不写草稿；恢复行不写任何
   `pendingTitle*`，因此恢复不会生成 PATCH。
 
+## 补充验证（2026-11-20 晚）
+
+### 脱钩行不上传
+
+新增 `LibraryUploaderTest.detachedRowsNeverBecomeCandidatesEvenWithoutAccountOrAfterAccountSwitch`：
+`LIB_DETACHED`、`accountKey = null`、本地文件存在的行，在原账号、换账号、手动入口
+（`allowCandidate = { true }`）三种情况下候选都为空；跑 `upload()` 零 POST，行仍是 `DETACHED`、
+`serverId` / `accountKey` 仍为空、文件仍在。
+
+### 手机 1：v2 → v4 整链迁移
+
+新增 `LibraryTablesMigrationTest.upgradingFromV2WithRealDataRunsFullChainToV4`（在共享 `test`
+源集，free/full 都跑）：
+
+1. 用 Room 建当前 v4 库，写入两行有代表性的 `tracks`（B 站分 P、改名、收藏、非默认类别、
+   播放列表、服务器身份、本机剪辑派生；抖音 `RESTORED` 视频），以及 `categories`、
+   `playlists`、`playlist_items` 和 v4 的三张辅助表；
+2. 退回 v2：按真实 DDL 去掉 v4 新列重建 `tracks`，删掉 `track_removals` / `library_cursor` /
+   `remote_marks`，`user_version = 2`；
+3. 只用 Room 的打开路径升级（`MIGRATION_2_3` + `MIGRATION_3_4`）；
+4. 断言：到 v4；七张表都在；`tracks` / `categories` / `playlists` / `playlist_items` **逐字段相等**；
+   三张辅助表初始为空；随后按 v4 列写入 `expectedSeq/generation/state`、`library_cursor.note`、
+   `remote_marks.title/seq` 并读回。
+
+原来的 `upgradingARealDatabaseKeepsEveryRow` 保留，覆盖 v3 → v4；两条合起来覆盖
+v2 → v3 → v4 与 v3 → v4。
+
+### 0.1.1 的 Room 版本（核对旧 APK，不凭记忆）
+
+- APK：`local-artifacts/getmedia-apk/GetMedia-full-0.1.1-20261119-0301.apk`，`aapt` 显示
+  `com.getmedia.app.full` 0.1.1 / versionCode 2，文件时间 2026-11-19 03:01。
+- 反编译 `com.getmedia.app.data.local.AppDatabase_Impl`：`createOpenHelper` 里
+  `const/4 v2, 0x2` 传给 `AppDatabase_Impl$1` 的 `version` 参数，再交给
+  `RoomOpenHelper$Delegate`；`AppDatabase_Impl$1` 的构造函数参数名就是 `version`。
+  **结论：0.1.1 的 Room 版本是 2。**
+- Git 历史交叉核对：`240b1e8`（阶段 0，2026-11-19 20:14）把 `AppDatabase` 从 `version = 2`
+  改成 `version = 3`；0.1.1 APK 的时间早于这次提交。
+
 ## 测试与构建
 
 | 项 | 命令 | 结果 |
 |---|---|---|
 | 服务端 | `.venv/bin/python -m pytest -q server/tests tools/tests` | **408 passed / 50 skipped** |
-| Android free | `:app:testFreeDebugUnitTest` | **325 passed / 0 failed** |
-| Android full | `:app:testFullDebugUnitTest` | **506 passed / 0 failed** |
+| Android free | `:app:testFreeDebugUnitTest` | **326 passed / 0 failed** |
+| Android full | `:app:testFullDebugUnitTest` | **508 passed / 0 failed** |
 | Lint | `:app:lintFreeDebug :app:lintFullDebug` | **0 errors / 26 warnings**（两种风味） |
 | 扫描 | `scan_leaks --all`、`scan_forbidden legacy`、`scan_forbidden heavy`（源码 + 两个 release APK） | 通过 |
 | APK | `:app:assembleFullRelease` | `com.getmedia.app.full` 0.1.11 (12)，证书 SHA-256 `8a0920…691b`，SHA-256 `07fcbbbcbc9f33a385c6d9a6fe0edc696763276048d747b4b8df6daa2108996f` |

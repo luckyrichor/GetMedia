@@ -8,6 +8,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -186,23 +187,8 @@ class LibraryTablesMigrationTest {
         // 不用 ALTER TABLE DROP COLUMN：Android 的 SQLite 在目标版本上不支持。
         val newTrackColumns = listOf("serverStorage", "confirmedTitle", "pendingTitle",
             "pendingTitleBaseSeq", "pendingTitleGen")
-        val v3TrackColumns = fieldsOf(TrackEntity::class.java).filterNot { it in newTrackColumns }
         SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
-            val v4Ddl = raw.rawQuery("SELECT sql FROM sqlite_master WHERE type='table' AND name='tracks'", null)
-                .use { c -> if (c.moveToFirst()) c.getString(0) else error("找不到 tracks 表") }
-            // Room 生成的 DDL 可能是单行；按顶层逗号切列定义，比按行过滤稳
-            val inner = v4Ddl.substringAfter("(").substringBeforeLast(")")
-            val defs = inner.split(",").filterNot { def ->
-                val head = def.trimStart()
-                newTrackColumns.any { head.startsWith("`$it`") || head.startsWith("$it ") }
-            }
-            val v3Ddl = "CREATE TABLE `tracks_v3` (" + defs.joinToString(",") + ")"
-            raw.execSQL("ALTER TABLE `tracks` RENAME TO `tracks_v4`")
-            raw.execSQL(v3Ddl)
-            val cols = v3TrackColumns.joinToString(", ") { "`$it`" }
-            raw.execSQL("INSERT INTO `tracks_v3` ($cols) SELECT $cols FROM `tracks_v4`")
-            raw.execSQL("DROP TABLE `tracks_v4`")
-            raw.execSQL("ALTER TABLE `tracks_v3` RENAME TO `tracks`")
+            downgradeTracks(raw, newTrackColumns, "tracks_v3")
             raw.execSQL("DROP TABLE IF EXISTS track_removals")
             raw.execSQL("DROP TABLE IF EXISTS library_cursor")
             raw.execSQL("DROP TABLE IF EXISTS remote_marks")
@@ -225,6 +211,155 @@ class LibraryTablesMigrationTest {
             db.close()
             ctx.deleteDatabase(name)
         }
+    }
+
+    /**
+     * 手机 1 的真实升级路径：0.1.1 的 Room v2 → 当前 v4，中间必须连续走 v2→v3→v4。
+     *
+     * 造一个 v2 库（v4 表结构去掉 v4 新列，删掉 v3/v4 才有的三张表），写入带代表性的真实数据，
+     * 然后只交给 Room 的打开路径升级。断言：
+     * 1. 版本到 4；
+     * 2. `tracks` / `categories` / `playlists` / `playlist_items` 逐字段不变；
+     * 3. `track_removals` / `library_cursor` / `remote_marks` 建出来且为空；
+     * 4. 三张辅助表在升级后都能按 v4 列写入、读回。
+     *
+     * 这条用例不碰手机、不依赖旧 APK：v2 的起始结构由当前 DDL 反推，数据用 v2 就有的字段。
+     */
+    @Test fun upgradingFromV2WithRealDataRunsFullChainToV4() = runBlocking {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val name = "lib-upgrade-from-v2-real.db"
+        ctx.deleteDatabase(name)
+
+        val t1 = TrackEntity(
+            id = -201, platform = "bilibili", videoId = "BVv2-p3", title = "v2 第一行",
+            uploader = "某UP", durationSec = 245.5, coverUrl = "https://c/v2.jpg",
+            audioBytes = 4_096_000, audioFormat = "m4a", sourceUrl = "https://b/BVv2?p=3",
+            audioSha256 = "deadbeef", localPath = "/files/-201.m4a", locallyEdited = true,
+            sourceTrackId = -200, favorite = true, localCategoryId = 2,
+            updatedAtMs = 1_700_000_000_123, localTitleOverride = "v2 改过的名字",
+            addedAtMs = 1_699_000_000_000, sortIndex = 5, mediaType = MediaKind.AUDIO.name,
+            serverId = 42, serverSeq = 7, serverPage = 3,
+            serverUpdatedAtMs = 1_699_500_000_000, syncState = SyncState.SYNCED.name, accountKey = "boss",
+        )
+        val t2 = TrackEntity(
+            id = -202, platform = "douyin", videoId = "7300000000000000000", title = "v2 第二行",
+            uploader = null, durationSec = 61.0, audioBytes = 900_000, audioFormat = "m4a",
+            sourceUrl = "https://v.douyin.com/x/", localPath = null,
+            favorite = false, localCategoryId = 1, addedAtMs = 1_699_100_000_000,
+            sortIndex = 0, mediaType = MediaKind.VIDEO.name,
+            syncState = SyncState.RESTORED.name,
+        )
+
+        var db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
+            .allowMainThreadQueries().build()
+        val beforeTracks: List<TrackEntity>
+        val beforeCategories: List<CategoryEntity>
+        val beforePlaylists: List<PlaylistEntity>
+        val beforeItems: List<PlaylistItemEntity>
+        try {
+            db.trackDao().upsertAll(listOf(t1, t2))
+            db.categoryDao().insert(CategoryEntity(id = 2, name = "通勤", kind = "LEAF", createdAt = 2))
+            db.categoryDao().insert(CategoryEntity(id = 3, name = "子类", parentId = 2, kind = "LEAF", createdAt = 3))
+            val pid = db.playlistDao().insert(PlaylistEntity(name = "v2 歌单", createdAt = 4))
+            db.playlistDao().add(listOf(PlaylistItemEntity(playlistId = pid, trackId = t1.id, orderIndex = 3)))
+            // 先写进 v4 的辅助表，稍后随 v2 降级一起丢弃，证明它们不会被误当成 v2 数据
+            db.libraryAuxDao().putCursor(LibraryCursorEntity(account = "boss", lastPos = 11, lastAt = 12, note = "n"))
+            db.libraryAuxDao().addRemoval(
+                TrackRemovalEntity(platform = "bilibili", videoKey = "BVv2-p3", account = "boss",
+                    remoteId = 42, requestedAt = 5, expectedSeq = 7, generation = 6,
+                    state = "WAITING", attempts = 2, lastError = "x"),
+            )
+            db.libraryAuxDao().addMark(
+                RemoteMarkEntity(account = "boss", remoteId = 42, platform = "bilibili",
+                    videoKey = "BVv2-p3", title = "t", seq = 8, seenAt = 9),
+            )
+            beforeTracks = db.trackDao().allNow()
+            beforeCategories = db.categoryDao().allNow()
+            beforePlaylists = db.playlistDao().allNow()
+            beforeItems = db.playlistDao().itemsAll()
+        } finally {
+            db.close()
+        }
+
+        // 退回 v2：去掉 v4 新列，删掉 v3/v4 才有的三张表
+        SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
+            downgradeTracks(raw, listOf("serverStorage", "confirmedTitle", "pendingTitle",
+                "pendingTitleBaseSeq", "pendingTitleGen"), "tracks_v2")
+            raw.execSQL("DROP TABLE IF EXISTS track_removals")
+            raw.execSQL("DROP TABLE IF EXISTS library_cursor")
+            raw.execSQL("DROP TABLE IF EXISTS remote_marks")
+            raw.version = 2
+        }
+
+        db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .allowMainThreadQueries().build()
+        try {
+            assertEquals("必须连续升到 v4", 4, db.openHelper.writableDatabase.version)
+            val tables = tableNames(db.openHelper.writableDatabase)
+            listOf("tracks", "categories", "playlists", "playlist_items",
+                "track_removals", "library_cursor", "remote_marks").forEach {
+                assertTrue("缺表 $it：$tables", tables.contains(it))
+            }
+            assertEquals("tracks 逐字段不变", beforeTracks, db.trackDao().allNow())
+            assertEquals("categories 不变", beforeCategories, db.categoryDao().allNow())
+            assertEquals("playlists 不变", beforePlaylists, db.playlistDao().allNow())
+            assertEquals("playlist_items 不变", beforeItems, db.playlistDao().itemsAll())
+            assertEquals("v2 没有删除队列，升级后应为空", 0, db.libraryAuxDao().removalCount("boss"))
+            assertNull("v2 没有水位，升级后应为空", db.libraryAuxDao().cursor("boss"))
+            assertEquals("v2 没有墓碑表，升级后应为空", 0, db.libraryAuxDao().markCount("boss"))
+
+            // v4 三张辅助表都要能按新列写入、读回
+            db.libraryAuxDao().addRemoval(
+                TrackRemovalEntity(platform = "bilibili", videoKey = "BVv2-p3", account = "boss",
+                    remoteId = 42, requestedAt = 20, expectedSeq = 21, generation = 22,
+                    state = "QUEUED", attempts = 0, lastError = null),
+            )
+            val removal = db.libraryAuxDao().removals("boss").single()
+            assertEquals(21L, removal.expectedSeq)
+            assertEquals(22L, removal.generation)
+            assertEquals("QUEUED", removal.state)
+
+            db.libraryAuxDao().putCursor(LibraryCursorEntity(account = "boss", lastPos = 30, lastAt = 31, note = "ok"))
+            assertEquals(30L, db.libraryAuxDao().cursor("boss")?.lastPos)
+            assertEquals("ok", db.libraryAuxDao().cursor("boss")?.note)
+
+            db.libraryAuxDao().addMark(
+                RemoteMarkEntity(account = "boss", remoteId = 42, platform = "bilibili",
+                    videoKey = "BVv2-p3", title = "墓碑标题", seq = 40, seenAt = 41),
+            )
+            val mark = db.libraryAuxDao().marks("boss").single()
+            assertEquals(42L, mark.remoteId)
+            assertEquals(40L, mark.seq)
+            assertEquals("墓碑标题", mark.title)
+        } finally {
+            db.close()
+            ctx.deleteDatabase(name)
+        }
+    }
+
+    /**
+     * 把当前 Room 建的 v4 `tracks` 重建为缺少 [removedColumns] 的旧结构，用于模拟旧版本库。
+     *
+     * 不依赖 `ALTER TABLE DROP COLUMN`（Android 目标版本的 SQLite 不支持）：
+     * 从真实 DDL 里按顶层逗号切掉新列，建临时表、复制旧列、改名。
+     */
+    private fun downgradeTracks(raw: SQLiteDatabase, removedColumns: List<String>, tempName: String) {
+        val v4Ddl = raw.rawQuery("SELECT sql FROM sqlite_master WHERE type='table' AND name='tracks'", null)
+            .use { c -> if (c.moveToFirst()) c.getString(0) else error("找不到 tracks 表") }
+        val inner = v4Ddl.substringAfter("(").substringBeforeLast(")")
+        val defs = inner.split(",").filterNot { def ->
+            val head = def.trimStart()
+            removedColumns.any { head.startsWith("`$it`") || head.startsWith("$it ") }
+        }
+        val oldDdl = "CREATE TABLE `$tempName` (" + defs.joinToString(",") + ")"
+        val oldColumns = fieldsOf(TrackEntity::class.java).filterNot { it in removedColumns }
+        raw.execSQL("ALTER TABLE `tracks` RENAME TO `tracks_v4`")
+        raw.execSQL(oldDdl)
+        val cols = oldColumns.joinToString(", ") { "`$it`" }
+        raw.execSQL("INSERT INTO `$tempName` ($cols) SELECT $cols FROM `tracks_v4`")
+        raw.execSQL("DROP TABLE `tracks_v4`")
+        raw.execSQL("ALTER TABLE `$tempName` RENAME TO `tracks`")
     }
 
     private fun tableNames(db: SQLiteDatabase): Set<String> =
