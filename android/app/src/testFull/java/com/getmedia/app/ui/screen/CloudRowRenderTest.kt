@@ -110,7 +110,40 @@ class CloudRowRenderTest {
     @Test
     @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
     fun syncedRowHasNoBadge() {
-        render(cloudRow(state = SyncState.SYNCED.name, localPath = "/data/user/0/x/files/audio/-1001.audio"), dark = false)
+        val file = File(rule.activity.cacheDir, "synced-${System.nanoTime()}.audio").apply {
+            writeBytes(ByteArray(1024) { 1 })
+        }
+        render(cloudRow(state = SyncState.SYNCED.name, localPath = file.absolutePath), dark = false)
         rule.onNodeWithText("云端未下载").assertDoesNotExist()
+        file.delete()
+    }
+
+    /**
+     * 0.1.16 回归：回填之后即使同步状态还没来得及更新（仍是 `CLOUD_ONLY`），
+     * 只要磁盘上文件真的在，标签就必须消失——判定以磁盘为准，与条目菜单同口径。
+     */
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun refilledRowLosesBadgeEvenWithStaleState() {
+        val file = File(rule.activity.cacheDir, "refilled-${System.nanoTime()}.audio").apply {
+            writeBytes(ByteArray(4096) { 7 })
+        }
+        render(cloudRow(state = LibraryMark.CLOUD_ONLY, localPath = file.absolutePath), dark = false)
+        rule.onNodeWithText("云端未下载").assertDoesNotExist()
+        file.delete()
+    }
+
+    /**
+     * 反过来也要成立：字段说有文件、磁盘上却真的没了，仍然要提示"云端未下载"，
+     * 不能因为字段乐观就不给用户指路。
+     */
+    @Test
+    @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
+    fun missingFileStillShowsBadge() {
+        render(
+            cloudRow(state = SyncState.SYNCED.name, localPath = "/nonexistent/definitely-missing.audio"),
+            dark = false,
+        )
+        rule.onNodeWithText("云端未下载").assertIsDisplayed()
     }
 }

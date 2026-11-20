@@ -53,6 +53,7 @@ import com.getmedia.app.data.export.ExportSession
 import com.getmedia.app.data.export.ExportTrack
 import com.getmedia.app.data.export.SafExportTarget
 import com.getmedia.app.data.export.SafGrants
+import com.getmedia.app.data.library.RefillBatch
 import com.getmedia.app.ui.components.uiAccentContainer
 import com.getmedia.app.ui.components.uiMuted
 import com.getmedia.app.ui.formatSize
@@ -118,6 +119,8 @@ fun ExportSheet(
     }
 
     // 选择集快照在进入本页时冻结；之后的库变化不影响 items
+    // 批量补下载成功后把 id 记进来，这一块的红条当场减数，不用等下次同步或重进页面。
+    var filledIds by remember { mutableStateOf(emptySet<Long>()) }
     val usable = remember(tracks, skipIds) { tracks.filter { it.id !in skipIds } }
     val sized = remember(usable) {
         usable.map { track ->
@@ -131,8 +134,11 @@ fun ExportSheet(
     }
     val counts = remember(sized) { ExportPlan.classify(sized) }
     val required = remember(sized) { ExportPlan.requiredBytes(sized) }
-    val (waitingForDownload, missingLocalFiles) = remember(usable) {
-        usable.filter { track -> track.localPath.isNullOrBlank() || !File(track.localPath).isFile }
+    val (waitingForDownload, missingLocalFiles) = remember(usable, filledIds) {
+        usable.filter { track ->
+            track.id !in filledIds &&
+                (track.localPath.isNullOrBlank() || !File(track.localPath).isFile)
+        }
             // 阶段 6：能补回来的（云端行、清单恢复的空壳）都归到「先下载这 N 项」那一块；
             // 只有本机产物真的丢了的才标"本机文件缺失"。
             .partition { it.refillable }
@@ -197,31 +203,37 @@ fun ExportSheet(
     }
 
     // 阶段 6：「先下载这 N 项」逐条走统一下载入口（云端行 / 恢复空壳都在里面分派）。
-    // 失败原因如实回报——`resolve_error` 就说取不到，不写成"已丢失"。
+    // 0.1.16：成败按"回读磁盘确认文件真的落地"算，不再只凭入口没抛异常——旧写法会把
+    // "字段说没下载、磁盘其实有"的行瞬间算成功，数字比实际落地的多。去重也在 [RefillBatch] 里。
     var fetching by remember { mutableStateOf(false) }
     var fetchNote by remember { mutableStateOf<String?>(null) }
+    var fetchDone by remember { mutableStateOf<String?>(null) }
     fun fillMissing() {
         if (fetching) return
         fetching = true
         fetchNote = null
+        fetchDone = null
+        val batch = waitingForDownload.map { RefillBatch.Item(it.id, it.displayTitle) }
         scope.launch {
             val repo = com.getmedia.app.data.repo.TrackRepository(context)
-            var ok = 0
-            var failed = 0
-            var lastError: String? = null
-            for (item in waitingForDownload) {
-                val row = repo.byId(item.id)
-                if (row == null) { failed++; lastError = "这一条已被移除"; continue }
-                runCatching { cloudSync.download(context, row) }
-                    .onSuccess { ok++ }
-                    .onFailure { failed++; lastError = it.message ?: "这次没取到" }
-            }
+            val results = RefillBatch.run(
+                items = batch,
+                download = { id ->
+                    val row = repo.byId(id) ?: error("这一条已被移除")
+                    cloudSync.download(context, row)
+                },
+                landed = { id ->
+                    val row = repo.byId(id)
+                    row?.localPath?.let { path ->
+                        File(path).let { file -> file.isFile && file.length() > 0L }
+                    } == true
+                },
+            )
             fetching = false
-            fetchNote = when {
-                failed == 0 -> "已下载 $ok 项，可以开始导出了"
-                ok == 0 -> "这 $failed 项没取到：$lastError"
-                else -> "已下载 $ok 项，另有 $failed 项没取到：$lastError"
-            }
+            filledIds = filledIds + results.filter { it.ok }.map { it.id }
+            fetchDone = RefillBatch.okText(results)
+            // 失败明细留在红条里（每条带名字与原因）；红条消失（全成功）时由上面的成功行交代结果。
+            fetchNote = RefillBatch.failuresText(results)
         }
     }
 
@@ -419,6 +431,11 @@ fun ExportSheet(
                 if (items.isEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     Text("没有可导出的条目", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                // 补下载的结果（0.1.16）：成功数只数真正落地的条数，单独一行，不跟错误红字混在一起。
+                fetchDone?.takeIf { it.isNotBlank() }?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
                 notice?.let {
                     Spacer(Modifier.height(8.dp))

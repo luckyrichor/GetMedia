@@ -12,8 +12,11 @@ import com.getmedia.app.data.library.RepairRules
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.local.SyncState
+import com.getmedia.app.data.repo.DiagnosticsStore
+import com.getmedia.app.data.repo.ErrorText
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.serverextract.ServerMediaApi
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -49,33 +52,56 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
     override suspend fun onTitleEdited(db: AppDatabase, track: TrackEntity, title: String, nowMs: Long): Boolean =
         LibraryLocalEdits.markTitleEdited(db, track, title, nowMs)
 
-    override fun awaitingDownload(track: TrackEntity): Boolean =
-        track.syncState == LibraryMark.CLOUD_ONLY ||
-            (track.syncState == SyncState.SYNCED.name && track.serverId != null && track.localPath == null)
+    /**
+     * 列表标签的判定（0.1.16 起与菜单同口径）。
+     *
+     * 先看磁盘：`localPath` 指向的文件真实存在就不算"云端未下载"。之前只看库字段，
+     * 而菜单（[repairOptions]）读磁盘，字段/磁盘一旦不一致就会出现
+     * "菜单里没有『下载到本机』、列表还标着云端未下载"的自相矛盾。
+     */
+    override fun awaitingDownload(track: TrackEntity): Boolean {
+        if (track.localPath?.let { File(it).let { f -> f.isFile && f.length() > 0 } } == true) return false
+        return track.syncState == LibraryMark.CLOUD_ONLY ||
+            (track.syncState == SyncState.SYNCED.name && track.serverId != null)
+    }
 
     /**
      * 统一下载入口（阶段 6）。分派规则见 [RepairRules] / [DownloadCenter]：
      * B 站云端行走服务器、抖音云端行与恢复空壳走本机提取，落库永远按原主键回填。
+     *
+     * 失败一律换成能给人看的一句话抛出（[ErrorText]），原始异常只写进诊断日志，
+     * 且只记"条目号 + 异常类型"，不记 message —— message 里可能带链接参数或凭据。
      */
     override suspend fun download(context: Context, track: TrackEntity): File = downloadLock.withLock {
-        val session = SessionStore.current.value
-        check(session != null && track.accountKey == session.loginName && LibrarySyncGate.maySync(session)) {
-            "请使用原账号并同意最新隐私说明后再下载"
+        try {
+            val session = SessionStore.current.value
+            check(session != null && track.accountKey == session.loginName && LibrarySyncGate.maySync(session)) {
+                "请使用原账号并同意最新隐私说明后再下载"
+            }
+            fun sameSession(): Boolean = SessionStore.current.value.let {
+                it?.token == session.token && it.loginName == session.loginName && LibrarySyncGate.maySync(it)
+            }
+            val app = context.applicationContext
+            val repo = TrackRepository(app)
+            val api = ServerMediaApi(token = { session.token.takeIf { sameSession() } })
+            DownloadCenter(
+                app = app,
+                repo = repo,
+                api = api,
+                prefs = LibrarySyncPrefs(app),
+                session = session,
+                sameSession = ::sameSession,
+            ).download(track)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            DiagnosticsStore.event(
+                "下载到本机",
+                "#${track.id} ${error.javaClass.simpleName} · ${ErrorText.humanMessage(error)}",
+                success = false,
+            )
+            throw DownloadFailed(ErrorText.humanMessage(error), error)
         }
-        fun sameSession(): Boolean = SessionStore.current.value.let {
-            it?.token == session.token && it.loginName == session.loginName && LibrarySyncGate.maySync(it)
-        }
-        val app = context.applicationContext
-        val repo = TrackRepository(app)
-        val api = ServerMediaApi(token = { session.token.takeIf { sameSession() } })
-        DownloadCenter(
-            app = app,
-            repo = repo,
-            api = api,
-            prefs = LibrarySyncPrefs(app),
-            session = session,
-            sameSession = ::sameSession,
-        ).download(track)
     }
 
     override fun repairOptions(track: TrackEntity): RepairOptions = RepairRules.options(
@@ -109,3 +135,9 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
 
     override fun dismissRemoteRemoved(ask: CloudRemovedAsk) = LibrarySyncRunner.dismissRemoteRemoved(ask)
 }
+
+/**
+ * 下载失败：[message] 已经是可以直接给人看的一句话（见 [ErrorText]），
+ * 原始异常留在 [cause] 里只给诊断日志用，不往界面上抛。
+ */
+class DownloadFailed(message: String, cause: Throwable) : IllegalStateException(message, cause)

@@ -74,6 +74,22 @@ interface TrackDao {
     @Query("UPDATE tracks SET localPath = :path WHERE id = :id")
     suspend fun setLocalPath(id: Long, path: String?)
 
+    /**
+     * 磁盘上已经有文件、库字段还没跟上时，把字段补齐到与磁盘一致（0.1.16）。
+     *
+     * 只改 [replaceStates] 里列出的状态值：待推送草稿、已脱钩这类状态不能被 "SYNCED" 覆盖。
+     * 两个状态字面量由调用方传进来——它们只允许出现在 full 源码集，不进 `main`。
+     */
+    @Query(
+        "UPDATE tracks SET localPath = :path, audioBytes = :bytes, " +
+            "syncState = CASE WHEN syncState IN (:replaceStates) THEN :state ELSE syncState END, " +
+            "updatedAtMs = :now WHERE id = :id",
+    )
+    suspend fun markFilePresent(
+        id: Long, path: String, bytes: Long, state: String,
+        replaceStates: List<String>, now: Long,
+    ): Int
+
     @Query("UPDATE tracks SET favorite = :fav WHERE id = :id")
     suspend fun setFavorite(id: Long, fav: Boolean)
 

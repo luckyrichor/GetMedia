@@ -80,6 +80,31 @@ class TrackRepository(
 
     suspend fun byId(id: Long): TrackEntity? = trackDao.byId(id)
 
+    /**
+     * 磁盘上已经有文件、库字段还没跟上时，把字段补成一致（0.1.16，不新增行）。
+     *
+     * 为什么需要：列表上的「云端未下载」读库字段，条目菜单读磁盘。两者不一致时会出现
+     * "菜单里已经没有『下载到本机』，列表还标着云端未下载"。下载入口在"磁盘已有文件"
+     * 的早返回分支上调这里，把差异当场抹平，而不是等下一次同步。
+     *
+     * @param state 这一行该归一成的同步状态（有服务器身份给 `SYNCED`，否则 `LOCAL_ONLY`）
+     * @param replaceStates 只替换这些状态值；别的状态（待推送草稿、已脱钩）原样保留
+     */
+    suspend fun markFilePresent(
+        id: Long,
+        file: File,
+        state: String,
+        replaceStates: Collection<String>,
+    ): TrackEntity? = withContext(Dispatchers.IO) {
+        val bytes = file.length()
+        if (bytes <= 0L || !file.isFile) return@withContext null
+        trackDao.markFilePresent(
+            id, file.absolutePath, bytes, state, replaceStates.toList(), System.currentTimeMillis(),
+        )
+        BackupManager.noteWrite()
+        trackDao.byId(id)
+    }
+
     suspend fun rename(id: Long, title: String) {
         require(title.isNotBlank()) { "音频名称不能为空" }
         val clean = title.trim()

@@ -4,6 +4,7 @@ import android.content.Context
 import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.backup.withPage
 import com.getmedia.app.data.local.MediaKind
+import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.localextract.DirectExtractor
 import com.getmedia.app.data.repo.TrackRepository
@@ -36,7 +37,12 @@ internal class DownloadCenter(
 
     suspend fun download(track: TrackEntity): File {
         // ① 本机已有 → 直接给文件。这一步只读磁盘，不碰网络。
-        repo.download(track).getOrNull()?.let { return it }
+        repo.download(track).getOrNull()?.let { file ->
+            // 0.1.16：字段与磁盘对齐。列表标签读库字段、菜单读磁盘，早返回不写库就会出现
+            // "报了已下载、列表还标着云端未下载"，也会让批量计数看起来虚高。
+            alignFields(track.id, file)
+            return file
+        }
         val row = repo.byId(track.id) ?: error("这条已被移除")
         return when (RepairRules.route(row, hasFile = false)) {
             DownloadRoute.NONE -> throw IllegalStateException(
@@ -45,6 +51,21 @@ internal class DownloadCenter(
             DownloadRoute.SERVER_TARGET -> refillFromServer(row)
             DownloadRoute.SERVER_LOCAL -> extractInto(row, asShell = false)
             DownloadRoute.SHELL_LOCAL -> extractInto(row, asShell = true)
+        }
+    }
+
+    /**
+     * 磁盘上已经有文件时，把库里的 `localPath` / `audioBytes` / 同步状态补成一致。
+     * 只修显示口径，失败不影响这次下载（调用方仍会回读磁盘再判成败）。
+     */
+    private suspend fun alignFields(id: Long, file: File) {
+        val row = repo.byId(id) ?: return
+        runCatching {
+            repo.markFilePresent(
+                id, file,
+                state = if (row.serverId != null) SyncState.SYNCED.name else SyncState.LOCAL_ONLY.name,
+                replaceStates = listOf(LibraryMark.CLOUD_ONLY, SyncState.SYNCED.name),
+            )
         }
     }
 

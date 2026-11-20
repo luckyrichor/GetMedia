@@ -424,7 +424,7 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
         }
     }
     LaunchedEffect(notice) { notice?.let { snackbar.showSnackbar(it); notice = null } }
-    fun operate(block: suspend () -> Unit) { scope.launch { runCatching { DiagnosticsStore.operation("媒体库操作", block) }.onFailure { notice = it.message ?: "操作失败" } } }
+    fun operate(block: suspend () -> Unit) { scope.launch { runCatching { DiagnosticsStore.operation("媒体库操作", block) }.onFailure { notice = ErrorText.humanMessage(it) } } }
     fun queueItems(tracks: List<TrackEntity>, play: Boolean, sourceId: Long? = null) = operate {
         val ready = mutableListOf<PlayerHolder.QueueItem>()
         // 缺文件的行走统一入口补下载（阶段 6）：云端行与恢复空壳都由 cloudSync 分派，

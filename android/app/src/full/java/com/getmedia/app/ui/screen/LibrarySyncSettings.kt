@@ -33,6 +33,7 @@ import com.getmedia.app.data.library.LibraryUploader
 import com.getmedia.app.data.library.RestoreMatchIssue
 import com.getmedia.app.data.library.needsRestoreMatch
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.repo.ErrorText
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.ui.components.RowDivider
 import com.getmedia.app.ui.components.SectionCard
@@ -105,7 +106,7 @@ internal fun LibrarySyncSettings() {
                 "这一条已被移除"
             } else {
                 runCatching { cloudSync.download(context, row) }
-                    .fold({ "已下载到原条目" }, { "没取到：${it.message ?: "请稍后再试"}" })
+                    .fold({ "已下载到原条目" }, { "没取到：${ErrorText.humanMessage(it)}" })
             }
         }
     }
