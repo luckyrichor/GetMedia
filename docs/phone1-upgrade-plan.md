@@ -1,10 +1,10 @@
-# 手机 1 升级方案（0.1.1 / Room v2 → 0.1.16 / Room v4）
+# 手机 1 升级方案（0.1.1 / Room v2 → 0.1.17 / Room v4）
 
 **状态：方案，未执行。** 本文只写"到时怎么做"，本轮不对手机 1 跑任何 adb 命令。
-手机 1 当前是 `full 0.1.1 / versionCode 2`，Room 库 `version = 2`；0.1.16 是 `versionCode 17`，Room 库 `version = 4`。
+手机 1 当前是 `full 0.1.1 / versionCode 2`，Room 库 `version = 2`；0.1.17 是 `versionCode 18`，Room 库 `version = 4`。
 覆盖安装时 Room 会自动依次执行 `MIGRATION_2_3`、`MIGRATION_3_4`（`AppDatabase.kt`），**没有反向迁移**：装上以后不能靠降级回 0.1.1 来"反悔"。
 
-> 两台测试机不要混：本轮一直在动的 `6c3619c` 是手机 2（正式包 + 预览包都已升 0.1.16）。手机 1 的序列号在下面用 `<序列号>` 占位，执行前先 `adb devices` 核对。
+> 两台测试机不要混：本轮一直在动的 `6c3619c` 是手机 2（正式包 + 预览包都已升 0.1.17）。手机 1 的序列号在下面用 `<序列号>` 占位，执行前先 `adb devices` 核对。
 
 ---
 
@@ -41,15 +41,15 @@ adb -s <序列号> shell "dumpsys package com.getmedia.app.full | grep -E 'versi
 
 APK 用本轮归档的正式包（预览包不要装到手机 1）：
 
-`local-artifacts/getmedia-apk/stage6-0.1.16-20261120/app-full-release.apk`
-SHA-256 `2ebcf52c3442fc46e05ced558ac6cc000248738f3a7a2e3319e5f0b53350d2d8`
+`local-artifacts/getmedia-apk/stage6-0.1.17-20261120/app-full-release.apk`
+SHA-256 `4c99161d02a7b26e670d1ede7d95fd159084bc90496850eeb9bed8f8707db61c`
 
 ---
 
 ## 2. 安装（只用 install -r）
 
 ```bash
-adb -s <序列号> install -r local-artifacts/getmedia-apk/stage6-0.1.16-20261120/app-full-release.apk
+adb -s <序列号> install -r local-artifacts/getmedia-apk/stage6-0.1.17-20261120/app-full-release.apk
 ```
 
 规矩：**只 `install -r`**。不要 `pm uninstall`，不要 `pm clear`，不要卸载后重装，不要另开第三个包名。
@@ -65,7 +65,7 @@ adb -s <序列号> shell "dumpsys package com.getmedia.app.full | grep -E 'versi
 
 | 核对项 | 判据 |
 |---|---|
-| 版本 | `0.1.16` / `17` |
+| 版本 | `0.1.17` / `18` |
 | `firstInstallTime` | 与第 1 步**完全一致**；变了说明被清过数据，立刻停手报告 |
 | 本机条目数 | App →「我的」→「存储空间」仍是第 0 步的 `M`（迁移只加列/加表，不删条目） |
 | 播放抽查 | 用第 0 步那 1–2 条，确认能起播、进度正常 |
@@ -85,7 +85,7 @@ adb -s <序列号> shell "dumpsys package com.getmedia.app.full | grep -E 'versi
 3. **隐私说明 v3**。若账号还没同意 v3，会先收到 `consent_required=true` 并弹同意页；在同意之前，同步的拉取和上传都是 0（客户端闸门会拦住）。同意 v3 之后上面两步才会真正发出请求。
 4. **恢复决策卡**（如触发）。本地非空且云端有备份时，可能弹「恢复云端备份 / 用本机内容 / 稍后」。这也由用户自己选；选完之前自动备份是暂停的。
 
-> 手机 1 是老版本直接跨到 0.1.16，云端清单备份与服务器曲库是两回事：前者在「数据备份」卡片，后者决定「云端未下载」标签。两者都不会因为 `install -r` 丢失。
+> 手机 1 是老版本直接跨到 0.1.17，云端清单备份与服务器曲库是两回事：前者在「数据备份」卡片，后者决定「云端未下载」标签。两者都不会因为 `install -r` 丢失。
 
 ---
 
