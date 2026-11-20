@@ -55,6 +55,19 @@ object LibrarySyncJson {
         return CreatedTrack(created = root.optBoolean("created", true), track = parsed)
     }
 
+    /** `DELETE /v2/sync/tracks/{id}` 的成功体：`{ok,id,deleted,updated_seq}`。 */
+    fun deleteResult(text: String): DeleteResult {
+        val root = runCatching { JSONObject(text) }.getOrElse {
+            throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的内容无法识别")
+        }
+        val id = root.optLong("id", 0)
+        val seq = root.optLong("updated_seq", 0)
+        if (id <= 0 || seq <= 0 || !root.optBoolean("deleted", false)) {
+            throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器没有确认删除结果")
+        }
+        return DeleteResult(id, deleted = true, updatedSeq = seq)
+    }
+
     /** 解析一条；**键不全的行直接丢掉**（没有 platform/video_id 就没法算本地 id）。 */
     private fun track(o: JSONObject, strictCatalog: Boolean = false): CloudTrack? {
         val platform = o.optString("platform").trim()
@@ -79,7 +92,19 @@ object LibrarySyncJson {
             deleted = o.optBoolean("deleted", false),
             updatedSeq = o.optLong("updated_seq", 0),
             updatedAtSec = o.optLong("updated_at", 0),
+            storage = o.optString("storage"),
+            hasFile = o.optBoolean("has_file", false),
         )
+    }
+
+    /** `GET /v2/tracks/{id}` / `PATCH /v2/sync/tracks/{id}` 返回的单条。 */
+    fun singleTrack(text: String): CloudTrack {
+        val root = runCatching { JSONObject(text) }.getOrElse {
+            throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的内容无法识别")
+        }
+        val parsed = track(root)
+            ?: throw LibrarySyncException(LibrarySyncProblem.SERVER, "服务器返回的条目缺少平台或作品号")
+        return parsed
     }
 
     /**
@@ -99,8 +124,23 @@ object LibrarySyncJson {
             status == 404 && code.isBlank() -> LibrarySyncException(
                 LibrarySyncProblem.NOT_AVAILABLE, "当前账号无法同步，或服务器还没开这个功能",
             )
+            // 有业务码的 404 是"这条确实不存在"，与裸 404 的"接口不可用"必须分开：
+            // 前者可以结项，后者要保留队列等部署/权限恢复。
+            status == 404 && code == "track_not_found" -> LibrarySyncException(
+                LibrarySyncProblem.TRACK_NOT_FOUND, detail.ifBlank { "服务器上找不到这条" }, code,
+            )
             status == 404 -> LibrarySyncException(
                 LibrarySyncProblem.INPUT, detail.ifBlank { "服务器上找不到这条" }, code,
+            )
+            status == 409 && code == "archive_protected" -> LibrarySyncException(
+                LibrarySyncProblem.ARCHIVE_PROTECTED,
+                detail.ifBlank { "云端归档会保留，手机端不能移除" }, code,
+                conflict = json?.optJSONObject("track"),
+            )
+            status == 412 -> LibrarySyncException(
+                LibrarySyncProblem.VERSION_CONFLICT,
+                detail.ifBlank { "云端条目已变化，请刷新后重试" }, code,
+                conflict = json?.optJSONObject("track"),
             )
             status == 409 && code == "track_deleted" -> LibrarySyncException(
                 LibrarySyncProblem.TRACK_DELETED, "这条在云端已被删除", code,

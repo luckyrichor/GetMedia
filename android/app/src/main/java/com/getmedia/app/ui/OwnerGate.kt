@@ -2,6 +2,7 @@ package com.getmedia.app.ui
 
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import com.getmedia.app.data.cloud.CloudRemovedAsk
 import com.getmedia.app.data.cloud.CloudUploadAsk
 import com.getmedia.app.data.local.MediaKind
 
@@ -64,6 +65,15 @@ interface OwnerGate {
      */
     @Composable
     fun UploadAsk(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit, onDismiss: () -> Unit)
+
+    /**
+     * 「云端已移除 N 项，本机文件还在」的批量确认（P0-2 阶段 5）。
+     *
+     * - `free`：空实现——免费版没有服务器曲库，这个状态不可能出现；
+     * - `full`：默认主操作是「保留本机文件」，关闭只是稍后处理，不删任何文件。
+     */
+    @Composable
+    fun RemoteRemoved(ask: CloudRemovedAsk, onKeep: () -> Unit, onDismiss: () -> Unit)
 
     @Composable
     fun AdditionalBackupSettings()

@@ -2,8 +2,10 @@ package com.getmedia.app.ui
 
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import com.getmedia.app.data.cloud.CloudRemovedAsk
 import com.getmedia.app.data.cloud.CloudUploadAsk
 import com.getmedia.app.data.local.MediaKind
+import com.getmedia.app.ui.screen.CloudRemovedDialog
 import com.getmedia.app.ui.screen.CreatorBatchScreen
 import com.getmedia.app.ui.screen.ExportMissingNoticeBody
 import com.getmedia.app.ui.screen.ServerExtractPanel
@@ -44,6 +46,11 @@ val ownerGate: OwnerGate = object : OwnerGate {
     @Composable
     override fun UploadAsk(ask: CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit, onDismiss: () -> Unit) =
         UploadAskDialog(ask = ask, onUpload = onUpload, onDecline = onDecline, onDismiss = onDismiss)
+
+    /** 云端墓碑确认：默认保留本机文件，关闭只是稍后处理。 */
+    @Composable
+    override fun RemoteRemoved(ask: CloudRemovedAsk, onKeep: () -> Unit, onDismiss: () -> Unit) =
+        CloudRemovedDialog(ask = ask, onKeep = onKeep, onDismiss = onDismiss)
 
     @Composable
     override fun AdditionalBackupSettings() = LibrarySyncSettings()

@@ -25,6 +25,18 @@ enum class LibrarySyncProblem {
     /** 409 + `library_full`：该账号曲库达到上限。停止上传，提示去网页端清理，不动本地。 */
     LIBRARY_FULL,
 
+    /** 409 + `archive_protected`：云端归档行拒绝手机写墓碑。保留队列，等用户处理。 */
+    ARCHIVE_PROTECTED,
+
+    /** 412 + `track_version_conflict`：条目在云端已变化。保留队列/草稿，不盲目重发。 */
+    VERSION_CONFLICT,
+
+    /** 404 + `track_not_found`：明确的"这条不存在"（区别于裸 404 的"接口不可用"）。 */
+    TRACK_NOT_FOUND,
+
+    /** 409 + `track_deleted` 之外，服务器回的成功体里 `deleted=true`：墓碑。 */
+    TOMBSTONE,
+
     /** 429：读 `Retry-After` 整批退避。 */
     RATE_LIMITED,
 
@@ -66,6 +78,10 @@ data class CloudTrack(
     val deleted: Boolean,
     val updatedSeq: Long,
     val updatedAtSec: Long,
+    /** 服务器那条的存储类型（metadata / archive / cache）；旧响应没有就留空。 */
+    val storage: String = "",
+    /** 服务器是否已有文件；与 [storage] 一起用于删除确认与下载提示。 */
+    val hasFile: Boolean = false,
 )
 
 /** 一页拉取结果。[nextSeq] 是本页最大 `updated_seq`，**不能**当水位直接用（见引擎）。 */
@@ -93,4 +109,7 @@ data class UploadEntry(
  * 按设计以服务器那一行为准，包括标题。
  */
 data class CreatedTrack(val created: Boolean, val track: CloudTrack)
+
+/** `DELETE /v2/sync/tracks/{id}` 的成功体（重复删除也返回同一形状）。 */
+data class DeleteResult(val id: Long, val deleted: Boolean, val updatedSeq: Long)
 

@@ -22,6 +22,7 @@ import kotlinx.coroutines.CancellationException
 import androidx.activity.compose.BackHandler
 import com.getmedia.app.data.repo.DiagnosticsStore
 import com.getmedia.app.data.cloud.cloudSync
+import com.getmedia.app.account.SessionStore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
@@ -684,18 +685,27 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
 
     // 多选可能跨类型（类别页把音视频放在一起），文案按**实际选中的条目**取词，不跟顶部开关走
     val batchKinds = visibleTracks.filter { it.id in batchIds }.map { it.mediaType }
+    val batchSelected = visibleTracks.filter { it.id in batchIds }
+    val batchSession by SessionStore.current.collectAsState()
+    val batchCloud = batchSelected.filter { cloudSync.canQueueCloudDelete(it, batchSession) }
+    val batchArchive = batchSelected.filter { cloudSync.isCloudArchive(it) }
+    val batchLocalOnly = batchSelected.size - batchCloud.size - batchArchive.size
     if (confirmBatchDelete) BatchDeleteDialog(
         count = batchIds.size,
         kinds = batchKinds,
         deleting = deleting,
-        onConfirm = {
+        cloudCount = batchCloud.size,
+        archiveCount = batchArchive.size,
+        localOnlyCount = batchLocalOnly,
+        onConfirm = { removeFromCloud ->
             val ids = batchIds.toSet()
+            val cloudIds = if (removeFromCloud) batchCloud.mapTo(HashSet()) { it.id } else emptySet()
             // 删完会清空选中，先留住类型：否则删完的提示只能按空集合算成"项"
             val kinds = batchKinds
             deleting = true
             scope.launch {
                 try {
-                    val count = DiagnosticsStore.operation("批量删除") { trackRepo.removeAll(ids) }
+                    val count = DiagnosticsStore.operation("批量删除") { trackRepo.removeAll(ids, cloudIds) }
                     exitSelection()
                     notice = MediaWording.batchDeleteDone(kinds, count)
                 } catch (error: Exception) { notice = ErrorText.humanMessage(error) }
@@ -845,22 +855,60 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
             } } }) { Text("移动") } }, dismissButton = { AreaButton(onClick = { dialog = null; target = null }) { Text("取消") } })
         "delete" -> {
             val item = target
+            val session by SessionStore.current.collectAsState()
             // 文案要按将被删除的这批条目的实际类型取词：类别里可能同时有音频和视频
             var doomed by remember(item) { mutableStateOf(if (item is LibraryTarget.Audio) listOf(item.track) else emptyList()) }
             LaunchedEffect(item) {
                 if (item is LibraryTarget.Category) doomed = categoryRepo.recursiveTracks(item.category.id)
             }
+            val removable = doomed.filter { cloudSync.canQueueCloudDelete(it, session) }
+            val archive = doomed.filter { cloudSync.isCloudArchive(it) }
+            var removeFromCloud by remember(item, removable.size) { mutableStateOf(removable.isNotEmpty()) }
             AlertDialog(onDismissRequest = { dialog = null; target = null }, title = { Text("确认删除") },
                 text = {
-                    Text(
-                        if (item is LibraryTarget.Category) {
-                            "删除该类别将同时删除其中的 ${MediaWording.categoryCount(doomed.map { it.mediaType }, doomed.size)}，是否继续？"
-                        } else {
-                            MediaWording.deleteOneQuestion(doomed.map { it.mediaType })
-                        },
-                    )
+                    Column {
+                        Text(
+                            if (item is LibraryTarget.Category) {
+                                "删除该类别将同时删除其中的 ${MediaWording.categoryCount(doomed.map { it.mediaType }, doomed.size)}，是否继续？"
+                            } else {
+                                MediaWording.deleteOneQuestion(doomed.map { it.mediaType })
+                            },
+                        )
+                        if (removable.isNotEmpty()) {
+                            Row(
+                                Modifier.fillMaxWidth().clickable { removeFromCloud = !removeFromCloud }.padding(top = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(checked = removeFromCloud, onCheckedChange = { removeFromCloud = it })
+                                Text(
+                                    "同时从云端曲库移除（其他设备也会同步到）",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                            }
+                        }
+                        if (archive.isNotEmpty()) {
+                            Text(
+                                "其中 ${archive.size} 项是云端归档，云端归档会保留，只删除本机。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = com.getmedia.app.ui.components.uiMuted(),
+                                modifier = Modifier.padding(top = 8.dp),
+                            )
+                        }
+                    }
                 },
-                confirmButton = { AreaButton(onClick = { dialog = null; target = null; operate { when (item) { is LibraryTarget.Audio -> trackRepo.remove(item.track.id); is LibraryTarget.Category -> categoryRepo.delete(item.category.id); else -> Unit } } }, tone = ActionTone.DESTRUCTIVE) { Text("删除") } },
+                confirmButton = {
+                    AreaButton(onClick = {
+                        val cloudIds = if (removeFromCloud) removable.mapTo(HashSet()) { it.id } else emptySet()
+                        dialog = null; target = null
+                        operate {
+                            when (item) {
+                                is LibraryTarget.Audio -> trackRepo.remove(item.track.id, cloud = item.track.id in cloudIds)
+                                is LibraryTarget.Category -> categoryRepo.delete(item.category.id, cloudIds)
+                                else -> Unit
+                            }
+                        }
+                    }, tone = ActionTone.DESTRUCTIVE) { Text("删除") }
+                },
                 dismissButton = { AreaButton(onClick = { dialog = null; target = null }) { Text("取消") } })
         }
         "deletePlaylist" -> {
@@ -1031,15 +1079,38 @@ internal fun BatchDeleteDialog(
     count: Int,
     kinds: List<String?>,
     deleting: Boolean,
-    onConfirm: () -> Unit,
+    cloudCount: Int = 0,
+    archiveCount: Int = 0,
+    localOnlyCount: Int = 0,
+    onConfirm: (removeFromCloud: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    var removeFromCloud by remember(count, cloudCount) { mutableStateOf(cloudCount > 0) }
     AlertDialog(
         onDismissRequest = { if (!deleting) onDismiss() },
         title = { Text(MediaWording.batchDeleteTitle(kinds, count)) },
-        text = { Text(MediaWording.batchDeleteBody(kinds)) },
+        text = {
+            Column {
+                Text(MediaWording.batchDeleteBody(kinds))
+                MediaWording.batchCloudNote(cloudCount, archiveCount, localOnlyCount)?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+                }
+                if (cloudCount > 0) {
+                    Row(
+                        Modifier.fillMaxWidth().clickable(enabled = !deleting) { removeFromCloud = !removeFromCloud }
+                            .padding(top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = removeFromCloud, enabled = !deleting,
+                            onCheckedChange = { removeFromCloud = it })
+                        Text("同时从云端曲库移除（其他设备也会同步到）",
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
         confirmButton = {
-            AreaButton(onClick = onConfirm, enabled = !deleting, tone = ActionTone.DESTRUCTIVE) {
+            AreaButton(onClick = { onConfirm(removeFromCloud) }, enabled = !deleting, tone = ActionTone.DESTRUCTIVE) {
                 Text(if (deleting) "删除中…" else "删除")
             }
         },

@@ -37,6 +37,10 @@ val ownerGate: OwnerGate = object : OwnerGate {
     @Composable
     override fun UploadAsk(ask: com.getmedia.app.data.cloud.CloudUploadAsk, onUpload: () -> Unit, onDecline: () -> Unit, onDismiss: () -> Unit) = Unit
 
+    /** 免费版没有服务器曲库，不会出现"云端已移除"的确认。 */
+    @Composable
+    override fun RemoteRemoved(ask: com.getmedia.app.data.cloud.CloudRemovedAsk, onKeep: () -> Unit, onDismiss: () -> Unit) = Unit
+
     @Composable
     override fun AdditionalBackupSettings() = Unit
 }

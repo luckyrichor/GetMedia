@@ -8,7 +8,9 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
 import com.getmedia.app.ui.theme.GetMediaTheme
 import org.junit.Rule
 import org.junit.Test
@@ -28,14 +30,25 @@ class BatchDeleteDialogTest {
     @get:Rule
     val rule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun render(count: Int, kinds: List<String?>, deleting: Boolean = false) {
+    private fun render(
+        count: Int,
+        kinds: List<String?>,
+        deleting: Boolean = false,
+        cloudCount: Int = 0,
+        archiveCount: Int = 0,
+        localOnlyCount: Int = 0,
+        onConfirm: (Boolean) -> Unit = {},
+    ) {
         rule.setContent {
             GetMediaTheme {
                 BatchDeleteDialog(
                     count = count,
                     kinds = kinds,
                     deleting = deleting,
-                    onConfirm = {},
+                    cloudCount = cloudCount,
+                    archiveCount = archiveCount,
+                    localOnlyCount = localOnlyCount,
+                    onConfirm = onConfirm,
                     onDismiss = {},
                 )
             }
@@ -67,6 +80,28 @@ class BatchDeleteDialogTest {
         rule.onNodeWithText("删除 2 项？").assertIsDisplayed()
         rule.onNodeWithText("视频文件", substring = true).assertDoesNotExist()
         rule.onNodeWithText("音频文件", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun cloudDeletionIsDefaultCheckedAndReported() {
+        var confirmed: Boolean? = null
+        render(count = 2, kinds = listOf("AUDIO", "AUDIO"), cloudCount = 2,
+            archiveCount = 1, localOnlyCount = 1, onConfirm = { confirmed = it })
+
+        rule.onNodeWithText("同时从云端曲库移除（其他设备也会同步到）").assertIsDisplayed()
+        rule.onNodeWithText("2 项会同时从云端曲库移除", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("1 项云端归档会保留，只删除本机", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("1 项仅在本机删除", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("删除").performClick()
+        assertEquals(true, confirmed)
+    }
+
+    @Test
+    fun archiveOnlyExplainsCloudKeepsIt() {
+        render(count = 1, kinds = listOf("VIDEO"), cloudCount = 0,
+            archiveCount = 1, localOnlyCount = 0)
+        rule.onNodeWithText("云端归档会保留，只删除本机", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("同时从云端曲库移除（其他设备也会同步到）").assertDoesNotExist()
     }
 
     @Test

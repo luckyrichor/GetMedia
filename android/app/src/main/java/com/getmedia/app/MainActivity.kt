@@ -206,6 +206,15 @@ class MainActivity : ComponentActivity() {
                                 onDismiss = { com.getmedia.app.data.cloud.cloudSync.dismissUpload(ask) },
                             )
                         }
+                        // 云端墓碑：只提示、不删文件；默认保留本机。
+                        val removedAsk by com.getmedia.app.data.cloud.cloudSync.remoteRemovedAsk.collectAsState()
+                        removedAsk?.let { ask ->
+                            com.getmedia.app.ui.ownerGate.RemoteRemoved(
+                                ask = ask,
+                                onKeep = { com.getmedia.app.data.cloud.cloudSync.keepRemoteRemoved(this@MainActivity, ask) },
+                                onDismiss = { com.getmedia.app.data.cloud.cloudSync.dismissRemoteRemoved(ask) },
+                            )
+                        }
                         com.getmedia.app.ui.screen.AccountGates()
                     }
                 }

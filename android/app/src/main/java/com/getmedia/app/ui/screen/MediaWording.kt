@@ -60,6 +60,23 @@ internal object MediaWording {
     /** 删完后的提示：`已删除 5 个视频` */
     fun batchDeleteDone(kinds: Collection<String?>, count: Int): String = "已删除 ${counted(kinds, count)}"
 
+    /**
+     * 批量删除里"哪些会动云端"的说明。三种条目分开计数，混选时不笼统说"都删"：
+     * - 可移除的：会写云端墓碑，其他设备同步后也看不到；
+     * - 云端归档：服务端拒绝写墓碑，云端保留，只删本机；
+     * - 仅本机：本来就没绑定云端。
+     *
+     * 三项都为 0（纯本机）时返回 null，不显示这一行。
+     */
+    fun batchCloudNote(cloudCount: Int, archiveCount: Int, localOnlyCount: Int): String? {
+        val parts = buildList {
+            if (cloudCount > 0) add("$cloudCount 项会同时从云端曲库移除（其他设备也会同步到）")
+            if (archiveCount > 0) add("$archiveCount 项云端归档会保留，只删除本机")
+            if (localOnlyCount > 0) add("$localOnlyCount 项仅在本机删除")
+        }
+        return if (parts.isEmpty()) null else "其中 ${parts.joinToString("；")}。"
+    }
+
     /** 单条删除的确认：`删除这首音频？` / `删除这个视频？` */
     fun deleteOneQuestion(kinds: Collection<String?>): String = when (noun(kinds)) {
         AUDIO -> "删除这首$AUDIO？"

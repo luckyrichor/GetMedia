@@ -82,23 +82,41 @@ class TrackRepository(
 
     suspend fun rename(id: Long, title: String) {
         require(title.isNotBlank()) { "音频名称不能为空" }
-        trackDao.rename(id, title.trim(), System.currentTimeMillis())
+        val clean = title.trim()
+        val track = trackDao.byId(id)
+        val now = System.currentTimeMillis()
+        // 已绑定服务器 ID 的行：full 只写待推送草稿；其它行走原来的本机改名（free 永远走这里）
+        val handled = track != null && withContext(Dispatchers.IO) {
+            db.withTransaction { cloudSync.onTitleEdited(db, track, clean, now) }
+        }
+        if (!handled) trackDao.rename(id, clean, now)
         withContext(Dispatchers.Main) {
-            com.getmedia.app.player.PlayerHolder.rename(context, id, title.trim())
+            com.getmedia.app.player.PlayerHolder.rename(context, id, clean)
         }
         BackupManager.noteWrite()
     }
 
-    suspend fun remove(id: Long) { removeAll(setOf(id)) }
+    suspend fun remove(id: Long, cloud: Boolean = false) =
+        removeAll(setOf(id), if (cloud) setOf(id) else emptySet())
 
-    /** Delete metadata and every playlist reference in one transaction, then reconcile playback. */
-    suspend fun removeAll(ids: Set<Long>): Int {
+    /**
+     * Delete metadata and every playlist reference in one transaction, then reconcile playback.
+     *
+     * `cloudIds` 是本机确认要"同时从云端曲库移除"的条目。队列写入与删行在同一事务里：
+     * 不会出现行已经删了、删除意图却没记下来的情况。归档行即使被传进来也会被服务端拒绝，
+     * 客户端只按已知 storage 提前跳过。
+     */
+    suspend fun removeAll(ids: Set<Long>, cloudIds: Set<Long> = emptySet()): Int {
         if (ids.isEmpty()) return 0
         return withContext(NonCancellable) {
             val removed = withContext(Dispatchers.IO) {
                 fileMutex.withLock {
                     db.withTransaction {
                         val tracks = ids.mapNotNull { trackDao.byId(it) }
+                        val account = SessionStore.current.value?.loginName
+                        if (account != null && cloudIds.isNotEmpty()) {
+                            cloudSync.queueRemovals(db, account, tracks, cloudIds, System.currentTimeMillis())
+                        }
                         // Bound query size so selecting a large library cannot exceed SQLite bind limits.
                         tracks.map { it.id }.chunked(500).forEach {
                             trackDao.removePlaylistReferences(it)

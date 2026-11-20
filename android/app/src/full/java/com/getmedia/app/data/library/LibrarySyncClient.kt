@@ -24,6 +24,19 @@ interface LibraryUploadTransport {
 }
 
 /**
+ * 阶段 5 的写通道：条件删除、条件改名、单条核对。
+ *
+ * 与上传分开是因为它们**必须带 If-Match**，而且失败语义不同（归档保护、版本冲突、
+ * 明确的 404 各自有不同处理）。旧服务器没有这两条路径时返回裸 404，客户端保持队列、
+ * 不降级到旧的无条件写接口。
+ */
+interface LibraryWriteTransport {
+    suspend fun delete(trackId: Long, expectedSeq: Long): DeleteResult
+    suspend fun patchTitle(trackId: Long, title: String, expectedSeq: Long): CloudTrack
+    suspend fun detail(trackId: Long): CloudTrack
+}
+
+/**
  * 真实实现。`owner` 通道、`X-GetMedia-Session` 认证，与服务器提取同一套约定。
  *
  * 服务端限流 60/分：撞上就按 `Retry-After` 退避一次，再撞就整批停（由 [LibraryUploader] 决定），
@@ -33,7 +46,7 @@ class LibrarySyncClient(
     baseUrl: String = BuildConfig.OWNER_SERVER_BASE,
     private val client: OkHttpClient = AccountApi.defaultClient(),
     private val token: () -> String? = SessionStore::token,
-) : LibraryUploadTransport {
+) : LibraryUploadTransport, LibraryWriteTransport {
 
     private val base = baseUrl.trimEnd('/')
     private val json = "application/json; charset=utf-8".toMediaType()
@@ -77,10 +90,62 @@ class LibrarySyncClient(
         }
     }
 
+    override suspend fun delete(trackId: Long, expectedSeq: Long): DeleteResult = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url((base + SYNC_PATH + trackId).toHttpUrl())
+            .header("Accept", "application/json")
+            .header("If-Match", "\"$expectedSeq\"")
+            .header("X-GetMedia-Session", session())
+            .delete()
+            .build()
+        call(request) { text -> LibrarySyncJson.deleteResult(text) }
+    }
+
+    override suspend fun patchTitle(trackId: Long, title: String, expectedSeq: Long): CloudTrack =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject().put("title", title).toString()
+            val request = Request.Builder()
+                .url((base + SYNC_PATH + trackId).toHttpUrl())
+                .header("Accept", "application/json")
+                .header("If-Match", "\"$expectedSeq\"")
+                .header("X-GetMedia-Session", session())
+                .patch(body.toRequestBody(json))
+                .build()
+            call(request) { text -> LibrarySyncJson.singleTrack(text) }
+        }
+
+    override suspend fun detail(trackId: Long): CloudTrack = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url((base + PATH + "/" + trackId).toHttpUrl())
+            .header("Accept", "application/json")
+            .header("X-GetMedia-Session", session())
+            .get()
+            .build()
+        call(request) { text -> LibrarySyncJson.singleTrack(text) }
+    }
+
+    private fun <T> call(request: Request, parse: (String) -> T): T = try {
+        client.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw LibrarySyncJson.error(
+                    response.code, text,
+                    LibrarySyncJson.retryAfterSeconds(response.header("Retry-After")),
+                )
+            }
+            parse(text)
+        }
+    } catch (e: IOException) {
+        throw LibrarySyncException(
+            LibrarySyncProblem.NETWORK, "网络不可用，请检查连接后重试", detail = e.message.orEmpty(),
+        )
+    }
+
     private fun session(): String =
         token() ?: throw LibrarySyncException(LibrarySyncProblem.LOGIN_REQUIRED, "请先登录")
 
     companion object {
         const val PATH = "/v2/tracks"
+        const val SYNC_PATH = "/v2/sync/tracks/"
     }
 }

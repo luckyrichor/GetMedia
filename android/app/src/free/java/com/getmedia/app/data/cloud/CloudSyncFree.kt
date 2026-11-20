@@ -2,6 +2,7 @@ package com.getmedia.app.data.cloud
 
 import android.content.Context
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +17,17 @@ import java.io.File
 val cloudSync: CloudSyncHook = object : CloudSyncHook {
 
     override val uploadAsk: StateFlow<CloudUploadAsk?> = MutableStateFlow(null)
+
+    override val remoteRemovedAsk: StateFlow<CloudRemovedAsk?> = MutableStateFlow(null)
+
+    override fun canQueueCloudDelete(track: TrackEntity, session: SessionStore.Session?): Boolean = false
+
+    override fun isCloudArchive(track: TrackEntity): Boolean = false
+
+    override suspend fun queueRemovals(db: AppDatabase, account: String, tracks: List<TrackEntity>,
+                                       cloudIds: Set<Long>, nowMs: Long): Int = 0
+
+    override suspend fun onTitleEdited(db: AppDatabase, track: TrackEntity, title: String, nowMs: Long): Boolean = false
 
     /** 免费版的行只可能是"本机提取/导入"或"从备份恢复"，都不属于服务器曲库。 */
     override fun awaitingDownload(track: TrackEntity): Boolean = false
@@ -41,4 +53,8 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
     override fun acceptUpload(context: Context, ask: CloudUploadAsk) = Unit
 
     override fun declineUpload(context: Context, ask: CloudUploadAsk) = Unit
+
+    override fun keepRemoteRemoved(context: Context, ask: CloudRemovedAsk) = Unit
+
+    override fun dismissRemoteRemoved(ask: CloudRemovedAsk) = Unit
 }

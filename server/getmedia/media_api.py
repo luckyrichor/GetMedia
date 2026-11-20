@@ -80,6 +80,30 @@ class TrackPatchBody(BaseModel):
     pinned: bool | None = None
 
 
+class SyncTitleBody(BaseModel):
+    """手机同步专用改名：只收标题（P0-2 阶段 5）。
+
+    多一个字段就 422：手机写通道的能力边界要窄——``uploader`` / ``pinned`` 仍走网页的
+    原 PATCH，避免手机端一次改名顺手改掉别的东西。
+    """
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(max_length=500)
+
+
+def _if_match_seq(raw: str | None) -> int:
+    """解析同步写请求的 ``If-Match``。缺失 428、格式不对 400（不静默降级成无条件写）。"""
+    if raw is None or not raw.strip():
+        raise ApiError(428, "precondition_required", "缺少条目版本（If-Match）")
+    text = raw.strip()
+    if text.startswith("W/"):
+        raise ApiError(400, "bad_version", "条目版本必须使用强校验")
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        text = text[1:-1]
+    if not text.isdigit() or int(text) <= 0:
+        raise ApiError(400, "bad_version", "条目版本不正确")
+    return int(text)
+
+
 class TrackCreateBody(BaseModel):
     """手机端"这条要进曲库"（P0-2 阶段 1）。
 
@@ -379,6 +403,34 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
         except MediaError as exc:
             _translate(exc)
         return {"ok": True, "id": t["id"], "deleted": t["deleted"], "updated_seq": t["updated_seq"]}
+
+    # ---------- 手机同步专用写路径（P0-2 阶段 5） ----------
+    #
+    # 单独两条路径，不改旧 PATCH/DELETE 的行为：网页端仍走上面的无条件接口，
+    # 手机走带 If-Match 的条件写。边缘只按前缀转发，所以这里不需要改 nginx。
+    @app.delete("/v2/sync/tracks/{track_id}")
+    def delete_track_for_sync(track_id: str, response: Response,
+                              if_match: str | None = Header(default=None, alias="If-Match"),
+                              ctx: AuthCtx = Depends(guard)):
+        expected = _if_match_seq(if_match)
+        try:
+            t = store.delete_for_sync(ctx.user_id, _tid(track_id), expected)
+        except MediaError as exc:
+            _translate(exc)
+        response.headers["ETag"] = f'"{t["updated_seq"]}"'
+        return {"ok": True, "id": t["id"], "deleted": t["deleted"], "updated_seq": t["updated_seq"]}
+
+    @app.patch("/v2/sync/tracks/{track_id}")
+    def patch_track_for_sync(track_id: str, body: SyncTitleBody, response: Response,
+                             if_match: str | None = Header(default=None, alias="If-Match"),
+                             ctx: AuthCtx = Depends(guard)):
+        expected = _if_match_seq(if_match)
+        try:
+            t = store.patch_title_for_sync(ctx.user_id, _tid(track_id), body.title, expected)
+        except MediaError as exc:
+            _translate(exc)
+        response.headers["ETag"] = f'"{t["updated_seq"]}"'
+        return t
 
     @app.post("/v2/tracks/{track_id}/restore")
     def restore_track(track_id: str, ctx: AuthCtx = Depends(guard)):

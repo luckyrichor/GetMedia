@@ -1,7 +1,9 @@
 package com.getmedia.app.data.library
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.cloud.CloudRemovedAsk
 import com.getmedia.app.data.cloud.CloudUploadAsk
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.LibraryCursorEntity
@@ -40,9 +42,13 @@ object LibrarySyncRunner {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
     private val prompt = LibraryUploadPrompt()
+    private val removedPrompt = LibraryRemovedPrompt()
 
     /** 需要用户确认的一次询问；null 表示当前没有。 */
     val uploadAsk: StateFlow<CloudUploadAsk?> = prompt.state
+
+    /** 云端墓碑的批量确认；null 表示当前没有。 */
+    val remoteRemovedAsk: StateFlow<CloudRemovedAsk?> = removedPrompt.state
 
     internal data class RestoreStatus(
         val account: String,
@@ -158,6 +164,47 @@ object LibrarySyncRunner {
 
     fun dismiss(ask: CloudUploadAsk) = prompt.dismiss(ask)
 
+    fun dismissRemoteRemoved(ask: CloudRemovedAsk) = removedPrompt.dismiss(ask)
+
+    /** 用户在墓碑确认里选"保留本机文件"：脱钩、保留文件与全部整理信息。 */
+    fun keepRemoteRemoved(context: Context, ask: CloudRemovedAsk) {
+        val session = SessionStore.current.value ?: return
+        if (session.loginName != ask.account || !LibrarySyncGate.maySync(session)) return
+        val app = context.applicationContext
+        scope.launch {
+            mutex.withLock {
+                val db = AppDatabase.get(app)
+                db.withTransaction {
+                    val dao = db.libraryAuxDao()
+                    val rows = db.trackDao().allNow()
+                    dao.marks(ask.account).forEach { mark ->
+                        val row = rows.firstOrNull { it.serverId == mark.remoteId && it.accountKey == ask.account }
+                        if (row != null) {
+                            // 脱钩：清掉服务器身份与待推送草稿；文件、收藏、类别、播放列表一概不动
+                            db.trackDao().updateExisting(
+                                row.copy(
+                                    syncState = LibraryMark.DETACHED,
+                                    serverId = null,
+                                    serverSeq = null,
+                                    serverUpdatedAtMs = null,
+                                    accountKey = null,
+                                    pendingTitle = null,
+                                    pendingTitleBaseSeq = null,
+                                    pendingTitleGen = null,
+                                ),
+                            )
+                        }
+                        dao.dropMark(ask.account, mark.remoteId)
+                    }
+                }
+                removedPrompt.clear()
+            }
+        }
+    }
+
+    /** 关闭墓碑确认：不写任何决定，墓碑记录保留，下次同步再问。 */
+    fun clearRemoteRemoved(account: String) = removedPrompt.clearFor(account)
+
     fun accept(context: Context, ask: CloudUploadAsk) {
         val session = SessionStore.current.value ?: return
         if (session.loginName != ask.account || !LibrarySyncGate.maySync(session)) return
@@ -193,6 +240,7 @@ object LibrarySyncRunner {
                     }
                     if (sig == signature) return@collect
                     restoreState.value = null
+                    if (sig?.loginName != signature?.loginName) removedPrompt.reset()
                     if (sig?.loginName != signature?.loginName || !LibrarySyncGate.maySync(session)) prompt.clear()
                     signature = sig
                     if (session != null) run(app)
@@ -216,16 +264,32 @@ object LibrarySyncRunner {
         try {
             val db = AppDatabase.get(context)
             val token = syncToken(session, prefs)
-            val uploader = uploader(db, token, account, prefs, manual = false)
+            val client = LibrarySyncClient(token = token)
+            val uploader = uploader(db, client, account, prefs, manual = false)
             val round = LibrarySyncRound(
                 pull = { acc ->
+                    // ① 先重放本机删除：必须在拉取前，否则刚删的行会被拉回来
+                    val replay = LibraryRemovalReplay(db, client, acc, valid = { token() != null }).replay()
+                    if (replay.waiting > 0) note(db, acc, "${replay.waiting} 项云端删除待处理")
+                    if (replay.stopped != null && replay.stopped != LibrarySyncProblem.NOT_AVAILABLE) {
+                        note(db, acc, "云端删除未完成：${replay.reason}")
+                    }
+                    // ② 恢复项匹配（阶段 4）
                     try {
                         matchRestored(db, acc, token)
                     } catch (e: LibrarySyncException) {
                         restoreFailure(acc, token, e)
                         throw e
                     }
+                    // ③ 拉取：同时收墓碑、更新服务器权威字段
                     LibrarySyncEngine(db, LibrarySyncApi(token = token)).pull(acc)
+                    // ④ 标题草稿条件 PATCH（拉取之后，以最新服务器版本为准）
+                    val titles = LibraryTitlePush(db, client, acc, valid = { token() != null }).push()
+                    if (titles.stopped != null && titles.stopped != LibrarySyncProblem.NOT_AVAILABLE) {
+                        note(db, acc, "标题推送未完成：${titles.reason}")
+                    }
+                    // ⑤ 墓碑确认
+                    refreshRemovedAsk(db, acc, token)
                 },
                 candidateCount = { uploader.candidates().size },
                 upload = { acc -> upload(uploader, db, acc) },
@@ -279,13 +343,15 @@ object LibrarySyncRunner {
         mutex.withLock {
             if (token() == null) return
             val db = AppDatabase.get(context)
-            upload(uploader(db, token, session.loginName, prefs, manual), db, session.loginName)
+            val client = LibrarySyncClient(token = token)
+            upload(uploader(db, client, session.loginName, prefs, manual), db, session.loginName)
         }
     }
 
     private fun uploader(
-        db: AppDatabase, token: () -> String?, account: String, prefs: LibrarySyncPrefs, manual: Boolean,
-    ) = LibraryUploader(db, LibrarySyncClient(token = token), account, allowCandidate = { id ->
+        db: AppDatabase, client: LibraryUploadTransport, account: String,
+        prefs: LibrarySyncPrefs, manual: Boolean,
+    ) = LibraryUploader(db, client, account, allowCandidate = { id ->
         manual || !prefs.requiresManualUpload(account, id)
     })
 
@@ -308,6 +374,17 @@ object LibrarySyncRunner {
             else -> "已上传 ${summary.uploaded + summary.adopted} 项"
         }
         note(db, account, note)
+    }
+
+    /** 拉到墓碑后把"云端已移除 N 项"的批量确认摆出来；用户关掉后本次进程不再重复弹。 */
+    private suspend fun refreshRemovedAsk(db: AppDatabase, account: String, token: () -> String?) {
+        if (token() == null) return
+        val marks = db.libraryAuxDao().marks(account)
+        if (marks.isEmpty()) {
+            removedPrompt.clearFor(account)
+            return
+        }
+        removedPrompt.request(account, marks.map { it.title }, marks.size)
     }
 
     /** `library_cursor.note` 只放一句话摘要（不含标题、不含账号），给设置页展示用。 */

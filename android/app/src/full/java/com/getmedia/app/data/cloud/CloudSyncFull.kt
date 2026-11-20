@@ -2,9 +2,11 @@ package com.getmedia.app.data.cloud
 
 import android.content.Context
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.library.LibraryLocalEdits
 import com.getmedia.app.data.library.LibraryMark
 import com.getmedia.app.data.library.LibrarySyncRunner
 import com.getmedia.app.data.library.LibrarySyncGate
+import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.repo.TrackRepository
@@ -29,6 +31,21 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
     private val downloadLock = Mutex()
 
     override val uploadAsk: StateFlow<CloudUploadAsk?> get() = LibrarySyncRunner.uploadAsk
+
+    override val remoteRemovedAsk: StateFlow<CloudRemovedAsk?> get() = LibrarySyncRunner.remoteRemovedAsk
+
+    override fun canQueueCloudDelete(track: TrackEntity, session: SessionStore.Session?): Boolean =
+        session != null && LibrarySyncGate.maySync(session) &&
+            LibraryLocalEdits.canQueueCloudDelete(track, session.loginName)
+
+    override fun isCloudArchive(track: TrackEntity): Boolean = LibraryLocalEdits.isKnownArchive(track)
+
+    override suspend fun queueRemovals(db: AppDatabase, account: String, tracks: List<TrackEntity>,
+                                       cloudIds: Set<Long>, nowMs: Long): Int =
+        LibraryLocalEdits.queue(db, account, tracks, cloudIds, nowMs)
+
+    override suspend fun onTitleEdited(db: AppDatabase, track: TrackEntity, title: String, nowMs: Long): Boolean =
+        LibraryLocalEdits.markTitleEdited(db, track, title, nowMs)
 
     override fun awaitingDownload(track: TrackEntity): Boolean =
         track.syncState == LibraryMark.CLOUD_ONLY ||
@@ -72,4 +89,9 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
     override fun acceptUpload(context: Context, ask: CloudUploadAsk) = LibrarySyncRunner.accept(context, ask)
 
     override fun declineUpload(context: Context, ask: CloudUploadAsk) = LibrarySyncRunner.decline(context, ask)
+
+    override fun keepRemoteRemoved(context: Context, ask: CloudRemovedAsk) =
+        LibrarySyncRunner.keepRemoteRemoved(context, ask)
+
+    override fun dismissRemoteRemoved(ask: CloudRemovedAsk) = LibrarySyncRunner.dismissRemoteRemoved(ask)
 }

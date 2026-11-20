@@ -299,6 +299,95 @@ class MediaStore:
                 raise MediaError("track_not_found", "媒体不存在", 404)
         return self.get(user_id, track_id, include_deleted=True)
 
+    def delete_for_sync(self, user_id: str, track_id: int, expected_seq: int) -> dict:
+        """手机同步专用删除：带版本前置条件，且**绝不**给归档行写墓碑（P0-2 阶段 5）。
+
+        与旧 :meth:`delete` 的差别：
+        - 需要 ``If-Match`` 版本，条件写在同一句 SQL 里，检查和更新之间没有空档；
+        - ``archive`` 行直接 409 ``archive_protected``：归档文件是服务器长期保存的资产，
+          手机上的一次删除不能把它从网页正常列表里抹掉；
+        - 已经是墓碑时返回当前行（200），重复重放幂等；
+        - 旧网页接口的 ``delete`` 行为完全不变。
+        """
+        if expected_seq <= 0:
+            raise MediaError("bad_version", "条目版本不正确")
+        with self.engine.begin() as c:
+            row = c.execute(text(f"SELECT {_COLS} FROM tracks WHERE id=:i AND user_id=:u"),
+                            {"i": track_id, "u": user_id}).first()
+            if row is None:
+                raise MediaError("track_not_found", "媒体不存在", 404)
+            current = _row_to_dict(row)
+            # 已经删了：重放同一请求不产生任何新效果，直接成功（响应丢失后的重试靠这条）
+            if current["deleted"]:
+                return current
+            if current["storage"] == "archive":
+                raise MediaError("archive_protected", "云端归档条目不能从手机端移除；如需删除请在网页端处理归档",
+                                 409, extra={"track": current})
+            if current["updated_seq"] != expected_seq:
+                raise MediaError("track_version_conflict", "云端条目已变化，请刷新后重试",
+                                 412, extra={"track": current})
+            seq = self._next_seq(c)
+            n = c.execute(text(
+                "UPDATE tracks SET deleted=1, updated_seq=:s, updated_at=:n"
+                " WHERE id=:i AND user_id=:u AND deleted=0 AND storage<>'archive' AND updated_seq=:e"),
+                {"i": track_id, "u": user_id, "s": seq, "n": self.now(), "e": expected_seq}).rowcount
+            if n != 1:
+                # 条件写没命中：把真实状态读出来，按同一套错误码回答（并发修改不会静默成功）
+                latest = c.execute(text(f"SELECT {_COLS} FROM tracks WHERE id=:i AND user_id=:u"),
+                                   {"i": track_id, "u": user_id}).first()
+                if latest is None:
+                    raise MediaError("track_not_found", "媒体不存在", 404)
+                now = _row_to_dict(latest)
+                if now["deleted"]:
+                    return now
+                if now["storage"] == "archive":
+                    raise MediaError("archive_protected", "云端归档条目不能从手机端移除；如需删除请在网页端处理归档",
+                                     409, extra={"track": now})
+                raise MediaError("track_version_conflict", "云端条目已变化，请刷新后重试",
+                                 412, extra={"track": now})
+        return self.get(user_id, track_id, include_deleted=True)
+
+    def patch_title_for_sync(self, user_id: str, track_id: int, title: str,
+                             expected_seq: int) -> dict:
+        """手机同步专用改名：只改标题，带版本前置条件；墓碑返回 409 ``track_deleted``。
+
+        旧网页的 :meth:`patch` 保持无条件、可改多种字段的行为，两者互不影响。
+        """
+        if expected_seq <= 0:
+            raise MediaError("bad_version", "条目版本不正确")
+        clean = (title or "").strip()
+        if not clean:
+            raise MediaError("bad_title", "标题不能为空")
+        clean = clean[:200]
+        with self.engine.begin() as c:
+            row = c.execute(text(f"SELECT {_COLS} FROM tracks WHERE id=:i AND user_id=:u"),
+                            {"i": track_id, "u": user_id}).first()
+            if row is None:
+                raise MediaError("track_not_found", "媒体不存在", 404)
+            current = _row_to_dict(row)
+            if current["deleted"]:
+                raise MediaError("track_deleted", "该条目已被删除", 409, extra={"track": current})
+            if current["updated_seq"] != expected_seq:
+                raise MediaError("track_version_conflict", "云端条目已变化，请刷新后重试",
+                                 412, extra={"track": current})
+            seq = self._next_seq(c)
+            n = c.execute(text(
+                "UPDATE tracks SET title=:t, updated_seq=:s, updated_at=:n"
+                " WHERE id=:i AND user_id=:u AND deleted=0 AND updated_seq=:e"),
+                {"t": clean, "s": seq, "n": self.now(), "i": track_id, "u": user_id,
+                 "e": expected_seq}).rowcount
+            if n != 1:
+                latest = c.execute(text(f"SELECT {_COLS} FROM tracks WHERE id=:i AND user_id=:u"),
+                                   {"i": track_id, "u": user_id}).first()
+                if latest is None:
+                    raise MediaError("track_not_found", "媒体不存在", 404)
+                now = _row_to_dict(latest)
+                if now["deleted"]:
+                    raise MediaError("track_deleted", "该条目已被删除", 409, extra={"track": now})
+                raise MediaError("track_version_conflict", "云端条目已变化，请刷新后重试",
+                                 412, extra={"track": now})
+        return self.get(user_id, track_id, include_deleted=True)
+
     def delete(self, user_id: str, track_id: int) -> dict:
         """逻辑删除：保留文件，同步时下发 tombstone。"""
         with self.engine.begin() as c:

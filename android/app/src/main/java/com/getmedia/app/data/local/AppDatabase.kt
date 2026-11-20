@@ -17,9 +17,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [
         TrackEntity::class, CategoryEntity::class, PlaylistEntity::class, PlaylistItemEntity::class,
-        TrackRemovalEntity::class, LibraryCursorEntity::class,
+        TrackRemovalEntity::class, LibraryCursorEntity::class, RemoteMarkEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -73,6 +73,43 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v3 → v4（P0-2 阶段 5）：曲库补云端存储类型与标题草稿，删除队列补版本/世代/状态，
+         * 另建墓碑待确认表。
+         *
+         * 全部是 `ALTER TABLE ADD COLUMN` 与一张新表，不重建、不搬数据：
+         * 升级后旧行一个字段都不变，新列按 null / 默认值读。
+         */
+        val TRACK_MIGRATION_3_4_SQL: List<String> = listOf(
+            "ALTER TABLE tracks ADD COLUMN `serverStorage` TEXT",
+            "ALTER TABLE tracks ADD COLUMN `confirmedTitle` TEXT",
+            "ALTER TABLE tracks ADD COLUMN `pendingTitle` TEXT",
+            "ALTER TABLE tracks ADD COLUMN `pendingTitleBaseSeq` INTEGER",
+            "ALTER TABLE tracks ADD COLUMN `pendingTitleGen` INTEGER",
+        )
+
+        val REMOVAL_MIGRATION_3_4_SQL: List<String> = listOf(
+            "ALTER TABLE track_removals ADD COLUMN `expectedSeq` INTEGER",
+            "ALTER TABLE track_removals ADD COLUMN `generation` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE track_removals ADD COLUMN `state` TEXT NOT NULL DEFAULT 'QUEUED'",
+            "ALTER TABLE track_removals ADD COLUMN `attempts` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE track_removals ADD COLUMN `lastError` TEXT",
+        )
+
+        val REMOTE_MARKS_3_4_SQL: String =
+            "CREATE TABLE IF NOT EXISTS `remote_marks` (`account` TEXT NOT NULL, " +
+                "`remoteId` INTEGER NOT NULL, `platform` TEXT NOT NULL, `videoKey` TEXT NOT NULL, " +
+                "`title` TEXT NOT NULL, `seq` INTEGER NOT NULL, `seenAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`account`, `remoteId`))"
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                TRACK_MIGRATION_3_4_SQL.forEach(db::execSQL)
+                REMOVAL_MIGRATION_3_4_SQL.forEach(db::execSQL)
+                db.execSQL(REMOTE_MARKS_3_4_SQL)
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -82,7 +119,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "getmedia.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)

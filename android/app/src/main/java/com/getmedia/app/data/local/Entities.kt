@@ -62,6 +62,21 @@ data class TrackEntity(
     @ColumnInfo(defaultValue = "'LOCAL_ONLY'") val syncState: String = SyncState.LOCAL_ONLY.name,
     /** 登录名；未归属的本机提取和历史恢复行留 null。 */
     val accountKey: String? = null,
+
+    // ---------- 阶段 5：云端删除保护与标题草稿 ----------
+    //
+    // serverStorage 是服务器那条记录的 storage（metadata / archive / cache）。手机只知道
+    // "服务器有文件"，分不出归档与缓存；删除确认要先知道是不是 archive 才能决定要不要给
+    // "同时从云端曲库移除"这个选项。null 表示还没拉到（旧数据），按服务端拒绝兜底。
+    val serverStorage: String? = null,
+    /** 最后一次服务器确认的标题；待推送草稿不会覆盖它，备份也用它。 */
+    val confirmedTitle: String? = null,
+    /** 待推送的标题草稿；null 表示没有草稿。 */
+    val pendingTitle: String? = null,
+    /** 草稿基于的云端版本（If-Match 用它）；多次改名不重置。 */
+    val pendingTitleBaseSeq: Long? = null,
+    /** 本地操作世代：迟到的旧响应不能覆盖后来草稿。 */
+    val pendingTitleGen: Long? = null,
 )
 
 @Entity(tableName = "categories")
@@ -108,6 +123,35 @@ data class TrackRemovalEntity(
     /** 那条记录在远端的编号；没有就留空，靠平台 + 键去对。 */
     val remoteId: Long? = null,
     val requestedAt: Long = 0,
+    /** 发起删除时看到的远端版本；条件 DELETE 的 If-Match 用它。 */
+    val expectedSeq: Long? = null,
+    /** 本地操作世代：迟到响应只能清掉同一世代，不能清掉后来的新操作。 */
+    @ColumnInfo(defaultValue = "0") val generation: Long = 0,
+    /** `QUEUED`（等重放）/ `WAITING`（归档保护或版本冲突，等用户处理）。 */
+    @ColumnInfo(defaultValue = "'QUEUED'") val state: String = "QUEUED",
+    @ColumnInfo(defaultValue = "0") val attempts: Int = 0,
+    /** 一句话原因，只用于设置页展示；不含标题、不含账号。 */
+    val lastError: String? = null,
+)
+
+/**
+ * 从云端拉到的墓碑，等用户批量确认（P0-2 阶段 5）。
+ *
+ * 只存"云端已删除、本机还保留着文件或整理痕迹"的行；纯云端未下载且无痕迹的行
+ * 由同步器直接移出列表（没有文件、没有用户数据可丢）。这里只记身份与版本，
+ * **不碰曲库行、不碰文件**；用户选"保留本机文件"后按 [remoteId] 脱钩。
+ */
+@Entity(tableName = "remote_marks", primaryKeys = ["account", "remoteId"])
+data class RemoteMarkEntity(
+    val account: String,
+    val remoteId: Long,
+    val platform: String,
+    /** 与曲库同一套键形态。 */
+    val videoKey: String,
+    val title: String,
+    /** 墓碑的 `updated_seq`；用户处理后用它做一次幂等核对。 */
+    val seq: Long,
+    val seenAt: Long,
 )
 
 /**

@@ -13,19 +13,22 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * 守住 v2 → v3 的两张辅助表（P0-2 骨架）。
+ * 守住 v2 → v3 → v4 的曲库辅助结构（P0-2）。
  *
  * 三条硬要求：
- * 1. 只新建表，不动 `tracks`（同步永远不改别人的表结构）；
+ * 1. v3 只新建表；v4 只 `ALTER TABLE ADD COLUMN` 与新建 `remote_marks`，都不重建、不搬数据；
  * 2. 表名/列名中性——不含 sync / server / cloud 一类字样，free 的解包扫描才干净；
  * 3. 迁移 SQL 的列名与实体属性逐字一致，否则真机上 Room 的结构校验会直接崩。
  *
- * 后两条用 Robolectric 真跑一遍：建一个带旧行的 v2 库、执行迁移、再用 Room 打开 v3 新建库。
+ * 最后一条用 Robolectric 真跑一遍：建一个带旧行的库、退回 v2/v3 再让 Room 迁移，
+ * 升级后逐字段比对。
  */
 @RunWith(AndroidJUnit4::class)
 class LibraryTablesMigrationTest {
 
     private val sql = AppDatabase.LIBRARY_TABLES_2_3_SQL
+    private val trackV4 = AppDatabase.TRACK_MIGRATION_3_4_SQL
+    private val removalV4 = AppDatabase.REMOVAL_MIGRATION_3_4_SQL
 
     @Test fun createsExactlyTwoTables() {
         assertEquals(2, sql.size)
@@ -54,10 +57,21 @@ class LibraryTablesMigrationTest {
     @Test fun columnsMatchEntities() {
         val removalColumns = fieldsOf(TrackRemovalEntity::class.java)
         val cursorColumns = fieldsOf(LibraryCursorEntity::class.java)
-        assertEquals(listOf("platform", "videoKey", "account", "remoteId", "requestedAt"), removalColumns)
+        val markColumns = fieldsOf(RemoteMarkEntity::class.java)
+        assertEquals(
+            listOf("platform", "videoKey", "account", "remoteId", "requestedAt",
+                "expectedSeq", "generation", "state", "attempts", "lastError"),
+            removalColumns,
+        )
         assertEquals(listOf("account", "lastPos", "lastAt", "note"), cursorColumns)
-        removalColumns.forEach { assertTrue("迁移缺列：$it", sql[0].contains("`$it`")) }
+        assertEquals(listOf("account", "remoteId", "platform", "videoKey", "title", "seq", "seenAt"), markColumns)
+        removalColumns.take(5).forEach { assertTrue("迁移缺列：$it", sql[0].contains("`$it`")) }
+        removalColumns.drop(5).forEach { assertTrue("迁移缺列：$it", removalV4.any { s -> s.contains("`$it`") }) }
         cursorColumns.forEach { assertTrue("迁移缺列：$it", sql[1].contains("`$it`")) }
+        markColumns.forEach { assertTrue("迁移缺列：$it", AppDatabase.REMOTE_MARKS_3_4_SQL.contains("`$it`")) }
+        // tracks 的新列必须逐条出现在 v4 迁移里；这里只核对新增的 5 个，旧列由 1→2 负责
+        listOf("serverStorage", "confirmedTitle", "pendingTitle", "pendingTitleBaseSeq", "pendingTitleGen")
+            .forEach { assertTrue("tracks 迁移缺列：$it", trackV4.any { s -> s.contains("`$it`") }) }
     }
 
     /** 只要真实列名：Compose 编译器会给类插 `$stable` 静态字段，不算列。 */
@@ -97,10 +111,11 @@ class LibraryTablesMigrationTest {
             .build()
         try {
             val sqlite = db.openHelper.writableDatabase
-            assertEquals(3, sqlite.version)
+            assertEquals(4, sqlite.version)
             val tables = tableNames(sqlite)
             assertTrue("缺 track_removals：$tables", tables.contains("track_removals"))
             assertTrue("缺 library_cursor：$tables", tables.contains("library_cursor"))
+            assertTrue("缺 remote_marks：$tables", tables.contains("remote_marks"))
 
             // 两列非空、主键组合正确：DAO 插一条再读回来就能证明结构对得上
             runBlocking {
@@ -167,18 +182,39 @@ class LibraryTablesMigrationTest {
             db.close()
         }
 
-        // 退回 v2：删掉 v3 才有的两张表，把版本号写回 2
+        // 退回 v3：重建一份没有 v4 新列的 tracks，并只留 v3 的两张辅助表。
+        // 不用 ALTER TABLE DROP COLUMN：Android 的 SQLite 在目标版本上不支持。
+        val newTrackColumns = listOf("serverStorage", "confirmedTitle", "pendingTitle",
+            "pendingTitleBaseSeq", "pendingTitleGen")
+        val v3TrackColumns = fieldsOf(TrackEntity::class.java).filterNot { it in newTrackColumns }
         SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
+            val v4Ddl = raw.rawQuery("SELECT sql FROM sqlite_master WHERE type='table' AND name='tracks'", null)
+                .use { c -> if (c.moveToFirst()) c.getString(0) else error("找不到 tracks 表") }
+            // Room 生成的 DDL 可能是单行；按顶层逗号切列定义，比按行过滤稳
+            val inner = v4Ddl.substringAfter("(").substringBeforeLast(")")
+            val defs = inner.split(",").filterNot { def ->
+                val head = def.trimStart()
+                newTrackColumns.any { head.startsWith("`$it`") || head.startsWith("$it ") }
+            }
+            val v3Ddl = "CREATE TABLE `tracks_v3` (" + defs.joinToString(",") + ")"
+            raw.execSQL("ALTER TABLE `tracks` RENAME TO `tracks_v4`")
+            raw.execSQL(v3Ddl)
+            val cols = v3TrackColumns.joinToString(", ") { "`$it`" }
+            raw.execSQL("INSERT INTO `tracks_v3` ($cols) SELECT $cols FROM `tracks_v4`")
+            raw.execSQL("DROP TABLE `tracks_v4`")
+            raw.execSQL("ALTER TABLE `tracks_v3` RENAME TO `tracks`")
             raw.execSQL("DROP TABLE IF EXISTS track_removals")
             raw.execSQL("DROP TABLE IF EXISTS library_cursor")
-            raw.version = 2
+            raw.execSQL("DROP TABLE IF EXISTS remote_marks")
+            AppDatabase.LIBRARY_TABLES_2_3_SQL.forEach(raw::execSQL)
+            raw.version = 3
         }
 
         db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
             .allowMainThreadQueries().build()
         try {
-            assertEquals("升级后必须是 v3", 3, db.openHelper.writableDatabase.version)
+            assertEquals("升级后必须是 v4", 4, db.openHelper.writableDatabase.version)
             assertEquals("tracks 一行都不能少、一个字段都不能变", beforeTracks, db.trackDao().allNow())
             assertEquals("播放列表归属与顺序不变", beforeItems, db.playlistDao().itemsAll())
             assertEquals("类别不变", listOf("通勤"), db.categoryDao().allNow().map { it.name })

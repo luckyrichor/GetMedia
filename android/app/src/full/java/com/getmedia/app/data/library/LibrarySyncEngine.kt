@@ -6,6 +6,8 @@ import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.LibraryCursorEntity
 import com.getmedia.app.data.local.LocalIds
 import com.getmedia.app.data.local.MediaKind
+import com.getmedia.app.data.local.RemoteMarkEntity
+import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.local.TrackEntity
 
 /**
@@ -35,6 +37,10 @@ class LibrarySyncEngine(
         val tombstones: Int,
         val pages: Int,
         val cursor: Long,
+        /** 本轮新发现的墓碑（本机还有文件或整理痕迹），等用户批量确认。 */
+        val marks: Int = 0,
+        /** 无文件也无整理痕迹的纯云端行，已直接移出列表（不涉及任何文件）。 */
+        val removedRows: Int = 0,
     )
 
     /**
@@ -50,6 +56,8 @@ class LibrarySyncEngine(
         var skipped = 0
         var tombstones = 0
         var pages = 0
+        var marks = 0
+        var removedRows = 0
         while (true) {
             val page = transport.pull(cursor, pageSize)
             pages++
@@ -57,14 +65,18 @@ class LibrarySyncEngine(
             added += applied.added
             skipped += applied.skipped
             tombstones += applied.tombstones
+            marks += applied.marks
+            removedRows += applied.removedRows
             cursor = applied.cursor
             // 空页但 has_more=true 是服务端的边界抖动，直接停，别打空请求
             if (!page.hasMore || page.items.isEmpty()) break
         }
-        return Result(added = added, skipped = skipped, tombstones = tombstones, pages = pages, cursor = cursor)
+        return Result(added = added, skipped = skipped, tombstones = tombstones, pages = pages,
+            cursor = cursor, marks = marks, removedRows = removedRows)
     }
 
-    private data class Applied(val added: Int, val skipped: Int, val tombstones: Int, val cursor: Long)
+    private data class Applied(val added: Int, val skipped: Int, val tombstones: Int, val cursor: Long,
+                               val marks: Int = 0, val removedRows: Int = 0)
 
     /** 一页一个事务：写行与写水位要么一起生效，要么一起不生效。 */
     private suspend fun applyPage(account: String, items: List<CloudTrack>, since: Long): Applied =
@@ -81,21 +93,82 @@ class LibrarySyncEngine(
             var added = 0
             var skipped = 0
             var tombstones = 0
+            var marks = 0
+            var removedRows = 0
             val fresh = ArrayList<TrackEntity>(items.size)
             val now = nowMs()
+            val aux = db.libraryAuxDao()
+
+            // 本机刚删、还没重放成功的键：拉取不能把它们又建回来（先删后加竞态的读侧保险）
+            val queuedKeys = aux.removals(account).mapTo(HashSet()) {
+                Triple(it.platform.lowercase(), it.videoKey, account)
+            }
+            val byServerId = rows.mapNotNull { row -> row.serverId?.let { it to row } }.toMap()
 
             for (item in items) {
-                // 阶段 2 遇到墓碑什么都不做：本地有文件的那份不能因为云端删除而消失，
-                // 批量确认与"是否同时删本机文件"是阶段 5 的事（已定 3）。
-                if (item.deleted) { tombstones++; continue }
+                val key = Triple(item.platform.lowercase(), LocalIds.key(item.platform, item.videoId, item.page), account)
+                val serverKey = Triple(item.platform.lowercase(), item.videoId, item.page)
+                if (item.deleted) {
+                    tombstones++
+                    // 自己刚发起的删除：墓碑已生效，清掉待重放记录即可，不必再弹确认
+                    if (key in queuedKeys) {
+                        aux.dropRemoval(item.platform, key.second, account)
+                        queuedKeys.remove(key)
+                    }
+                    val row = byServerId[item.id] ?: continue
+                    if (row.accountKey != account) continue
+                    if (row.syncState == LibraryMark.DETACHED) continue
+                    // 身份必须一致；不一致就只报告，不碰这一行
+                    if (row.serverId != item.id || row.restoredKey() != item.restoredKey()) continue
+                    // 先清掉待推送草稿：墓碑上再 PATCH 只会 409，草稿留着也没意义
+                    if (row.pendingTitle != null) {
+                        db.trackDao().updateExisting(
+                            row.copy(pendingTitle = null, pendingTitleBaseSeq = null, pendingTitleGen = null),
+                        )
+                    }
+                    val itemsInPlaylist = db.playlistDao().itemsAll().any { it.trackId == row.id }
+                    val noTrace = row.localPath.isNullOrBlank() && !row.favorite &&
+                        row.localCategoryId == MetadataSnapshot.DEFAULT_CATEGORY_ID &&
+                        row.localTitleOverride == null && !itemsInPlaylist && !row.locallyEdited
+                    if (noTrace) {
+                        // 纯云端镜像：没有文件、没有任何用户整理信息，直接移出列表
+                        db.trackDao().removePlaylistReferences(listOf(row.id))
+                        db.trackDao().delete(row.id)
+                        removedRows++
+                    } else {
+                        // 有文件或整理痕迹：只记下来，绝不自动删文件；等用户批量确认
+                        aux.addMark(
+                            RemoteMarkEntity(
+                                account = account, remoteId = item.id, platform = item.platform,
+                                videoKey = key.second,
+                                title = row.localTitleOverride ?: row.title, seq = item.updatedSeq, seenAt = now,
+                            ),
+                        )
+                        marks++
+                    }
+                    continue
+                }
 
                 val id = LocalIds.localId(item.platform, item.videoId, item.page)
-                val key = Triple(item.platform.lowercase(), item.videoId, item.page)
                 val identity = item.restoredKey()
-                if (id in knownIds || key in knownKeys || identity in normalized) { skipped++; continue }
+                val existing = byServerId[item.id]?.takeIf {
+                    it.accountKey == account && it.restoredKey() == identity
+                }
+                if (existing != null) {
+                    // 已有的绑定行：只更新服务器权威字段，绝不碰收藏/类别/排序/文件
+                    if (item.updatedSeq > existing.serverSeq.orZero()) {
+                        db.trackDao().updateExisting(mergeServer(existing, item, now))
+                    }
+                    skipped++
+                    continue
+                }
+                if (key in queuedKeys || id in knownIds || serverKey in knownKeys || identity in normalized) {
+                    skipped++
+                    continue
+                }
 
                 knownIds += id
-                knownKeys += key
+                knownKeys += serverKey
                 if (identity != null) normalized += identity
                 fresh += entity(item, id, account, now)
                 added++
@@ -105,9 +178,65 @@ class LibrarySyncEngine(
             if (fresh.isNotEmpty()) db.trackDao().insertIgnore(fresh)
 
             val next = (items.maxOfOrNull { it.updatedSeq } ?: since).coerceAtLeast(since)
-            db.libraryAuxDao().putCursor(LibraryCursorEntity(account = account, lastPos = next, lastAt = now))
-            Applied(added = added, skipped = skipped, tombstones = tombstones, cursor = next)
+            aux.putCursor(LibraryCursorEntity(account = account, lastPos = next, lastAt = now))
+            Applied(added = added, skipped = skipped, tombstones = tombstones, cursor = next,
+                marks = marks, removedRows = removedRows)
         }
+
+    private fun Long?.orZero(): Long = this ?: 0L
+
+    /**
+     * 把服务器的新版本合进已有绑定行。**只改服务器权威字段**：
+     * 收藏、类别、手动顺序、本地文件、入库时间、播放列表不动（`existing.copy` 的纪律）。
+     *
+     * 标题冲突：本机有待推送草稿时，服务器版本只要比草稿基线新，就以服务器为准；
+     * 如果服务器标题正好等于草稿（说明 PATCH 已经生效、只是响应丢了），按"已达到目标"结项。
+     */
+    private fun mergeServer(existing: TrackEntity, item: CloudTrack, now: Long): TrackEntity {
+        val draft = existing.pendingTitle
+        var state = existing.syncState
+        var title = existing.title
+        var confirmed = existing.confirmedTitle
+        var override = existing.localTitleOverride
+        var pending = draft
+        var pendingBase = existing.pendingTitleBaseSeq
+        var pendingGen = existing.pendingTitleGen
+        if (draft != null) {
+            val base = existing.pendingTitleBaseSeq ?: existing.serverSeq ?: 0L
+            if (item.updatedSeq > base) {
+                // 服务器在我们编辑之后又变了：服务器赢；标题相同则视为草稿已生效
+                title = item.title
+                confirmed = item.title
+                override = null
+                pending = null
+                pendingBase = null
+                pendingGen = null
+                state = SyncState.SYNCED.name
+            }
+        } else {
+            title = item.title
+            confirmed = item.title
+            override = null
+            state = SyncState.SYNCED.name
+        }
+        return existing.copy(
+            title = title,
+            confirmedTitle = confirmed,
+            localTitleOverride = override,
+            pendingTitle = pending,
+            pendingTitleBaseSeq = pendingBase,
+            pendingTitleGen = pendingGen,
+            uploader = item.uploader,
+            durationSec = item.durationSec,
+            sourceUrl = item.sourceUrl.ifBlank { existing.sourceUrl },
+            serverSeq = item.updatedSeq,
+            serverPage = item.page,
+            serverUpdatedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 },
+            serverStorage = item.storage.ifBlank { existing.serverStorage },
+            syncState = state,
+            updatedAtMs = now,
+        )
+    }
 
     /** 键与 [MetadataSnapshot] 算快照时用的完全一致，三源回退的规则只有那一份实现。 */
     private fun keyOf(t: TrackEntity): Triple<String, String, Int> =
@@ -140,6 +269,8 @@ class LibrarySyncEngine(
         serverUpdatedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 },
         syncState = LibraryMark.CLOUD_ONLY,
         accountKey = account,
+        serverStorage = item.storage.ifBlank { null },
+        confirmedTitle = item.title,
     )
 
     companion object {

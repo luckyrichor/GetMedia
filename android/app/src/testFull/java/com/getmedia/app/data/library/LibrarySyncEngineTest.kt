@@ -178,7 +178,81 @@ class LibrarySyncEngineTest {
         assertEquals(0, result.added)
         assertNotNull("云端删了也不许动本机这一行（阶段 5 才弹确认）", rows().firstOrNull { it.id == id })
         assertEquals(1, rows().size)
+        assertEquals("有文件的行只记待确认，不自动删", 1, db.libraryAuxDao().markCount(account))
+        assertEquals("/files/-1.audio", rows().single().localPath)
     }
+
+    @Test fun tombstoneWithoutFileOrTraceOnlyRemovesTheCloudMirror() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(listOf(cloudRow(id, deletedMirror = true)))
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", deleted = true)), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals(1, result.removedRows)
+        assertEquals(0, db.libraryAuxDao().markCount(account))
+        assertTrue("纯云端镜像无文件无痕迹，可以直接移出列表", rows().isEmpty())
+    }
+
+    @Test fun newerServerVersionUpdatesServerFieldsButKeepsLocalOrganization() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(
+                favorite = true, localCategoryId = 3, sortIndex = 7, localPath = "/files/-1.audio",
+                title = "旧标题", confirmedTitle = "旧标题", serverSeq = 1, serverStorage = "archive",
+            ),
+        ))
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 5, title = "服务器新名")), hasMore = false)))
+        e.pull(account)
+
+        val row = rows().single()
+        assertEquals("服务器标题为准", "服务器新名", row.title)
+        assertEquals("服务器新名", row.confirmedTitle)
+        assertEquals(5L, row.serverSeq)
+        assertEquals("收藏不动", true, row.favorite)
+        assertEquals("类别不动", 3L, row.localCategoryId)
+        assertEquals("手动顺序不动", 7L, row.sortIndex)
+        assertEquals("本地文件不动", "/files/-1.audio", row.localPath)
+    }
+
+    @Test fun serverWinsOverPendingDraftWhenVersionMoved() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(
+                title = "我的草稿", localTitleOverride = "我的草稿", confirmedTitle = "服务器旧名",
+                pendingTitle = "我的草稿", pendingTitleBaseSeq = 3, pendingTitleGen = 123,
+                serverSeq = 3, syncState = LibraryMark.PENDING_UP,
+            ),
+        ))
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 5, title = "网页改的")), hasMore = false)))
+        e.pull(account)
+
+        val row = rows().single()
+        assertEquals("网页改的", row.title)
+        assertNull(row.pendingTitle)
+        assertNull(row.localTitleOverride)
+        assertEquals(5L, row.serverSeq)
+    }
+
+    @Test fun pullDoesNotRecreateAKeyWaitingForRemoval() = runBlocking {
+        db.libraryAuxDao().addRemoval(
+            com.getmedia.app.data.local.TrackRemovalEntity(
+                platform = "bilibili", videoKey = "BV1", account = account,
+                remoteId = 99, requestedAt = 1, expectedSeq = 3, generation = 1,
+            ),
+        )
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1")), hasMore = false)))
+        val result = e.pull(account)
+        assertEquals("删除还没重放成功，不能把同键行建回来", 0, result.added)
+        assertTrue(rows().isEmpty())
+    }
+
+    private fun cloudRow(id: Long, deletedMirror: Boolean) = TrackEntity(
+        id = id, platform = "bilibili", videoId = "BV1", title = "云端镜像",
+        uploader = "UP", durationSec = 10.0, audioBytes = null, audioFormat = "",
+        sourceUrl = "https://b/1", localPath = null, favorite = false, localCategoryId = 1,
+        syncState = if (deletedMirror) LibraryMark.CLOUD_ONLY else SyncState.SYNCED.name,
+        serverId = 1, serverSeq = 1, accountKey = account, serverStorage = "metadata",
+    )
 
     // ---------- 水位 ----------
 

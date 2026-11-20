@@ -18,6 +18,9 @@ interface LibraryAuxDao {
     @Query("SELECT * FROM track_removals WHERE account = :account ORDER BY requestedAt ASC")
     suspend fun removals(account: String): List<TrackRemovalEntity>
 
+    @Query("SELECT * FROM track_removals WHERE account = :account AND platform = :platform AND videoKey = :videoKey")
+    suspend fun removal(account: String, platform: String, videoKey: String): TrackRemovalEntity?
+
     @Query("SELECT COUNT(*) FROM track_removals WHERE account = :account")
     suspend fun removalCount(account: String): Int
 
@@ -28,9 +31,35 @@ interface LibraryAuxDao {
     @Query("DELETE FROM track_removals WHERE platform = :platform AND videoKey = :videoKey AND account = :account")
     suspend fun dropRemoval(platform: String, videoKey: String, account: String)
 
+    /**
+     * 只清掉**同一世代**的删除：请求在途时用户又入队了一次，迟到的旧响应不能把新意图清掉。
+     */
+    @Query("DELETE FROM track_removals WHERE platform = :platform AND videoKey = :videoKey AND account = :account AND generation = :generation")
+    suspend fun dropRemovalForGeneration(platform: String, videoKey: String, account: String, generation: Long)
+
+    @Query("UPDATE track_removals SET state = :state, attempts = :attempts, lastError = :error " +
+        "WHERE platform = :platform AND videoKey = :videoKey AND account = :account AND generation = :generation")
+    suspend fun markRemoval(platform: String, videoKey: String, account: String, generation: Long,
+                            state: String, attempts: Int, error: String?)
+
     /** 注销账号时清干净，避免拿已失效的身份去重放。 */
     @Query("DELETE FROM track_removals WHERE account = :account")
     suspend fun clearRemovals(account: String)
+
+    @Query("SELECT * FROM remote_marks WHERE account = :account ORDER BY seenAt ASC")
+    suspend fun marks(account: String): List<RemoteMarkEntity>
+
+    @Query("SELECT COUNT(*) FROM remote_marks WHERE account = :account")
+    suspend fun markCount(account: String): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun addMark(mark: RemoteMarkEntity)
+
+    @Query("DELETE FROM remote_marks WHERE account = :account AND remoteId = :remoteId")
+    suspend fun dropMark(account: String, remoteId: Long)
+
+    @Query("DELETE FROM remote_marks WHERE account = :account")
+    suspend fun clearMarks(account: String)
 
     @Query("SELECT * FROM library_cursor WHERE account = :account")
     suspend fun cursor(account: String): LibraryCursorEntity?

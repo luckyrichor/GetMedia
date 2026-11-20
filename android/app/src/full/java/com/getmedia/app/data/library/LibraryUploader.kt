@@ -109,8 +109,10 @@ class LibraryUploader(
                 serverUpdatedAtMs = (server.updatedAtSec * 1000).takeIf { it > 0 },
                 syncState = SyncState.SYNCED.name,
                 accountKey = account,
+                serverStorage = server.storage.ifBlank { "metadata" },
                 // 服务器已有同键（created=false）：以服务器为准改标题，但本机改过名的不动
                 title = if (created.created || current.localTitleOverride != null) current.title else server.title,
+                confirmedTitle = server.title,
                 updatedAtMs = nowMs(),
             ),
         )

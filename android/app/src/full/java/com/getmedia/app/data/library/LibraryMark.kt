@@ -26,4 +26,13 @@ object LibraryMark {
      * （`FLAG_TMP_DETACHED`、`MSG_HANDLE_PENDING_UPDATES`），free APK 里必然命中，等于永远扫不干净。
      */
     const val DETACHED = "LIB_DETACHED"
+
+    /** 待重放的删除：还没发出去 / 可以自动重试。 */
+    const val REMOVAL_QUEUED = "QUEUED"
+
+    /** 请求已经发出但结果未知（进程崩溃/超时）：下一轮按服务器状态核对，不当作"未发出"取消。 */
+    const val REMOVAL_SENDING = "SENDING"
+
+    /** 待重放的删除：归档保护或版本冲突，等用户处理；不再自动重试。 */
+    const val REMOVAL_WAITING = "WAITING"
 }

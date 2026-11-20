@@ -158,12 +158,26 @@ object MetadataSnapshot {
         .put("favorite", t.favorite)
         .put("category_id", t.localCategoryId)
         .put("sort_index", t.sortIndex)
-        .put("title_override", t.localTitleOverride?.let(::clipTitle) ?: JSONObject.NULL)
+        .put("title_override", titleOverrideOf(t)?.let(::clipTitle) ?: JSONObject.NULL)
         .put("playlists", JSONArray().apply {
             items.forEach { put(JSONObject().put("playlist_id", it.playlistId).put("order_index", it.orderIndex)) }
         })
 
-    fun titleOf(t: TrackEntity): String = clipTitle(t.localTitleOverride ?: t.title)
+    /**
+     * 快照里用的显示标题。
+     *
+     * 有**待推送草稿**时用最后一次服务器确认的标题（`confirmedTitle`）：草稿还没被云端接受，
+     * 不能让它覆盖备份里已确认的显示名；恢复后也不会因为这份快照把草稿当成新标题
+     * 再排一次 PATCH（恢复根本不写 `pendingTitle`）。
+     */
+    fun titleOf(t: TrackEntity): String = clipTitle(
+        if (t.pendingTitle != null) (t.confirmedTitle ?: t.title)
+        else (t.localTitleOverride ?: t.title),
+    )
+
+    /** 快照里的本机改名；待推送草稿不进快照（它还不是"已确认的显示标题"）。 */
+    fun titleOverrideOf(t: TrackEntity): String? =
+        if (t.pendingTitle != null) null else t.localTitleOverride
 
     fun clipTitle(value: String): String = if (value.length > TITLE_MAX) value.substring(0, TITLE_MAX) else value
 
@@ -202,7 +216,7 @@ object MetadataSnapshot {
                     .field(t.audioBytes?.toString()).field(clipUrl(t.sourceUrl))
                     .field(t.addedAtMs.toString()).field(if (t.favorite) "1" else "0")
                     .field(t.localCategoryId.toString()).field(t.sortIndex.toString())
-                    .field(t.localTitleOverride?.let(::clipTitle)).end()
+                    .field(titleOverrideOf(t)?.let(::clipTitle)).end()
             }
             items.sortedWith(compareBy({ it.playlistId }, { it.trackId })).forEach { i ->
                 field("i").field(i.playlistId.toString()).field(i.trackId.toString())

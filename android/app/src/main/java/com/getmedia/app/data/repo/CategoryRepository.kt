@@ -2,7 +2,9 @@ package com.getmedia.app.data.repo
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.backup.BackupManager
+import com.getmedia.app.data.cloud.cloudSync
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.CategoryEntity
 import com.getmedia.app.data.local.TrackEntity
@@ -70,7 +72,7 @@ class CategoryRepository(private val context: Context) {
         return tracks.allNow().filter { it.localCategoryId in ids }
     }
 
-    suspend fun delete(id: Long): Int {
+    suspend fun delete(id: Long, cloudIds: Set<Long> = emptySet()): Int {
         require(id != 1L) { "不能删除系统类别" }
         val files = mutableListOf<File>()
         val deletedIds = mutableSetOf<Long>()
@@ -80,6 +82,11 @@ class CategoryRepository(private val context: Context) {
             val ids = descendants(id, all)
             val affected = tracks.allNow().filter { it.localCategoryId in ids }
             deletedIds.addAll(affected.map { it.id })
+            // 与删行同一事务：用户勾了"同时从云端移除"的条目先入队
+            val account = SessionStore.current.value?.loginName
+            if (account != null && cloudIds.isNotEmpty()) {
+                cloudSync.queueRemovals(db, account, affected, cloudIds, System.currentTimeMillis())
+            }
             affected.forEach { track ->
                 playlists.removeTrack(track.id)
                 tracks.delete(track.id)

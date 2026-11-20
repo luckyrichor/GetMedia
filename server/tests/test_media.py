@@ -504,3 +504,168 @@ def test_legacy_owner_submit_with_p3_query_still_uses_default_cid(tmp_path, monk
     assert cids == ["101", "101"]
     targeted = resolver.resolve_target(P3_URL, media_type="audio", page=3)
     assert (targeted.video_id, targeted.page, targeted.duration_sec, cids[-1]) == (P3_BV, 3, 37, "303")
+
+
+# ---------- P0-2 阶段 5：手机同步专用 DELETE / PATCH ----------
+
+def _one_track(env, *, storage="metadata", media_type="audio", text="BVtest0001"):
+    r = extract(env, storage=storage, media_type=media_type, text=text)
+    job = env.client.get(f"/v2/extraction-jobs/{r.json()['id']}", headers=hdr(env.token)).json()
+    assert job["status"] == "done", job
+    track = env.client.get(f"/v2/tracks/{job['track_id']}", headers=hdr(env.token)).json()
+    return track
+
+
+def _im(seq) -> dict:
+    return {"If-Match": f'"{seq}"'}
+
+
+def test_sync_delete_requires_if_match(menv):
+    t = _one_track(menv)
+    path = f"/v2/sync/tracks/{t['id']}"
+    missing = menv.client.delete(path, headers=hdr(menv.token))
+    assert missing.status_code == 428 and missing.json()["code"] == "precondition_required"
+    for bad in ("abc", "0", "-1", 'W/"3"'):
+        r = menv.client.delete(path, headers={**hdr(menv.token), "If-Match": bad})
+        assert r.status_code == 400 and r.json()["code"] == "bad_version", (bad, r.text)
+
+
+def test_sync_delete_metadata_is_tombstone_and_idempotent(menv):
+    t = _one_track(menv)
+    path = f"/v2/sync/tracks/{t['id']}"
+    first = menv.client.delete(path, headers={**hdr(menv.token), **_im(t["updated_seq"])})
+    assert first.status_code == 200
+    body = first.json()
+    assert body["ok"] is True and body["deleted"] is True and body["updated_seq"] > t["updated_seq"]
+    # 重复 DELETE（响应丢失后的重放）仍返回 200，不产生新墓碑
+    again = menv.client.delete(path, headers={**hdr(menv.token), **_im(t["updated_seq"])})
+    assert again.status_code == 200 and again.json()["updated_seq"] == body["updated_seq"]
+    # 普通列表隐藏，同步带墓碑
+    listed = menv.client.get("/v2/tracks", headers=hdr(menv.token)).json()["items"]
+    assert all(i["id"] != t["id"] for i in listed)
+    sync = menv.client.get(f"/v2/sync?since_seq={t['updated_seq']}", headers=hdr(menv.token)).json()
+    assert [i["id"] for i in sync["items"]] == [t["id"]]
+    assert sync["items"][0]["deleted"] is True
+
+
+def test_sync_delete_cache_keeps_file_bytes(menv):
+    t = _one_track(menv, storage="cache")
+    before = list((menv.tmp / "cache").iterdir())
+    assert len(before) == 1
+    payload = before[0].read_bytes()
+    r = menv.client.delete(f"/v2/sync/tracks/{t['id']}",
+                           headers={**hdr(menv.token), **_im(t["updated_seq"])})
+    assert r.status_code == 200
+    # 墓碑只隐藏记录，不清缓存文件；清理任务仍按原规则回收
+    assert before[0].is_file() and before[0].read_bytes() == payload
+    assert menv.client.get(f"/v2/media/{t['id']}?stored_only=1",
+                           headers=hdr(menv.token)).status_code == 404
+
+
+def test_sync_delete_archive_is_protected_but_web_delete_still_works(menv):
+    t = _one_track(menv, storage="archive")
+    path = menv.tmp / "media"
+    file = next(path.iterdir())
+    before = (file.stat().st_size, file.read_bytes())
+    r = menv.client.delete(f"/v2/sync/tracks/{t['id']}",
+                           headers={**hdr(menv.token), **_im(t["updated_seq"])})
+    assert r.status_code == 409 and r.json()["code"] == "archive_protected"
+    # 页面正常列表仍在，文件字节与 SHA 不变
+    listed = menv.client.get("/v2/tracks", headers=hdr(menv.token)).json()["items"]
+    assert [i["id"] for i in listed] == [t["id"]]
+    assert (file.stat().st_size, file.read_bytes()) == before
+    # 旧网页接口行为不变：仍可给归档行写墓碑（兼容测试）
+    old = menv.client.delete(f"/v2/tracks/{t['id']}", headers=hdr(menv.token))
+    assert old.status_code == 200 and old.json()["deleted"] is True
+    assert file.is_file() and (file.stat().st_size, file.read_bytes()) == before
+
+
+def test_sync_delete_version_conflict_and_late_request_after_restore(menv):
+    t = _one_track(menv)
+    changed = menv.client.patch(f"/v2/tracks/{t['id']}", headers=hdr(menv.token),
+                                json={"title": "网页改过"}).json()
+    stale = menv.client.delete(f"/v2/sync/tracks/{t['id']}",
+                               headers={**hdr(menv.token), **_im(t["updated_seq"])})
+    assert stale.status_code == 412 and stale.json()["code"] == "track_version_conflict"
+    ok = menv.client.delete(f"/v2/sync/tracks/{t['id']}",
+                            headers={**hdr(menv.token), **_im(changed["updated_seq"])})
+    assert ok.status_code == 200
+    restored = menv.client.post(f"/v2/tracks/{t['id']}/restore", headers=hdr(menv.token)).json()
+    # 复活后，迟到的旧 DELETE（版本是第一次删除前的）必须被版本条件挡住
+    late = menv.client.delete(f"/v2/sync/tracks/{t['id']}",
+                              headers={**hdr(menv.token), **_im(t["updated_seq"])})
+    assert late.status_code == 412
+    again = menv.client.delete(f"/v2/sync/tracks/{t['id']}",
+                               headers={**hdr(menv.token), **_im(restored["updated_seq"])})
+    assert again.status_code == 200
+
+
+def test_sync_patch_title_is_conditional_and_title_only(menv):
+    t = _one_track(menv)
+    path = f"/v2/sync/tracks/{t['id']}"
+    missing = menv.client.patch(path, headers=hdr(menv.token), json={"title": "新名"})
+    assert missing.status_code == 428
+    extra = menv.client.patch(path, headers={**hdr(menv.token), **_im(t["updated_seq"])},
+                              json={"title": "新名", "pinned": True})
+    assert extra.status_code == 422
+    r = menv.client.patch(path, headers={**hdr(menv.token), **_im(t["updated_seq"])},
+                          json={"title": "  新名  "})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["title"] == "新名" and body["updated_seq"] > t["updated_seq"]
+    # 旧网页 PATCH 行为不变：无 If-Match、可改 pinned
+    old = menv.client.patch(f"/v2/tracks/{t['id']}", headers=hdr(menv.token),
+                            json={"title": "网页名", "pinned": True})
+    assert old.status_code == 200 and old.json()["title"] == "网页名" and old.json()["pinned"] is True
+
+
+def test_sync_patch_conflict_tombstone_and_missing(menv):
+    t = _one_track(menv)
+    path = f"/v2/sync/tracks/{t['id']}"
+    conflict = menv.client.patch(path, headers={**hdr(menv.token), **_im(t["updated_seq"] + 99)},
+                                 json={"title": "x"})
+    assert conflict.status_code == 412 and conflict.json()["code"] == "track_version_conflict"
+    empty = menv.client.patch(path, headers={**hdr(menv.token), **_im(t["updated_seq"])},
+                              json={"title": "   "})
+    assert empty.status_code == 400 and empty.json()["code"] == "bad_title"
+    deleted = menv.client.delete(path, headers={**hdr(menv.token), **_im(t["updated_seq"])}).json()
+    tomb = menv.client.patch(path, headers={**hdr(menv.token), **_im(deleted["updated_seq"])},
+                             json={"title": "x"})
+    assert tomb.status_code == 409 and tomb.json()["code"] == "track_deleted"
+    missing = menv.client.patch("/v2/sync/tracks/99999", headers={**hdr(menv.token), **_im(1)},
+                                json={"title": "x"})
+    assert missing.status_code == 404 and missing.json()["code"] == "track_not_found"
+
+
+def test_sync_patch_concurrent_same_version_only_one_wins(menv):
+    t = _one_track(menv)
+    path = f"/v2/sync/tracks/{t['id']}"
+    first = menv.client.patch(path, headers={**hdr(menv.token), **_im(t["updated_seq"])},
+                              json={"title": "A"})
+    second = menv.client.patch(path, headers={**hdr(menv.token), **_im(t["updated_seq"])},
+                               json={"title": "B"})
+    assert first.status_code == 200
+    assert second.status_code == 412 and second.json()["code"] == "track_version_conflict"
+    now = menv.client.get(f"/v2/tracks/{t['id']}", headers=hdr(menv.token)).json()
+    assert now["title"] == "A"
+
+
+def test_sync_writes_are_per_account(tmp_path):
+    env = build(tmp_path)
+    env.app.state.runtime.write(registration_open=True)
+    a = make_owner(env, name="sync_a")
+    b = make_owner(env, name="sync_b")
+    r = env.client.post("/v2/extract", headers=hdr(a), json={"input": "BVtest0001"})
+    tid = env.client.get(f"/v2/extraction-jobs/{r.json()['id']}", headers=hdr(a)).json()["track_id"]
+    seq = env.client.get(f"/v2/tracks/{tid}", headers=hdr(a)).json()["updated_seq"]
+    assert env.client.delete(f"/v2/sync/tracks/{tid}", headers={**hdr(b), **_im(seq)}).status_code == 404
+    assert env.client.patch(f"/v2/sync/tracks/{tid}", headers={**hdr(b), **_im(seq)},
+                            json={"title": "x"}).status_code == 404
+    # 越权写不能改到 A 的行
+    assert env.client.get(f"/v2/tracks/{tid}", headers=hdr(a)).json()["title"] != "x"
+
+
+def test_sync_write_routes_require_owner(menv):
+    t = _one_track(menv)
+    assert menv.client.delete(f"/v2/sync/tracks/{t['id']}").status_code == 401
+    assert menv.client.patch(f"/v2/sync/tracks/{t['id']}", json={"title": "x"}).status_code == 401
