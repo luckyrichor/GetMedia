@@ -207,8 +207,8 @@ def test_storage_report(menv):
 
 
 def test_all_media_routes_are_owner_only(menv):
-    for method, path in [("GET", "/v2/tracks"), ("GET", "/v2/sync"), ("GET", "/v2/media/1"),
-                         ("POST", "/v2/resolve"), ("POST", "/v2/extract"),
+    for method, path in [("GET", "/v2/tracks"), ("POST", "/v2/tracks"), ("GET", "/v2/sync"),
+                         ("GET", "/v2/media/1"), ("POST", "/v2/resolve"), ("POST", "/v2/extract"),
                          ("GET", "/v2/maintenance/storage")]:
         assert menv.client.request(method, path, json={} if method == "POST" else None).status_code == 401
 
@@ -270,3 +270,114 @@ def test_download_filename_sanitizes_hostile_title(menv):
     name = unquote(cd.split("filename*=UTF-8''", 1)[1])
     assert "/" not in name and "\\" not in name
     assert not name.startswith(".")
+
+
+# ---------- 手机端新建曲库条目（P0-2 阶段 1：POST /v2/tracks） ----------
+
+def push(env, token=None, **over):
+    """手机端上传"本机新增的一条"；只带元数据，没有文件、没有封面。"""
+    body = {"platform": "bilibili", "video_id": "BVpush0001", "page": 1,
+            "media_type": "audio", "title": "手机传上来的一条", "uploader": "某UP",
+            "duration_sec": 12.5,
+            "source_url": "https://www.bilibili.com/video/BVpush0001?p=1"}
+    body.update(over)
+    return env.client.post("/v2/tracks", headers=hdr(token or env.token), json=body)
+
+
+def test_create_metadata_row_is_idempotent(menv):
+    r = push(menv)
+    assert r.status_code == 200, r.text
+    first = r.json()
+    assert first["created"] is True
+    track = first["track"]
+    assert track["storage"] == "metadata" and track["has_file"] is False
+    assert track["title"] == "手机传上来的一条"
+    assert track["page"] == 1 and track["platform"] == "bilibili"
+    seq = track["updated_seq"]
+
+    again = push(menv, title="手机上的另一个标题")
+    assert again.status_code == 200
+    assert again.json()["created"] is False
+    assert again.json()["track"]["id"] == track["id"]
+    # 已存在就一个字都不改：标题保持服务器原值，seq 也不动（否则所有设备白拉一遍）
+    assert again.json()["track"]["title"] == "手机传上来的一条"
+    assert again.json()["track"]["updated_seq"] == seq
+
+
+def test_create_never_overwrites_web_edit(menv):
+    tid = push(menv).json()["track"]["id"]
+    menv.client.patch(f"/v2/tracks/{tid}", headers=hdr(menv.token), json={"title": "网页改的名字"})
+    again = push(menv, title="手机上的旧标题").json()
+    assert again["track"]["title"] == "网页改的名字"
+    assert again["track"]["updated_seq"] > 0
+
+
+def test_create_keeps_pages_apart(menv):
+    p1 = push(menv, page=1).json()["track"]
+    p2 = push(menv, page=2, source_url="https://www.bilibili.com/video/BVpush0001?p=2").json()["track"]
+    assert p1["id"] != p2["id"] and p1["page"] == 1 and p2["page"] == 2
+    listed = menv.client.get("/v2/tracks", headers=hdr(menv.token)).json()["items"]
+    assert len([t for t in listed if t["video_id"] == "BVpush0001"]) == 2
+
+
+def test_create_on_tombstone_is_409_with_row(menv):
+    tid = push(menv).json()["track"]["id"]
+    menv.client.delete(f"/v2/tracks/{tid}", headers=hdr(menv.token))
+    r = push(menv)
+    assert r.status_code == 409
+    body = r.json()
+    assert body["code"] == "track_deleted"
+    assert body["track"]["id"] == tid and body["track"]["deleted"] is True
+    # 不复活：服务器上仍然只有这一行，仍然是墓碑
+    listed = menv.client.get("/v2/tracks", headers=hdr(menv.token)).json()["items"]
+    assert [t["id"] for t in listed if t["video_id"] == "BVpush0001"] == []
+
+
+def test_create_rejects_bad_input(menv):
+    assert push(menv, platform="  ").status_code == 400
+    assert push(menv, video_id="").status_code == 400
+    assert push(menv, media_type="photo").status_code == 400
+    assert push(menv, page=0).status_code == 400
+    assert push(menv, title="   ").status_code == 400
+    # 错误码要稳定，客户端要按 code 分支
+    assert push(menv, media_type="photo").json()["code"] == "bad_media_type"
+
+
+def test_create_respects_row_cap(tmp_path):
+    env = build(tmp_path, library_max_rows=3)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env)
+    for i in range(3):
+        assert push(env, token, video_id=f"BVcap{i:04d}").status_code == 200
+    over = push(env, token, video_id="BVcap9999")
+    assert over.status_code == 409
+    assert over.json()["code"] == "library_full"
+
+
+def test_create_is_per_account(tmp_path):
+    env = build(tmp_path)
+    env.app.state.runtime.write(registration_open=True)
+    a = make_owner(env, name="boss")
+    b = make_owner(env, name="other")
+    assert push(env, a).json()["created"] is True
+    # 另一个账号同键：各建各的，互不可见
+    assert push(env, b).json()["created"] is True
+    la = env.client.get("/v2/tracks", headers=hdr(a)).json()["items"]
+    lb = env.client.get("/v2/tracks", headers=hdr(b)).json()["items"]
+    assert len(la) == 1 and len(lb) == 1 and la[0]["id"] != lb[0]["id"]
+
+
+def test_create_is_rate_limited_per_account(tmp_path):
+    """写入配额按账号计。429 必须带 Retry-After，否则客户端没法退避。"""
+    env = build(tmp_path, library_push_limit=(2, 60))
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env)
+    for i in range(2):
+        assert push(env, token, video_id=f"BVrate{i:04d}").status_code == 200
+    r = push(env, token, video_id="BVrate9999")
+    assert r.status_code == 429
+    assert r.json()["code"] == "rate_limited"
+    assert int(r.headers["Retry-After"]) >= 1
+    # 被拒之后没有偷偷建行
+    listed = env.client.get("/v2/tracks", headers=hdr(token)).json()["items"]
+    assert [t["video_id"] for t in listed] == ["BVrate0000", "BVrate0001"]

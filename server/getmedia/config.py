@@ -104,6 +104,10 @@ class Settings:
     cache_ttl_seconds: int = 86400          # web 临时缓存保留 1 天
     cache_quota_bytes: int = 5 * 1024**3    # 网页缓存 5 GiB
     archive_quota_bytes: int = 3 * 1024**3  # owner 服务器库 3 GiB
+    # 每账号曲库行数上限（只算未删除的元数据行）。手机端同步会往里写，防跑飞；0 = 不限制
+    library_max_rows: int = 20000
+    # 手机端写入配额：每账号 60 条/分钟（与备份上传同一套固定窗口，落库、重启不丢）
+    library_push_limit: tuple = (60, 60)
     # Argon2id（参数写入哈希串，可日后调整）
     argon_memory_kib: int = 65536
     argon_iterations: int = 3
@@ -250,6 +254,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         cache_ttl_seconds=_int_env(env, "GETMEDIA_CACHE_TTL_SECONDS", 86400, 60, 30 * 86400),
         cache_quota_bytes=_int_env(env, "GETMEDIA_CACHE_QUOTA_MB", 5120, 0, 51200) * 1024**2,
         archive_quota_bytes=_int_env(env, "GETMEDIA_ARCHIVE_QUOTA_MB", 3072, 0, 51200) * 1024**2,
+        library_max_rows=_int_env(env, "GETMEDIA_LIBRARY_MAX_ROWS", 20000, 0, 100000),
         argon_memory_kib=argon_mem,
         argon_iterations=argon_iter,
         creator_max_items=_int_env(env, "GETMEDIA_CREATOR_MAX_ITEMS", 50, 1, 50),

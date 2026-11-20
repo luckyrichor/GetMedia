@@ -19,6 +19,7 @@ from typing import Iterable, Literal
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from . import ratelimit
 from .config import Settings
 
 log = logging.getLogger("getmedia.media")
@@ -28,11 +29,18 @@ MEDIA_TYPES = ("audio", "video")
 
 
 class MediaError(Exception):
-    """带稳定 code 的业务错误，由 HTTP 层翻译。"""
+    """带稳定 code 的业务错误，由 HTTP 层翻译。
 
-    def __init__(self, code: str, detail: str, status: int = 400):
+    ``extra`` 里的键会平铺进错误响应体（如 409 带上冲突的 ``track``）；
+    ``headers`` 直接给响应头（如 429 的 ``Retry-After``，客户端要靠它退避）。
+    """
+
+    def __init__(self, code: str, detail: str, status: int = 400, *,
+                 extra: dict | None = None, headers: dict | None = None):
         super().__init__(detail)
         self.code, self.detail, self.status = code, detail, status
+        self.extra = extra or {}
+        self.headers = headers or {}
 
 
 @dataclass(frozen=True)
@@ -195,6 +203,76 @@ class MediaStore:
                      "seq": seq, "n": now, "i": track_id})
             row = c.execute(text(f"SELECT {_COLS} FROM tracks WHERE id=:i"), {"i": track_id}).first()
         return _row_to_dict(row)
+
+    def _hit_push(self, user_id: str) -> None:
+        """手机端写入的账号级配额（默认 60 条/分钟）。
+
+        与备份上传同一套落库固定窗口：重启不丢，**独立短事务**——被拒时不能把这个计数一起回滚掉。
+        超限返回 429 + ``Retry-After``，客户端按它整批退避，而不是继续硬打。
+        """
+        limit, window = self.s.library_push_limit
+        now = int(self.now())
+        with self.engine.begin() as c:
+            ok, retry = ratelimit.hit(c, f"library-push:{user_id}", limit, window, now)
+        if not ok:
+            raise MediaError("rate_limited", "同步太频繁，请稍后再试", 429,
+                             headers={"Retry-After": str(retry)})
+
+    def create_metadata(self, user_id: str, *, media_type: str, platform: str, video_id: str,
+                        page: int, title: str, uploader: str | None = None,
+                        duration_sec: float | None = None,
+                        source_url: str | None = None) -> tuple[dict, bool]:
+        """手机端"这条要进曲库"：新建一条仅元数据的行；**同键已存在就一个字都不改**。
+
+        与 :meth:`upsert` 的差别只有一处，但很关键：服务器上的 ``title`` 是权威，手机上传只是
+        告诉服务器"这条存在"。若这里照 ``upsert`` 那样覆盖标题，网页端改过的名字会被手机上的旧标题洗掉，
+        还会白白递增 ``updated_seq``，让所有设备重拉一遍。
+
+        墓碑行**不复活**：返回 409（``track_deleted``）并带上该行，由客户端弹"云端已删除"确认。
+        复活会让另一台设备刚做的删除失效。返回 ``(track, created)``。
+        """
+        self._hit_push(user_id)
+        if media_type not in MEDIA_TYPES:
+            raise MediaError("bad_media_type", "media_type 只能是 audio 或 video")
+        platform, video_id = (platform or "").strip(), (video_id or "").strip()
+        if not platform or not video_id:
+            raise MediaError("bad_key", "platform 与 video_id 不能为空")
+        if len(platform) > 32 or len(video_id) > 128:
+            raise MediaError("bad_key", "platform 或 video_id 过长")
+        if page < 1 or page > 9999:
+            raise MediaError("bad_page", "page 必须是 1-9999 的整数")
+        clean_title = (title or "").strip()[:200]
+        if not clean_title:
+            raise MediaError("bad_title", "标题不能为空")
+
+        params = {"u": user_id, "p": platform, "v": video_id, "g": page}
+        with self.engine.begin() as c:
+            row = c.execute(text(f"SELECT {_COLS} FROM tracks WHERE user_id=:u AND platform=:p "
+                                 "AND video_id=:v AND page=:g"), params).first()
+            if row is not None:
+                track = _row_to_dict(row)
+                if track["deleted"]:
+                    raise MediaError("track_deleted", "该条目已被删除", 409, extra={"track": track})
+                return track, False
+
+            cap = int(getattr(self.s, "library_max_rows", 0) or 0)
+            if cap > 0:
+                used = int(c.execute(text("SELECT COUNT(*) FROM tracks WHERE user_id=:u AND deleted=0"),
+                                     {"u": user_id}).scalar_one())
+                if used >= cap:
+                    raise MediaError("library_full", f"云端曲库已达上限（{cap} 条），请先在网页端清理", 409)
+
+            seq = self._next_seq(c)
+            now = self.now()
+            c.execute(text(
+                "INSERT INTO tracks(user_id, media_type, platform, video_id, page, title, uploader,"
+                " duration_sec, source_url, storage, pinned, updated_seq, created_at, updated_at)"
+                " VALUES(:u,:mt,:p,:v,:g,:t,:up,:d,:su,'metadata',0,:seq,:n,:n)"),
+                {**params, "mt": media_type, "t": clean_title, "up": uploader,
+                 "d": duration_sec, "su": source_url, "seq": seq, "n": now})
+            track_id = int(c.execute(text("SELECT last_insert_rowid()")).scalar_one())
+            row = c.execute(text(f"SELECT {_COLS} FROM tracks WHERE id=:i"), {"i": track_id}).first()
+        return _row_to_dict(row), True
 
     def patch(self, user_id: str, track_id: int, *, title: str | None = None,
               uploader: str | None = None, pinned: bool | None = None) -> dict:

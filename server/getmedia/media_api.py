@@ -59,9 +59,26 @@ class TrackPatchBody(BaseModel):
     pinned: bool | None = None
 
 
+class TrackCreateBody(BaseModel):
+    """手机端"这条要进曲库"（P0-2 阶段 1）。
+
+    刻意不收 ``cover_url``：隐私 v3 明确"不同步封面地址"。字段上限只做粗挡，
+    空值与长度规整在 ``MediaStore.create_metadata`` 里判 400，返回稳定错误码。
+    """
+    model_config = ConfigDict(extra="forbid")
+    platform: str = Field(max_length=32)
+    video_id: str = Field(max_length=128)
+    page: int = 1                           # 越界在 store 里判 400（保持稳定错误码，不用 422）
+    media_type: str = Field(max_length=16)
+    title: str = Field(max_length=500)
+    uploader: str | None = Field(None, max_length=100)
+    duration_sec: float | None = Field(None, ge=0)
+    source_url: str | None = Field(None, max_length=2048)
+
+
 def _translate(exc: Exception) -> None:
     if isinstance(exc, MediaError):
-        raise ApiError(exc.status, exc.code, exc.detail) from exc
+        raise ApiError(exc.status, exc.code, exc.detail, headers=exc.headers, extra=exc.extra) from exc
     if isinstance(exc, ResolveError):
         raise ApiError(exc.status, exc.code, exc.detail) from exc
     raise exc
@@ -254,6 +271,25 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
         next_seq = max((i["updated_seq"] for i in items), default=since_seq)
         return {"items": items, "next_seq": next_seq, "has_more": len(items) >= limit,
                 "server_time": store.now()}
+
+    @app.post("/v2/tracks")
+    def create_track(body: TrackCreateBody, ctx: AuthCtx = Depends(guard)):
+        """手机端上传"本机新增的条目"（只写元数据，不落盘）。
+
+        - 同键已存在（且未删除）→ 200 ``created=false``，**既有行一个字段都不改**；
+        - 同键是墓碑 → 409 ``track_deleted``，响应体里带 ``track``，由客户端弹确认；
+        - 超过每账号行数上限 → 409 ``library_full``。
+        """
+        try:
+            track, created = store.create_metadata(
+                ctx.user_id, media_type=body.media_type, platform=body.platform,
+                video_id=body.video_id, page=body.page, title=body.title,
+                uploader=body.uploader, duration_sec=body.duration_sec,
+                source_url=body.source_url,
+            )
+        except MediaError as exc:
+            _translate(exc)
+        return {"track": track, "created": created}
 
     @app.get("/v2/tracks/{track_id}")
     def get_track(track_id: str, ctx: AuthCtx = Depends(guard)):
