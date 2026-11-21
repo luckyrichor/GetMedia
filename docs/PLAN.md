@@ -361,6 +361,7 @@ GetMedia/
 | 签名密钥丢失 → 已安装 App 无法升级 | 用户的 Mac + 离线加密备份（均不在服务器上） |
 | **443 的 server 块由多个项目共用**，配置出错会同时影响 GetAudio、GetVideo 等 | GetMedia 只交付 snippet 与 http 级文件，块内仅加一行 include；部署前备份；`nginx -t` 通过才 reload；回退即删一行 |
 | **GetMedia 网页与同 IP 的其他项目同源**（同一个 `https://<IP>`）：其他项目若出现脚本注入，可对 GetMedia 页面发起同源请求 | Cookie 为 HttpOnly 且 `Path=/getmedia/api/`；网页不在 localStorage 存机密；CSP `default-src 'self'`；写操作要求自定义头；同 IP 上其他项目的页面（如有）也应保持严格 CSP，由用户自行负责 |
+| **待办（技术债）：服务端曲库唯一键不含 `media_type`** | `tracks` 的唯一键是 `UNIQUE(user_id, platform, video_id, page)`（`server/getmedia/db.py`），客户端匹配键与本地 id 同样只按 `(platform, video_id, page)`（`LibrarySyncEngine`/`LocalIds`），**都不带 `media_type`**。后果：同一作品若本机同时存了一条音频、一条视频，两条上传会命中同一个云端行（第二条 `create_metadata` 返回 `created=false`），两条本机行被挂上**同一个 `serverId`**，云端只剩一行、媒体类型被第一条占据，"同一作品两种类型"的区分丢失。手机 1 是纯音频曲库（0.1.1），本次升级不受影响，但这是结构性缺陷，需评估是否把 `media_type` 加入唯一键（要连带评估对既有数据、网页端、删除/墓碑匹配键的影响），暂不处理 |
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
@@ -369,6 +370,7 @@ GetMedia/
 | v3 | 2026-10-31 | 澄清免费版必须注册并开放注册（"注册全关"仅为上线前准备期）；澄清免费版/完整版/owner 关系；协议同意绑定文本哈希；Argon2id 改用 `cryptography`、补 `python-multipart`；登记证书依赖风险；写明"验收通过"含义（§17）；用户确认 `9443` 与音频+视频合并；用户确认生效 |
 | v4 | 2026-10-31 | GetMedia 改为挂在 443 的 `/getmedia/` 前缀（网页 `/getmedia/`，接口 `/getmedia/api/`），取消 `9443` 端口与防火墙步骤；Cookie 改为 `__Secure-` 前缀并限定路径；nginx 交付改为 snippet + http 级配置 + logrotate；签名密钥不放生产服务器；证书告警 24 小时；WP5 拆 5a/5b；删除关于线上现网弱点的描述；证书续期任务最终由 GetMedia 维护，增加交接步骤（§15-8），GetAudio、GetVideo 将退役；用户确认生效 |
 | v4.1 | 2026-10-31 | WP4 实现中的修订（均不改变对外行为与安全目标）：①nginx 去前缀改用带 URI 的 `proxy_pass`，因 `rewrite` 会让认证限流失效；②免费路径白名单放进 http 级 `map`（正则键）；③反馈用独立的精确 location；④`runtime.json` 移到数据目录；⑤管理 CLI 增加 `invite-required on/off`（补齐 §8 要求）、`alert`、`mail-test` |
+| v4.2 | 2026-11-20 | 仅登记技术债，不改对外行为：§16 风险表新增一行——服务端曲库唯一键 `(user_id, platform, video_id, page)` 不含 `media_type`，同一作品存音频+视频两条会上传命中同一云端行、两条本机行共享同一 `serverId`（见风险表待办） |
 
 ## 17. "验收通过"的含义
 
