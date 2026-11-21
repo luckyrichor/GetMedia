@@ -138,6 +138,7 @@ class Settings:
     creator_max_items: int = 50        # 单次最多返回多少条
     creator_max_start: int = 500       # 起点上限
     creator_page_size: int = 20        # 批量任务扫描的每页条数
+    creator_scan_batch: int = 300      # 「全部作品」单次窗口条数（抖音桥接翻页很贵，一次抓够）
     creator_max_pages_per_run: int = 200   # 单次运行最多翻多少页（防一次跑太久）
     creator_audio_mb_per_min: float = 1.0  # 空间预估：音频
     creator_video_mb_per_min: float = 30.0  # 空间预估：视频
@@ -258,6 +259,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         argon_memory_kib=argon_mem,
         argon_iterations=argon_iter,
         creator_max_items=_int_env(env, "GETMEDIA_CREATOR_MAX_ITEMS", 50, 1, 50),
+        creator_scan_batch=_int_env(env, "GETMEDIA_CREATOR_SCAN_BATCH", 300, 20, 1200),
         llm_api_key=env.get("GETMEDIA_LLM_API_KEY", ""),
         llm_base_url=env.get("GETMEDIA_LLM_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3"),
         llm_models=tuple(m.strip() for m in env.get("GETMEDIA_LLM_MODELS", "").split(",") if m.strip()),

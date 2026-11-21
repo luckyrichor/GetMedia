@@ -137,7 +137,8 @@ def test_date_range_and_early_stop(jenv):
 
 
 def test_all_mode_segments_and_resume(tmp_path):
-    env = build(tmp_path, creator_max_pages_per_run=2, creator_page_size=20)
+    env = build(tmp_path, creator_max_pages_per_run=2, creator_page_size=20,
+                creator_scan_batch=20)
     env.app.state.runtime.write(registration_open=True)
     token = make_owner(env, name="boss")
     r = env.client.post("/v2/creators/jobs", headers=hdr(token),
@@ -151,6 +152,33 @@ def test_all_mode_segments_and_resume(tmp_path):
     assert again["status"] == "done", again
     items = env.client.get(f"/v2/creators/jobs/{job['id']}/items", headers=hdr(token)).json()
     assert items["total"] == 45  # 续跑没有重复
+
+
+def test_all_mode_uses_scan_batch(tmp_path):
+    """「全部作品」要一次抓够：抖音桥接每个窗口都得从头滚到 need，按 20 条翻太亏。"""
+    lister = Lister(make_videos(300))
+    env = build(tmp_path, lister=lister, creator_scan_batch=200)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/jobs", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "all"})
+    job = env.client.get(f"/v2/creators/jobs/{r.json()['id']}", headers=hdr(token)).json()
+    assert job["status"] == "done", job
+    assert job["total"] == 300
+    # 第一窗口就要 200 条，而不是 20；300 条两窗扫完
+    assert lister.calls == [(1, 200), (201, 200)]
+
+
+def test_all_mode_small_creator_single_window(tmp_path):
+    """45 条的小博主：一窗抓完，不再分两段。"""
+    env = build(tmp_path, creator_scan_batch=200)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/jobs", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "all"})
+    job = env.client.get(f"/v2/creators/jobs/{r.json()['id']}", headers=hdr(token)).json()
+    assert job["status"] == "done" and job["total"] == 45, job
+    assert env.lister.calls == [(1, 200)]
 
 
 def test_include_pinned_false_excludes(jenv):
@@ -196,7 +224,7 @@ def test_import_items_dedupes(jenv):
 
 
 def test_pause_cancel_and_retry(tmp_path):
-    env = build(tmp_path, creator_max_pages_per_run=1)
+    env = build(tmp_path, creator_max_pages_per_run=1, creator_scan_batch=20)
     env.app.state.runtime.write(registration_open=True)
     token = make_owner(env, name="boss")
     r = env.client.post("/v2/creators/jobs", headers=hdr(token),

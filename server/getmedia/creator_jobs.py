@@ -425,6 +425,12 @@ class CreatorJobService:
                         n=job["limit_n"], include_pinned=job["include_pinned"])
         start = int((job["cursor"] or {}).get("start") or 1)
         limit_pages = max_pages if max_pages is not None else self.s.creator_max_pages_per_run
+        # 「全部作品」一次抓够：抖音的作品列表只能靠浏览器桥接，每次窗口都要从头
+        # 重新滚到 need 深度，按 20 条一页翻 300 条会做十几轮重复抓取（几分钟）。
+        # 其余模式仍按 creator_page_size 小步走，latest_n/date_range 要尽早停。
+        page_size = int(self.s.creator_page_size)
+        if job["mode"] == "all":
+            page_size = max(page_size, int(getattr(self.s, "creator_scan_batch", 0) or 0))
 
         with self.engine.begin() as c:
             c.execute(text("UPDATE creator_jobs SET status='running', started_at=COALESCE(started_at,:n),"
@@ -435,7 +441,7 @@ class CreatorJobService:
         try:
             pinned = self.pinned_fn(ref, cookie_file)
             while pages < limit_pages:
-                window = self.window_fn(ref, start, self.s.creator_page_size, cookie_file)
+                window = self.window_fn(ref, start, page_size, cookie_file)
                 if not window.items:
                     break
                 stop = self._absorb(job_id, window.items, sel, pinned, job["media_type"])

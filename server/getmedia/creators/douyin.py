@@ -156,8 +156,43 @@ _SEC_UID_RE = re.compile(r"^MS4wLjAB[A-Za-z0-9_-]{8,}$")
 
 # 浏览器桥接单次抓取的硬上限。max_items 跟着 need 长（否则「全部作品」翻不深），
 # scrolls 也按 need 反推，但两者都要封顶：滚得越多越慢、越容易触发验证码。
-_MAX_CAPTURE_ITEMS = 600
-_MAX_CAPTURE_SCROLLS = 40
+_MAX_CAPTURE_ITEMS = 1200
+_MAX_CAPTURE_SCROLLS = 90
+# 连续这么多次滚动都没有新作品，就认为页面不再吐数据（验证码、登录墙、列表见底），
+# 提前收工，不要空转到次数用完。
+_STALL_STEPS = 8
+
+# 抖音主页的滚动条不在 body 上，而是一个内部 route 容器。对 body 调
+# window.scrollTo 完全不生效——这正是「每次都只抓到首屏 56 条」的原因。
+# 这里现找可滚动的最近祖先：取「可滚动余量最大」的那个，把 scrollTop 往前推一屏，
+# 并手动派发 scroll 事件（框架监听的是它）。
+_SCROLL_STEP_JS = """() => {
+  let best = null, bestRoom = 0;
+  document.querySelectorAll('*').forEach(e => {
+    const s = getComputedStyle(e);
+    if (s.overflowY !== 'auto' && s.overflowY !== 'scroll') return;
+    const room = e.scrollHeight - e.clientHeight;
+    if (room > bestRoom) { bestRoom = room; best = e; }
+  });
+  if (!best) {
+    window.scrollTo(0, document.body.scrollHeight);
+    return -1;
+  }
+  best.scrollTop = best.scrollTop + best.clientHeight * 0.85;
+  best.dispatchEvent(new Event('scroll', {bubbles: true}));
+  return best.scrollTop;
+}"""
+
+
+def _scroll_budget(need: int) -> int:
+    """按「要抓 need 条」反推最多滚几次。
+
+    平台每批约 18 条，实测平均一两步触发一批（有时一步来两批），
+    所以按批次数的两倍再留 4 步余量；下限沿用配置值，上限封顶。
+    """
+    batches = (max(1, need) + 17) // 18
+    configured = max(1, int(getattr(settings, "douyin_browser_max_scrolls", 6)))
+    return max(configured, min(batches * 2 + 4, _MAX_CAPTURE_SCROLLS))
 
 
 def _iter_users(value: Any):
@@ -394,11 +429,7 @@ class DouyinBrowserBridge:
                     meta["profile"] = user
 
         max_items = min(max(need + 18, 36), _MAX_CAPTURE_ITEMS)
-        # 滚动的次数必须跟得上 need：平台每页约 18 条，只按配置的固定次数滚，
-        # 「全部作品」在几十条处就撞上限，报「不足以覆盖起点」。这里按 need 反推下限，
-        # 再用 _MAX_CAPTURE_SCROLLS 兜住时间与风控成本。
-        scrolls = max(1, int(settings.douyin_browser_max_scrolls))
-        scrolls = max(scrolls, min((need + 17) // 18 + 2, _MAX_CAPTURE_SCROLLS))
+        scrolls = _scroll_budget(need)
         timeout_ms = int(settings.douyin_browser_timeout * 1000)
 
         with sync_playwright() as playwright:
@@ -454,18 +485,26 @@ class DouyinBrowserBridge:
                     if _blocked_reason(page):
                         raise CreatorUnavailable("抖音安全验证未完成，请重试")
 
+                idle = 0
                 for _ in range(scrolls):
-                    if len(captured) >= max_items and not meta["has_more"]:
-                        break
-                    try:
-                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    except Exception:
-                        pass
-                    page.wait_for_timeout(1200)
                     if len(captured) >= max_items:
                         break
                     if captured and not meta["has_more"]:
                         break
+                    before = len(captured)
+                    try:
+                        page.evaluate(_SCROLL_STEP_JS)
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(1200)
+                    if len(captured) > before:
+                        idle = 0
+                    else:
+                        idle += 1
+                        if idle >= _STALL_STEPS:
+                            log.info("抖音主页滚动无新作品（已抓 %s 条，连续 %s 步），提前收工",
+                                     len(captured), idle)
+                            break
                     blocked = _blocked_reason(page)
                     if blocked:
                         raise CreatorUnavailable(f"抖音页面触发安全验证（{blocked}），请重试或更换 Cookie")
@@ -611,11 +650,13 @@ class DouyinCreatorProvider:
             raise CreatorRangeError(f"范围超出：该博主只有 {total} 条公开视频")
         if start > len(items):
             if catalog.get("has_more"):
-                # 这不是「起点设得太大」——是单次能抓到的深度上限（桥接滚动次数/条数）。
-                # 真正的「全部作品」由建任务后的 run() 循环按游标续扫，不要去调小起点。
+                # 这不是「起点设得太大」——是单次能抓到的深度上限（滚动批次/条数上限）。
+                # 正常情况下 run() 会靠 _scroll_budget 把窗口深度顶到 need；真撞上
+                # 上限说明页面不再吐数据（登录墙/验证码），如实告诉用户，别再让人
+                # 「改用建批量任务」——他就在批量任务里。
                 raise CreatorUnavailable(
                     f"本次只抓到 {len(items)} 条，距起点 {start} 还不够；"
-                    "这是单次抓取深度上限，不是起点问题——请改用「建批量任务」，它会从游标续扫"
+                    "这是单次抓取深度上限（平台不再继续返回作品），换一批 Cookie 或稍后重试"
                 )
             raise CreatorRangeError(f"范围超出：该博主只有 {len(items)} 条公开视频")
 
