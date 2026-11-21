@@ -236,6 +236,18 @@ export function CreatorsPage() {
     writeHidden([]);
   }
 
+  /** 右键号码/昵称时自动选中这一整段文字，让浏览器右键菜单里的「复制」直接可用，
+   *  不用先拖动光标去选。不阻止默认菜单，用户点菜单里的「复制」即可复制。 */
+  function selectOnContextMenu(e: MouseEvent) {
+    const el = e.currentTarget as HTMLElement;
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
   async function copyText(text: string, id: number) {
     try {
       await navigator.clipboard.writeText(text);
@@ -725,8 +737,10 @@ export function CreatorsPage() {
                 {/* 号放昵称前面：先「抖音号」纯文字（无框），再带框的数字胶囊，两者分开；
                     有「抖音号」就知道是抖音，不再单独放平台标签 */}
                 {creatorIdLabel(j) && <span class="job-id-label">{creatorIdLabel(j)}</span>}
-                {creatorId(j) && <span class="tag job-id">{creatorId(j)}</span>}
-                <span class="job-who ellipsis" title={nickName(j)}>{nickName(j)}</span>
+                {creatorId(j) && (
+                  <span class="tag job-id" onContextMenu={selectOnContextMenu}>{creatorId(j)}</span>
+                )}
+                <span class="job-who ellipsis" title={nickName(j)} onContextMenu={selectOnContextMenu}>{nickName(j)}</span>
                 <span class="grow" />
                 <span class="small muted nowrap" title="发起时间">
                   {relTime(j.created_at)} · {fmtDateTime(j.created_at)}
