@@ -80,6 +80,8 @@ __pycache__/
 /docs/superpowers/plans/*-getmedia-stage[45].md
 # 隐私说明 v3 草稿：未生效的文本不进公开仓库，生效时以正式文件替换 docs/legal/privacy-policy.md
 /docs/legal/privacy-policy-v3-draft.md
+# 隐私说明 v3 审计（对照线上文案与实际行为，含未公开的内部字段与代码依据）：只留本地
+/docs/legal/privacy-v3-audit.md
 # 含真机设备序列号与真实曲库条目（博主名、serverId、具体视频）：只留本地
 /docs/phone1-upgrade-plan.md
 /docs/stage6-download-design.md

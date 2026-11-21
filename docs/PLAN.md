@@ -362,6 +362,7 @@ GetMedia/
 | **443 的 server 块由多个项目共用**，配置出错会同时影响 GetAudio、GetVideo 等 | GetMedia 只交付 snippet 与 http 级文件，块内仅加一行 include；部署前备份；`nginx -t` 通过才 reload；回退即删一行 |
 | **GetMedia 网页与同 IP 的其他项目同源**（同一个 `https://<IP>`）：其他项目若出现脚本注入，可对 GetMedia 页面发起同源请求 | Cookie 为 HttpOnly 且 `Path=/getmedia/api/`；网页不在 localStorage 存机密；CSP `default-src 'self'`；写操作要求自定义头；同 IP 上其他项目的页面（如有）也应保持严格 CSP，由用户自行负责 |
 | **待办（技术债）：服务端曲库唯一键不含 `media_type`** | `tracks` 的唯一键是 `UNIQUE(user_id, platform, video_id, page)`（`server/getmedia/db.py`），客户端匹配键与本地 id 同样只按 `(platform, video_id, page)`（`LibrarySyncEngine`/`LocalIds`），**都不带 `media_type`**。后果：同一作品若本机同时存了一条音频、一条视频，两条上传会命中同一个云端行（第二条 `create_metadata` 返回 `created=false`），两条本机行被挂上**同一个 `serverId`**，云端只剩一行、媒体类型被第一条占据，"同一作品两种类型"的区分丢失。手机 1 是纯音频曲库（0.1.1），本次升级不受影响，但这是结构性缺陷，需评估是否把 `media_type` 加入唯一键（要连带评估对既有数据、网页端、删除/墓碑匹配键的影响），暂不处理 |
+| **待办（下次必须出 v4 时一并修的隐私措辞，共 4 处）** | 均属"文案比实际宽松/更宽"方向，**无实际行为超出承诺的风险**，故维持 v3 不出 v4。下次因别的原因必须出 v4 时一并修：①§1.3 诊断内容：文案说"最近若干步骤的状态码、耗时和阶段"，客户端实际只发 `app_version`/`os`/`device`/`channel`/`locale` 5 个字段（`AccountScreens.kt` 诊断 JSON、网页 `clientinfo.ts` 只取粗粒度），文案比实际宽；②§1.2/§4 最近登录 IP 保留期限：文案未单独写 IP 保留期，实际 `sessions.last_ip` 随会话保留（90 天会话 + 30 天宽限清理），比"活跃信息/安全日志最长 30 天"更长，需在 v4 明确；③§1.2 活跃信息措辞：实际按 `(day, session_id)` 每天每设备一次（heartbeats 主键），文案"每天最多一次"可更精确；④（本轮补查新增）§1.7 说同步保存"网页端置顶状态 `pinned`"，但手机端写通道（`POST /v2/tracks` 8 字段、`PATCH /v2/sync/tracks/{id}` 仅 `title`）**写不进 `pinned`**，`pinned` 仅网页端 `PATCH /v2/tracks/{id}` 写入——文案比实际宽，非隐私风险，v4 时把"置顶状态"的写入方限定为网页端即可。详见 `docs/legal/privacy-v3-audit.md`（本地忽略，不入库） |
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
@@ -371,6 +372,7 @@ GetMedia/
 | v4 | 2026-10-31 | GetMedia 改为挂在 443 的 `/getmedia/` 前缀（网页 `/getmedia/`，接口 `/getmedia/api/`），取消 `9443` 端口与防火墙步骤；Cookie 改为 `__Secure-` 前缀并限定路径；nginx 交付改为 snippet + http 级配置 + logrotate；签名密钥不放生产服务器；证书告警 24 小时；WP5 拆 5a/5b；删除关于线上现网弱点的描述；证书续期任务最终由 GetMedia 维护，增加交接步骤（§15-8），GetAudio、GetVideo 将退役；用户确认生效 |
 | v4.1 | 2026-10-31 | WP4 实现中的修订（均不改变对外行为与安全目标）：①nginx 去前缀改用带 URI 的 `proxy_pass`，因 `rewrite` 会让认证限流失效；②免费路径白名单放进 http 级 `map`（正则键）；③反馈用独立的精确 location；④`runtime.json` 移到数据目录；⑤管理 CLI 增加 `invite-required on/off`（补齐 §8 要求）、`alert`、`mail-test` |
 | v4.2 | 2026-11-20 | 仅登记技术债，不改对外行为：§16 风险表新增一行——服务端曲库唯一键 `(user_id, platform, video_id, page)` 不含 `media_type`，同一作品存音频+视频两条会上传命中同一云端行、两条本机行共享同一 `serverId`（见风险表待办） |
+| v4.3 | 2026-11-20 | 隐私说明 v3 审计补查两处（客户端主动写服务器的字段 vs §1.7、墓碑保留期限与注销清理），均无"实际行为超出文案承诺"的新差异，维持 v3 不出 v4；§16 风险表新增"下次必须出 v4 时一并修的隐私措辞（共 4 处）"待办行 |
 
 ## 17. "验收通过"的含义
 
