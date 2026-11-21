@@ -166,7 +166,6 @@ function Header({ me }: { me: Me }) {
       </div>
       <div class="who">
         <span class="muted small">{me.login_name}</span>
-        <span class="tag">{me.tier}</span>
         <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => void logout()}>
           退出
         </button>
@@ -202,10 +201,6 @@ function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
         <Nav path={path} />
         <main class="content">{body}</main>
       </div>
-      <footer class="foot">
-        <span class="muted small">owner 通道 · 无第三方脚本/字体 · 不索引</span>
-        <span class="muted small">构建 {__BUILD__}</span>
-      </footer>
     </>
   );
 }
