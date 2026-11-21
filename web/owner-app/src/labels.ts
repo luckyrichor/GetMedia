@@ -18,9 +18,10 @@ export const STORAGE_DESC: Record<string, string> = {
   archive: '文件长期留在服务器，但空间不足时同样会清理。',
 };
 
-/** 输出格式：视频四种、音频四种。展示用后缀名，说明放下拉提示里。 */
+/** 输出格式：视频四种、音频四种。展示用后缀名，说明放下拉提示里。
+ *  source 是「平台给什么文件就存什么、不转码」，没有固定后缀，显示成「原始格式」不加点。 */
 export const FORMAT: Record<string, string> = {
-  source: '.源格式',
+  source: '原始格式',
   mp4: '.mp4',
   mkv: '.mkv',
   webm: '.webm',
