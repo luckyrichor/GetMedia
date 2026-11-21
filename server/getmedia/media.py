@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import shutil
 from dataclasses import dataclass
@@ -200,7 +201,7 @@ class MediaStore:
         if storage == "cache":
             track_sql = ("SELECT id, media_path, bytes, COALESCE(last_access_at, updated_at) AS at"
                          " FROM tracks WHERE storage='cache' AND deleted=0")
-            item_sql = ("SELECT i.id, i.media_path, i.bytes, COALESCE(i.stored_at, 0) AS at"
+            item_sql = ("SELECT i.id, i.media_path, i.bytes, i.files_json, COALESCE(i.stored_at, 0) AS at"
                         " FROM creator_items i JOIN creator_jobs j ON j.id=i.job_id"
                         " WHERE j.storage='cache' AND i.media_path IS NOT NULL")
             if expired:
@@ -213,7 +214,7 @@ class MediaStore:
         else:
             track_sql = ("SELECT id, media_path, bytes, COALESCE(created_at, 0) AS at"
                          " FROM tracks WHERE storage='archive' AND deleted=0 AND media_path IS NOT NULL")
-            item_sql = ("SELECT i.id, i.media_path, i.bytes, COALESCE(i.stored_at, 0) AS at"
+            item_sql = ("SELECT i.id, i.media_path, i.bytes, i.files_json, COALESCE(i.stored_at, 0) AS at"
                         " FROM creator_items i JOIN creator_jobs j ON j.id=i.job_id"
                         " WHERE j.storage='archive' AND i.media_path IS NOT NULL")
         params = {"n": now, "k": now - 300}
@@ -221,6 +222,7 @@ class MediaStore:
             for r in c.execute(text(sql), params).all():
                 m = r._mapping
                 rows.append({"kind": kind, "id": int(m["id"]), "path": m["media_path"],
+                             "files": _files_of(m.get("files_json")),
                              "bytes": int(m["bytes"] or 0), "at": int(m["at"] or 0)})
         rows.sort(key=lambda r: r["at"])
         return rows
@@ -248,13 +250,15 @@ class MediaStore:
     def _drop_one(self, c, row: dict, storage: str) -> None:
         """删掉一个落盘文件并清掉记录里的文件字段（条目本身保留）。"""
         base = self.dir_for(storage)
-        if row["path"]:
-            p = base / row["path"]
+        paths = {row["path"]} if row["path"] else set()
+        paths |= {meta["path"] for meta in row.get("files", {}).values() if meta.get("path")}
+        for rel in paths:
+            p = base / rel
             try:
                 if p.is_file():
                     p.unlink()
             except OSError:
-                log.warning("%s 文件删除失败：%s", storage, row["path"])
+                log.warning("%s 文件删除失败：%s", storage, rel)
         now = self.now()
         if row["kind"] == "track":
             seq = self._next_seq(c)
@@ -262,8 +266,8 @@ class MediaStore:
                            " cache_expires_at=NULL, updated_seq=:s, updated_at=:n WHERE id=:i"),
                       {"s": seq, "n": now, "i": row["id"]})
         else:
-            c.execute(text("UPDATE creator_items SET media_path=NULL, bytes=0, stored_at=NULL,"
-                           " store_expires_at=NULL, download_state='pending',"
+            c.execute(text("UPDATE creator_items SET media_path=NULL, files_json=NULL, bytes=0,"
+                           " stored_at=NULL, store_expires_at=NULL, download_state='pending',"
                            " store_error='服务器空间已满，文件已清理（可重新下载）', updated_at=:n"
                            " WHERE id=:i"), {"n": now, "i": row["id"]})
 
@@ -694,6 +698,9 @@ class MediaStore:
             known = {r[0] for r in c.execute(text("SELECT media_path FROM tracks WHERE media_path IS NOT NULL"))}
             known |= {r[0] for r in c.execute(
                 text("SELECT media_path FROM creator_items WHERE media_path IS NOT NULL"))}
+            for (raw,) in c.execute(text(
+                    "SELECT files_json FROM creator_items WHERE files_json IS NOT NULL")):
+                known |= {meta["path"] for meta in _files_of(raw).values() if meta.get("path")}
         n = 0
         for d in (self.s.media_dir, self.s.cache_dir):
             if not d.is_dir():
@@ -705,6 +712,18 @@ class MediaStore:
                     except OSError:
                         pass
         return n
+
+
+def _files_of(raw: str | None) -> dict:
+    """条目里的多格式清单（{格式: {path, bytes}}）；旧行没有这个字段就是空。"""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and v.get("path")} \
+        if isinstance(data, dict) else {}
 
 
 __all__ = ["MediaStore", "MediaError", "TrackFile", "STORAGES", "MEDIA_TYPES", "shutil"]

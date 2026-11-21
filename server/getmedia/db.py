@@ -463,6 +463,17 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "ALTER TABLE creator_items ADD COLUMN store_error TEXT",
         "CREATE INDEX IF NOT EXISTS idx_creator_items_stored ON creator_items(stored_at)",
     ]),
+    # v15 批量提取多格式 + 任务卡信息：
+    # ``formats`` 是这一批要产出哪些格式（source/mp4/mkv/webm 或 m4a/mp3/flac/wav），
+    # ``files_json`` 记条目在服务器上的每个格式对应哪个文件（{格式: {path, bytes}}），
+    # ``added_at`` 是条目入库时间（表头「提取时间」用它，落盘后另有 stored_at）。
+    (15, [
+        "ALTER TABLE creator_jobs ADD COLUMN formats TEXT",
+        "ALTER TABLE creator_jobs ADD COLUMN source_input TEXT",
+        "ALTER TABLE creator_items ADD COLUMN files_json TEXT",
+        "ALTER TABLE creator_items ADD COLUMN added_at INTEGER",
+        "UPDATE creator_items SET added_at = updated_at WHERE added_at IS NULL",
+    ]),
 ]
 
 

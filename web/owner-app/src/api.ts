@@ -31,8 +31,9 @@ export const mediaUrl = (trackId: number) => `${BASE}/api/v2/media/${trackId}`;
 /** 下载到本机：同一地址加 `download=1`，服务端按附件下发，文件名是条目标题。 */
 export const downloadUrl = (trackId: number) => `${mediaUrl(trackId)}?download=1`;
 /** 批量任务里的单条作品：服务端用扫描时存下的播放地址转发，过期时 B 站会现解析。 */
-export const creatorItemUrl = (jobId: number, videoId: string) =>
-  `${BASE}/api/v2/creators/jobs/${jobId}/items/${encodeURIComponent(videoId)}/file`;
+export const creatorItemUrl = (jobId: number, videoId: string, fmt?: string) =>
+  `${BASE}/api/v2/creators/jobs/${jobId}/items/${encodeURIComponent(videoId)}/file`
+  + (fmt ? `?fmt=${encodeURIComponent(fmt)}` : '');
 export const feedbackImageUrl = (id: string, index: number) =>
   `${BASE}/api/v2/feedback/${encodeURIComponent(id)}/images/${index}`;
 
@@ -94,6 +95,9 @@ export interface FeedbackQuery {
 
 // ---------------- 媒体库 ----------------
 export type MediaType = 'audio' | 'video';
+
+/** 批量提取要产出的格式：视频四种、音频四种（source = 平台给什么就存什么）。 */
+export type FormatKey = 'source' | 'mp4' | 'mkv' | 'webm' | 'm4a' | 'mp3' | 'flac' | 'wav';
 
 export interface Track {
   id: number;
@@ -201,6 +205,10 @@ export interface CreatorJob {
   include_pinned: boolean;
   storage: string;
   media_type: MediaType;
+  /** 这一批要产出哪些格式；老任务没有这个字段，按媒体类型给默认值 */
+  formats: FormatKey[];
+  /** 用户一开始填的内容（抖音号 / B 站号 / 主页链接），任务卡上用来交代「抓的是谁」 */
+  source_input: string;
   status: 'pending' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled';
   pause_reason: string | null;
   total: number;
@@ -236,6 +244,12 @@ export interface CreatorItem {
   stored: boolean;
   bytes: number;
   store_error: string | null;
+  /** 服务器上每个格式对应哪个文件（{mp4: {path, bytes}}）；只记清单的任务是空的 */
+  files: Record<string, { path: string; bytes: number }>;
+  /** 条目入库时间（扫描到它的时候） */
+  added_at: number | null;
+  /** 落盘时间；没落盘就是 null */
+  stored_at: number | null;
 }
 
 // ---------------- 定时（5d） ----------------
@@ -488,7 +502,7 @@ export const ownerApi = {
   createCreatorJob: (body: {
     url: string; platform?: string | null; mode: SelectionMode; n?: number | null;
     since?: string | null; until?: string | null; include_pinned?: boolean;
-    storage: JobStorage; media_type: MediaType;
+    storage: JobStorage; media_type: MediaType; formats?: FormatKey[];
   }) => api.request<CreatorJob>('POST', '/v2/creators/jobs', body),
   creatorJobs: async (): Promise<CreatorJob[]> =>
     (await api.request<{ jobs: CreatorJob[] }>('GET', '/v2/creators/jobs?limit=50')).jobs,

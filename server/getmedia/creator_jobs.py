@@ -22,10 +22,12 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable, Iterable
 
@@ -33,7 +35,7 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from . import creator_service
+from . import creator_formats, creator_service
 from .config import Settings
 from .creator_links import CreatorRef, Platform
 from .creators import CreatorError, get_provider
@@ -61,7 +63,11 @@ class JobError(Exception):
         self.code, self.detail, self.status = code, detail, status
 
 
-class _StoreFailed(Exception):
+class StoreError(Exception):
+    """落盘 / 取流失败（接口层只认这个基类，内部再分具体原因）。"""
+
+
+class _StoreFailed(StoreError):
     """单条落盘失败（换下一个候选就好，不影响整个任务）。"""
 
 
@@ -88,6 +94,35 @@ def parse_day(value: str, *, end: bool = False) -> int:
     if end:
         dt = dt + timedelta(days=1) - timedelta(seconds=1)
     return int(dt.timestamp())
+
+
+_EXT_IN_URL = (".mp4", ".m4a", ".mp3", ".flac", ".wav", ".mkv", ".webm", ".mov", ".flv")
+
+
+def _guess_ext(url: str, media_type: str) -> str:
+    """从直链路径猜容器扩展名；猜不到就按媒体类型给默认值。"""
+    path = url.split("?")[0].lower()
+    for ext in _EXT_IN_URL:
+        if path.endswith(ext):
+            return ext.lstrip(".")
+    return "m4a" if media_type == "audio" else "mp4"
+
+
+def _item_row(row) -> dict:
+    """条目行 → 接口对象：把 ``files_json`` 展开成 {格式: {path, bytes}}，并兼容 v14 的旧行。"""
+    m = dict(row._mapping)
+    try:
+        raw = json.loads(m.pop("files_json", None) or "{}")
+    except ValueError:
+        raw = {}
+    files = {k: v for k, v in raw.items() if isinstance(v, dict) and v.get("path")} \
+        if isinstance(raw, dict) else {}
+    if not files and m.get("media_path"):
+        files = {"source": {"path": m["media_path"], "bytes": int(m.get("bytes") or 0)}}
+    m["files"] = files
+    m["is_pinned"] = bool(m.get("is_pinned"))
+    m["stored"] = bool(files)
+    return m
 
 
 def _epoch(iso: str | None) -> int | None:
@@ -179,7 +214,8 @@ class CreatorJobService:
 
     # ---------- 任务 CRUD ----------
     def create(self, user_id: str, *, url: str, selection: Selection, storage: str = "metadata",
-               media_type: str = "video", platform: str | None = None) -> dict:
+               media_type: str = "video", platform: str | None = None,
+               formats: list[str] | None = None, source_input: str | None = None) -> dict:
         if selection.mode not in MODES:
             raise JobError("bad_mode", "mode 只能是 all / date_range / latest_n")
         if storage not in STORAGES:
@@ -194,6 +230,10 @@ class CreatorJobService:
         if selection.mode == "latest_n" and not selection.n:
             raise JobError("bad_range", "latest_n 需要 n")
         try:
+            picked = creator_formats.normalize(media_type, formats)
+        except ValueError as exc:
+            raise JobError("bad_formats", str(exc)) from exc
+        try:
             ref = self.resolve_fn(url, platform)
         except CreatorError as exc:
             raise JobError("creator_not_found", str(exc), 404) from exc
@@ -204,17 +244,20 @@ class CreatorJobService:
         with self.engine.begin() as c:
             c.execute(text(
                 "INSERT INTO creator_jobs(user_id, platform, creator_id, creator_name, source_url, mode,"
-                " since_ts, until_ts, limit_n, include_pinned, storage, media_type, status, cursor_json,"
-                " created_at, updated_at) VALUES(:u,:p,:cid,'',:src,:m,:s,:t,:n,:pin,:st,:mt,'pending','{}',:now,:now)"),
+                " since_ts, until_ts, limit_n, include_pinned, storage, media_type, formats,"
+                " source_input, status, cursor_json, created_at, updated_at)"
+                " VALUES(:u,:p,:cid,'',:src,:m,:s,:t,:n,:pin,:st,:mt,:fm,:in,'pending','{}',:now,:now)"),
                 {"u": user_id, "p": ref.platform.value, "cid": ref.creator_id, "src": ref.url,
                  "m": selection.mode, "s": selection.since, "t": selection.until, "n": selection.n,
-                 "pin": int(selection.include_pinned), "st": storage, "mt": media_type, "now": now})
+                 "pin": int(selection.include_pinned), "st": storage, "mt": media_type,
+                 "fm": json.dumps(picked), "in": (source_input or url)[:500], "now": now})
             job_id = int(c.execute(text("SELECT last_insert_rowid()")).scalar_one())
         return self.get(user_id, job_id)
 
     _JOB_COLS = ("id, platform, creator_id, creator_name, source_url, mode, since_ts, until_ts, limit_n,"
                  " include_pinned, storage, media_type, status, pause_reason, cursor_json, total, done,"
-                 " failed, estimated_bytes, created_at, updated_at, started_at, finished_at,"
+                 " failed, estimated_bytes, formats, source_input, created_at, updated_at,"
+                 " started_at, finished_at,"
                  " (SELECT COUNT(*) FROM creator_items i WHERE i.job_id=creator_jobs.id"
                  "   AND i.media_path IS NOT NULL) AS stored,"
                  " (SELECT COALESCE(SUM(i.bytes),0) FROM creator_items i WHERE i.job_id=creator_jobs.id"
@@ -227,8 +270,13 @@ class CreatorJobService:
                                  "since_ts", "until_ts", "limit_n", "storage", "media_type", "status",
                                  "pause_reason", "total", "done", "failed", "estimated_bytes",
                                  "created_at", "updated_at", "started_at", "finished_at",
-                                 "stored", "store_bytes")}
+                                 "stored", "store_bytes", "source_input")}
         out["include_pinned"] = bool(m["include_pinned"])
+        try:
+            out["formats"] = json.loads(m["formats"] or "null") or creator_formats.defaults_for(
+                m["media_type"] or "video")
+        except ValueError:
+            out["formats"] = creator_formats.defaults_for(m["media_type"] or "video")
         try:
             out["cursor"] = json.loads(m["cursor_json"] or "{}")
         except ValueError:
@@ -339,7 +387,8 @@ class CreatorJobService:
         self._owned(user_id, job_id)
         sql = ("SELECT id, video_id, platform, page, title, duration_sec, published_at, is_pinned,"
                " cover_url, source_url, download_state, track_id, error, bytes, store_error,"
-               " (media_path IS NOT NULL) AS stored FROM creator_items WHERE job_id=:j")
+               " stored_at, added_at, files_json, (media_path IS NOT NULL) AS stored"
+               " FROM creator_items WHERE job_id=:j")
         params: dict = {"j": job_id, "l": limit, "o": offset}
         if state:
             if state not in ITEM_STATES:
@@ -351,8 +400,7 @@ class CreatorJobService:
             rows = c.execute(text(sql), params).all()
             total = int(c.execute(text("SELECT COUNT(*) FROM creator_items WHERE job_id=:j"),
                                   {"j": job_id}).scalar_one())
-        return {"items": [dict(r._mapping) | {"is_pinned": bool(r._mapping["is_pinned"]),
-                                              "stored": bool(r._mapping["stored"])} for r in rows],
+        return {"items": [_item_row(r) for r in rows],
                 "total": total, "limit": limit, "offset": offset}
 
     def item(self, user_id: str, job_id: int, video_id: str, *, page: int = 1) -> dict:
@@ -360,13 +408,14 @@ class CreatorJobService:
         self._owned(user_id, job_id)
         with self.engine.begin() as c:
             row = c.execute(text(
-                "SELECT video_id, platform, page, title, duration_sec, source_url,"
-                " play_urls, play_urls_at, media_path, bytes, store_error FROM creator_items"
+                "SELECT id, video_id, platform, page, title, duration_sec, source_url,"
+                " play_urls, play_urls_at, media_path, files_json, bytes, store_error"
+                " FROM creator_items"
                 " WHERE job_id=:j AND video_id=:v AND page=:g"),
                 {"j": job_id, "v": video_id, "g": page}).first()
         if row is None:
             raise JobError("item_not_found", "任务里没有这条作品", 404)
-        return dict(row._mapping)
+        return _item_row(row)
 
     def set_item_state(self, user_id: str, job_id: int, video_id: str, *, state: str,                       error: str | None = None, track_id: int | None = None) -> dict:
         self._owned(user_id, job_id)
@@ -395,8 +444,8 @@ class CreatorJobService:
                     continue
                 r = c.execute(text(
                     "INSERT OR IGNORE INTO creator_items(job_id, platform, video_id, page, title,"
-                    " duration_sec, published_at, is_pinned, cover_url, source_url, download_state, updated_at)"
-                    " VALUES(:j,:p,:v,1,:t,:d,:pub,:pin,:cv,:su,'pending',:n)"),
+                    " duration_sec, published_at, is_pinned, cover_url, source_url, download_state,"
+                    " added_at, updated_at) VALUES(:j,:p,:v,1,:t,:d,:pub,:pin,:cv,:su,'pending',:n,:n)"),
                     {"j": job_id, "p": it.get("platform") or "unknown", "v": vid,
                      "t": str(it.get("title") or "")[:200], "d": it.get("duration_sec"),
                      "pub": it.get("published_at"), "pin": int(bool(it.get("is_pinned"))),
@@ -560,6 +609,7 @@ class CreatorJobService:
                 window = self.window_fn(ref, start, page_size, cookie_file)
                 if not window.items:
                     break
+                self._remember_profile(job_id, getattr(window, "profile", None))
                 if refresh:
                     self._refresh_links(job_id, window.items)
                     left.difference_update(v.video_id for v in window.items)
@@ -602,6 +652,15 @@ class CreatorJobService:
                 self._finish(job_id, "done")
         return self.get(user_id, job_id)
 
+    def _remember_profile(self, job_id: int, profile) -> None:
+        """第一次拿到博主资料时把昵称写进任务：任务卡要显示「谁的作品」，不能只有一个长 URL。"""
+        name = (getattr(profile, "name", "") or "").strip()[:100]
+        if not name:
+            return
+        with self.engine.begin() as c:
+            c.execute(text("UPDATE creator_jobs SET creator_name=:n WHERE id=:i AND creator_name=''"),
+                      {"n": name, "i": job_id})
+
     def _item_ids(self, job_id: int) -> set[str]:
         """该任务已入库的作品 id，用于刷新模式判断「还要扫多少」。"""
         with self.engine.begin() as c:
@@ -643,8 +702,9 @@ class CreatorJobService:
                     continue
                 r = c.execute(text(
                     "INSERT OR IGNORE INTO creator_items(job_id, platform, video_id, page, title,"
-                    " duration_sec, published_at, is_pinned, cover_url, source_url, download_state, updated_at)"
-                    " VALUES(:j,:p,:v,1,:t,:d,:pub,:pin,:cv,:su,'pending',:n)"),
+                    " duration_sec, published_at, is_pinned, cover_url, source_url, download_state,"
+                    " added_at, updated_at)"
+                    " VALUES(:j,:p,:v,1,:t,:d,:pub,:pin,:cv,:su,'pending',:n,:n)"),
                     {"j": job_id, "p": item["platform"], "v": item["video_id"], "t": item["title"][:200],
                      "d": item["duration_sec"], "pub": item["published_at"], "pin": int(item["is_pinned"]),
                      "cv": item["cover_url"], "su": item["source_url"], "n": now})
@@ -767,28 +827,38 @@ class CreatorJobService:
         return {"stored": ok, "failed": bad}
 
     def _store_one(self, job: dict, item: dict) -> int:
-        """下一条：先试列表里存的地址，B 站不行再现解析。返回落盘字节数。"""
+        """下一条：先把原始文件取回来，再按选中的每个格式各产出一份。返回总字节数。"""
         storage = job["storage"]
         media_type = job["media_type"] or "video"
-        ext = "m4a" if media_type == "audio" else "mp4"
-        filename = f"c{item['id']}-{item['video_id']}.{ext}"
-
-        urls: list[str] = []
+        formts = job.get("formats") or creator_formats.defaults_for(media_type)
+        base = self.store.dir_for(storage)
+        stem = f"c{item['id']}-{item['video_id']}"
+        src, src_ext = self._fetch_source(item, base, stem, media_type)
         try:
-            urls = [u for u in json.loads(item.get("play_urls") or "[]")
-                    if isinstance(u, str) and u.startswith("http")]
+            files, total = self._produce(src, base, stem, src_ext, formts, storage)
+        finally:
+            src.unlink(missing_ok=True)
+        return self._attach(item["id"], job["id"], storage, files, total, formts[0])
+
+    @staticmethod
+    def _play_urls(item: dict) -> list[str]:
+        try:
+            raw = json.loads(item.get("play_urls") or "[]")
         except (TypeError, ValueError):
-            urls = []
+            return []
+        return [u for u in raw if isinstance(u, str) and u.startswith("http")]
+
+    def _fetch_source(self, item: dict, base, stem: str, media_type: str) -> tuple:
+        """把原始文件下到 ``<stem>.src``；返回（路径, 扩展名）。全失败时区分「地址过期」与「本来没地址」。"""
+        urls = self._play_urls(item)
         last = "没有可用的播放地址"
         for url in urls:
             try:
-                size, name = self._stream_to(url, item["platform"], storage, filename)
-                return self._attach(item["id"], job["id"], storage, size, name)
+                return self._download(url, item["platform"], base, stem), _guess_ext(url, media_type)
             except _StoreFailed as exc:
                 last = str(exc)
                 continue
-        # 抖音没有「拿作品页现解析」的路子（要开浏览器，一条几十秒），只能重扫列表换地址；
-        # 列表里本来就没地址（``urls`` 为空）另说，那种重扫也救不回来。
+        # B 站有「拿作品页现解析」的路子：每次都能换出新地址，不依赖扫描时存的那份
         if item["platform"] == "bilibili" and item.get("source_url") and self.media_resolver is not None:
             try:
                 media = self.media_resolver.resolve(item["source_url"], media_type=media_type)
@@ -797,13 +867,81 @@ class CreatorJobService:
                 raise _StoreFailed(f"解析失败：{type(exc).__name__}") from exc
             if not media.sources:
                 raise _StoreFailed("平台没有返回可播放地址")
-            ext = media.ext or ext
-            filename = f"c{item['id']}-{item['video_id']}.{ext}"
-            size, name = self._stream_to(source, "bilibili", storage, filename)
-            return self._attach(item["id"], job["id"], storage, size, name)
+            return self._download(source, "bilibili", base, stem), (media.ext or "mp4")
+        # 抖音没有现解析的路子（要开浏览器，一条几十秒），只能重扫列表换地址；
+        # 列表里本来就没地址（``urls`` 为空）另说，那种重扫也救不回来。
         if urls:
             raise _LinksExpired(last)
         raise _StoreFailed(last)
+
+    def _download(self, url: str, platform: str, base, stem: str):
+        """取一路流写到 ``<stem>.src``（临时名，转完就删）。"""
+        with self.opener(url, platform) as chunks:
+            path, size, _sha = self.store.write_atomic(base, f"{stem}.src", chunks)
+        if size <= 0:
+            path.unlink(missing_ok=True)
+            raise _StoreFailed("上游文件为空")
+        return path
+
+    def _produce(self, src, base, stem: str, src_ext: str, formts: list[str],
+                 storage: str) -> tuple[dict, int]:
+        """按每个格式产出文件；任何一种失败就把这一条已产出的文件删干净。"""
+        files: dict[str, dict] = {}
+        total = 0
+        try:
+            for fmt in formts:
+                name = f"{stem}.{creator_formats.ext_of(fmt, src_ext)}"
+                out = base / name
+                if fmt == "source":
+                    shutil.copyfile(src, out)
+                else:
+                    creator_formats.convert(src, out, fmt)
+                size = out.stat().st_size if out.is_file() else 0
+                if size <= 0:
+                    raise _StoreFailed(f"{fmt.upper()} 转换出来是空文件")
+                files[fmt] = {"path": name, "bytes": size}
+                total += size
+            # 落盘前腾地方：缓存删过期/最久没用的，长期保存按时间删最旧的
+            self.store.ensure_room(storage, total)
+        except creator_formats.FormatError as exc:
+            self._drop_files(base, files)
+            raise _StoreFailed(str(exc)) from exc
+        except MediaError as exc:
+            self._drop_files(base, files)
+            raise _StoreFailed(exc.detail) from exc
+        except Exception:
+            self._drop_files(base, files)
+            raise
+        return files, total
+
+    @staticmethod
+    def _drop_files(base, files: dict) -> None:
+        for meta in files.values():
+            try:
+                (base / meta["path"]).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def render_format(self, user_id: str, job_id: int, video_id: str, fmt: str,
+                      workdir) -> tuple:
+        """临时产出一个格式（条目没落盘、或这个格式没存过时用）。返回（路径, 扩展名）。"""
+        job = self.get(user_id, job_id)
+        item = self.item(user_id, job_id, video_id)
+        media_type = job["media_type"] or "video"
+        base = Path(workdir)
+        base.mkdir(parents=True, exist_ok=True)
+        stem = f"c{item['id']}-{video_id}"
+        src, src_ext = self._fetch_source(item, base, stem, media_type)
+        try:
+            if fmt == "source":
+                out = base / f"{stem}.{src_ext}"
+                src.replace(out)
+                return out, src_ext
+            out = base / f"{stem}.{creator_formats.ext_of(fmt, src_ext)}"
+            creator_formats.convert(src, out, fmt)
+        finally:
+            src.unlink(missing_ok=True)
+        return out, creator_formats.ext_of(fmt, src_ext)
 
     def _reload_item(self, job_id: int, item_id: int) -> dict | None:
         """重扫之后重新读一条，拿到换过的 ``play_urls``。"""
@@ -858,17 +996,20 @@ class CreatorJobService:
             raise _StoreFailed(exc.detail) from exc
         return size, filename
 
-    def _attach(self, item_id: int, job_id: int, storage: str,
-                size: int, filename: str) -> int:
+    def _attach(self, item_id: int, job_id: int, storage: str, files: dict,
+                total: int, primary: str) -> int:
+        """登记这一条的多个格式文件；``media_path`` 仍指向主格式，老接口照常能用。"""
         now = self.now()
         expires = now + int(self.s.creator_cache_ttl_seconds) if storage == "cache" else None
         with self.engine.begin() as c:
             c.execute(text(
-                "UPDATE creator_items SET media_path=:p, bytes=:b, stored_at=:n, store_expires_at=:e,"
-                " download_state='done', store_error=NULL, error=NULL, updated_at=:n WHERE id=:i"),
-                {"p": filename, "b": size, "n": now, "e": expires, "i": item_id})
+                "UPDATE creator_items SET media_path=:p, files_json=:f, bytes=:b, stored_at=:n,"
+                " store_expires_at=:e, download_state='done', store_error=NULL, error=NULL,"
+                " updated_at=:n WHERE id=:i"),
+                {"p": files[primary]["path"], "f": json.dumps(files, ensure_ascii=False),
+                 "b": total, "n": now, "e": expires, "i": item_id})
             self._refresh_counters(c, job_id, now)
-        return size
+        return total
 
     def _mark_store_failed(self, job_id: int, item_id: int, reason: str) -> None:
         with self.engine.begin() as c:
@@ -884,4 +1025,5 @@ class CreatorJobService:
                       {"s": status, "r": reason, "n": self.now(), "i": job_id})
 
 
-__all__ = ["CreatorJobService", "Selection", "JobError", "MODES", "ITEM_STATES", "parse_day", "estimate_bytes"]
+__all__ = ["CreatorJobService", "Selection", "JobError", "StoreError", "MODES", "ITEM_STATES",
+           "parse_day", "estimate_bytes"]

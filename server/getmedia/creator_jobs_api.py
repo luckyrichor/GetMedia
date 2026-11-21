@@ -3,15 +3,20 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
 import threading
+from pathlib import Path
 from typing import Literal
 
 import httpx
 from fastapi import BackgroundTasks, Depends, Header, Query
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, ConfigDict, Field
 
-from .creator_jobs import CreatorJobService, JobError, Selection, parse_day
+from . import creator_formats
+from .creator_jobs import CreatorJobService, JobError, Selection, StoreError, parse_day
 from .creator_links import LinkError, require_numeric_id
 from .errors import ApiError
 from .media_api import _file_response, attachment_disposition, attachment_name
@@ -36,6 +41,8 @@ class JobCreateBody(BaseModel):
     include_pinned: bool = True
     storage: Literal["phone", "metadata", "archive", "cache"] = "metadata"
     media_type: Literal["audio", "video"] = "video"
+    # 要产出哪些格式（视频：source/mp4/mkv/webm；音频：m4a/mp3/flac/wav）。空 = 按媒体类型给默认值。
+    formats: list[str] | None = Field(None, max_length=4)
 
 
 class ItemStateBody(BaseModel):
@@ -108,7 +115,8 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
                 include_pinned=body.include_pinned,
             )
             job = service.create(ctx.user_id, url=body.url, selection=selection, storage=body.storage,
-                                 media_type=body.media_type, platform=body.platform)
+                                 media_type=body.media_type, platform=body.platform,
+                                 formats=body.formats, source_input=body.url)
         except JobError as exc:
             _job_error(exc)
         except LinkError as exc:
@@ -215,13 +223,13 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
         return None
 
     @app.get("/v2/creators/jobs/{job_id}/items/{video_id}/file")
-    def download_item(job_id: str, video_id: str,
+    def download_item(job_id: str, video_id: str, fmt: str | None = Query(None, max_length=8),
                       range_header: str | None = Header(default=None, alias="Range"),
                       ctx: AuthCtx = Depends(guard)):
-        """把任务里的某条作品直接下载到打开网页的设备。
+        """把任务里的某条作品按指定格式下载到打开网页的设备。
 
-        优先用扫描时存下的播放地址（抖音列表响应自带，零额外解析）；过期或没有时，
-        B 站可以现解析，抖音要开浏览器——那条路太慢，改为提示重扫任务。
+        三种来源，按顺序：服务器上已有这个格式的文件 → 直接读本地；要的是原始文件 → 转发上游流；
+        要的是别的格式 → 先在服务器上转一份（临时文件，响应结束就删）。
         """
         jid = _id(job_id)
         try:
@@ -239,61 +247,90 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
                 urls = []
 
         media_type = job.get("media_type") or "video"
-        ext = "m4a" if media_type == "audio" else "mp4"
-        disposition = attachment_disposition(attachment_name(item["title"], jid, ext), jid, ext)
+        job_formats = job.get("formats") or creator_formats.defaults_for(media_type)
+        target = (fmt or "").strip().lower() or job_formats[0]
+        if target not in creator_formats.FORMATS or target not in (
+                creator_formats.AUDIO_FORMATS if media_type == "audio" else creator_formats.VIDEO_FORMATS):
+            raise ApiError(400, "bad_format", "这个格式不适用于该任务")
 
-        # 服务器已经存了一份（暂存 / 长期保存）：直接从本地读，秒开、也不用担心地址过期
-        if item.get("media_path"):
-            stored = service.store.dir_for(job["storage"]) / item["media_path"]
+        def disposition_for(ext: str) -> str:
+            return attachment_disposition(attachment_name(item["title"], jid, ext), jid, ext)
+
+        # 1) 服务器上已经有这个格式：直接读本地，秒开、也不用担心地址过期
+        files = item.get("files") or {}
+        stored_meta = files.get(target)
+        if stored_meta is None and target == "source" and item.get("media_path"):
+            stored_meta = {"path": item["media_path"]}          # v14 的老条目只有一份原始文件
+        if stored_meta:
+            stored = service.store.dir_for(job["storage"]) / stored_meta["path"]
             if stored.is_file():
-                stored_ext = stored.suffix.lstrip(".") or ext
-                disposition = attachment_disposition(
-                    attachment_name(item["title"], jid, stored_ext), jid, stored_ext)
-                return _file_response(stored, range_header, media_type, disposition)
+                stored_ext = stored.suffix.lstrip(".") or "mp4"
+                return _file_response(stored, range_header, media_type, disposition_for(stored_ext))
 
-        forwarded = _forward(urls, platform=item["platform"], range_header=range_header,
-                             disposition=disposition, media_type=media_type)
-        if forwarded is not None:
-            return forwarded
+        # 2) 要原始文件：沿用原来的流式转发（服务器不落盘、边收边发）
+        if target == "source":
+            ext = "m4a" if media_type == "audio" else "mp4"
+            forwarded = _forward(urls, platform=item["platform"], range_header=range_header,
+                                 disposition=disposition_for(ext), media_type=media_type)
+            if forwarded is not None:
+                return forwarded
 
-        if item["platform"] == "bilibili" and item.get("source_url"):
-            # 注意：本函数签名里的 resolver 是「博主链接 → CreatorRef」，不是媒体解析器。
-            # 媒体解析器挂在 app.state.extractor 上（与 /v2/media 共用同一个实例）。
-            media_resolver = getattr(app.state, "extractor", None)
-            if media_resolver is not None:
-                try:
-                    media = media_resolver.resolve(item["source_url"], media_type=media_type)
-                    resp = media_resolver.open_stream(media.sources[0], range_header=range_header)
-                except Exception as exc:  # noqa: BLE001 - 上游问题统一报可重试
-                    raise ApiError(502, "media_upstream_failed", "解析作品地址失败，请稍后重试") from exc
-                if resp.status_code not in (200, 206):
-                    resp.close()
-                    raise ApiError(502, "media_upstream_failed", "平台拒绝取流，请稍后重试")
-                disposition = attachment_disposition(
-                    attachment_name(item["title"], jid, media.ext), jid, media.ext)
-                headers = {"Accept-Ranges": "bytes", "Content-Disposition": disposition}
-                for k in ("Content-Range", "Content-Length", "Content-Type"):
-                    if k in resp.headers:
-                        headers[k] = resp.headers[k]
-
-                def body(resp=resp):
+            if item["platform"] == "bilibili" and item.get("source_url"):
+                # 注意：本函数签名里的 resolver 是「博主链接 → CreatorRef」，不是媒体解析器。
+                # 媒体解析器挂在 app.state.extractor 上（与 /v2/media 共用同一个实例）。
+                media_resolver = getattr(app.state, "extractor", None)
+                if media_resolver is not None:
                     try:
-                        yield from resp.iter_bytes()
-                    finally:
+                        media = media_resolver.resolve(item["source_url"], media_type=media_type)
+                        resp = media_resolver.open_stream(media.sources[0], range_header=range_header)
+                    except Exception as exc:  # noqa: BLE001 - 上游问题统一报可重试
+                        raise ApiError(502, "media_upstream_failed", "解析作品地址失败，请稍后重试") from exc
+                    if resp.status_code not in (200, 206):
                         resp.close()
+                        raise ApiError(502, "media_upstream_failed", "平台拒绝取流，请稍后重试")
+                    disposition = disposition_for(media.ext)
+                    headers = {"Accept-Ranges": "bytes", "Content-Disposition": disposition}
+                    for k in ("Content-Range", "Content-Length", "Content-Type"):
+                        if k in resp.headers:
+                            headers[k] = resp.headers[k]
 
-                return StreamingResponse(body(), status_code=resp.status_code, headers=headers)
+                    def body(resp=resp):
+                        try:
+                            yield from resp.iter_bytes()
+                        finally:
+                            resp.close()
 
-        # 走到这里说明候选直链全取不到流。抖音没有「拿作品页现解析」的路子（要开浏览器，
-        # 一条几十秒），所以顺手给任务排一次重扫换地址，前端等一分钟重试即可——省掉
-        # 「让用户自己去找刷新按钮」这一步。
-        state = service.request_refresh(ctx.user_id, jid)
-        if state == "started":
-            _spawn(service.run, jid, refresh=True)
-            raise ApiError(409, "media_link_expired", "该链接已失效，请 1 分钟后重试。")
-        if state == "busy":
-            raise ApiError(409, "media_link_expired", "该链接已失效，正在重新生成。")
-        raise ApiError(409, "media_link_expired", "该链接已失效，请输入新地址。")
+                    return StreamingResponse(body(), status_code=resp.status_code, headers=headers)
+
+            # 走到这里说明候选直链全取不到流。抖音没有「拿作品页现解析」的路子（要开浏览器，
+            # 一条几十秒），所以顺手给任务排一次重扫换地址，前端等一分钟重试即可。
+            state = service.request_refresh(ctx.user_id, jid)
+            if state == "started":
+                _spawn(service.run, jid, refresh=True)
+                raise ApiError(409, "media_link_expired", "该链接已失效，请 1 分钟后重试。")
+            if state == "busy":
+                raise ApiError(409, "media_link_expired", "该链接已失效，正在重新生成。")
+            raise ApiError(409, "media_link_expired", "该链接已失效，请输入新地址。")
+
+        # 3) 要的是别的格式：临时转一份，响应发完把临时目录删掉
+        cache_root = Path(service.s.cache_dir)
+        cache_root.mkdir(parents=True, exist_ok=True)
+        tmpdir = tempfile.mkdtemp(prefix="fmt-", dir=str(cache_root))
+        try:
+            out, real_ext = service.render_format(ctx.user_id, jid, video_id, target, tmpdir)
+        except creator_formats.FormatError as exc:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            raise ApiError(502, "format_failed", str(exc)) from exc
+        except StoreError as exc:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            state = service.request_refresh(ctx.user_id, jid)
+            if state == "started":
+                _spawn(service.run, jid, refresh=True)
+                raise ApiError(409, "media_link_expired", "该链接已失效，请 1 分钟后重试。") from exc
+            raise ApiError(409, "media_link_expired", "该链接已失效，请输入新地址。") from exc
+        resp = _file_response(out, range_header, media_type, disposition_for(real_ext))
+        resp.background = BackgroundTask(shutil.rmtree, tmpdir, True)
+        return resp
 
     @app.post("/v2/creators/jobs/{job_id}/items/{video_id}/state")
     def item_state(job_id: str, video_id: str, body: ItemStateBody, ctx: AuthCtx = Depends(guard)):

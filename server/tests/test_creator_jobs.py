@@ -584,3 +584,79 @@ def test_douyin_rescan_is_only_tried_once_per_job(tmp_path):
     assert len(env.lister.calls) == 2
     rows = env.client.get(f"/v2/creators/jobs/{jid}/items", headers=hdr(env.token)).json()["items"]
     assert all(r["stored"] is False and r["store_error"] for r in rows)
+
+
+# ---------- 多格式输出 ----------
+def test_default_video_formats_keep_source_file(tmp_path):
+    env = env_with_files(tmp_path)
+    jid = create(env, mode="latest_n", n=2, storage="archive").json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["formats"] == ["source"]
+    rows = env.client.get(f"/v2/creators/jobs/{jid}/items", headers=hdr(env.token)).json()["items"]
+    assert rows[0]["files"]["source"]["path"].endswith(".mp4")
+
+
+def test_audio_job_defaults_to_m4a(tmp_path):
+    env = env_with_files(tmp_path)
+    jid = create(env, mode="latest_n", n=2, media_type="audio", storage="cache").json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["formats"] == ["m4a"]
+
+
+def test_formats_must_match_media_type(tmp_path):
+    env = env_with_files(tmp_path)
+    r = create(env, mode="latest_n", n=2, storage="archive", formats=["mp4", "mp3"])
+    assert r.status_code == 400 and r.json()["code"] == "bad_formats"
+
+
+def test_store_produces_every_selected_format(tmp_path, monkeypatch):
+    """选 mp4 + mkv：一次下载产出两份文件，下载接口按 ?fmt= 分别取。"""
+    from getmedia import creator_formats
+
+    def fake_convert(src, dest, fmt, **_kw):
+        dest.write_bytes(b"CV" + fmt.encode())
+
+    monkeypatch.setattr(creator_formats, "convert", fake_convert)
+    env = env_with_files(tmp_path)
+    jid = create(env, mode="latest_n", n=2, storage="archive",
+                 formats=["source", "mp4", "mkv"]).json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["formats"] == ["source", "mp4", "mkv"] and job["stored"] == 2
+    rows = env.client.get(f"/v2/creators/jobs/{jid}/items", headers=hdr(env.token)).json()["items"]
+    files = rows[0]["files"]
+    assert set(files) == {"source", "mp4", "mkv"}
+    assert rows[0]["bytes"] == sum(f["bytes"] for f in files.values())
+    assert len(list(env.settings.media_dir.glob("*.mkv"))) == 2
+
+    got = env.client.get(f"/v2/creators/jobs/{jid}/items/{rows[0]['video_id']}/file?fmt=mkv",
+                         headers=hdr(env.token))
+    assert got.status_code == 200 and got.content.startswith(b"CVmkv")
+    assert got.headers["content-type"].startswith("video/x-matroska")
+
+
+def test_creator_name_is_saved_for_task_card(tmp_path):
+    env = env_with_files(tmp_path)
+    jid = create(env, mode="latest_n", n=2).json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["creator_name"] == "测试博主"
+    assert job["source_input"] == "https://space.bilibili.com/2/video"
+
+
+def test_download_converts_on_demand_when_not_stored(tmp_path, monkeypatch):
+    """只记清单的任务：点某一种格式时现取现转，临时目录发完就删。"""
+    from getmedia import creator_formats
+
+    monkeypatch.setattr(creator_formats, "convert",
+                        lambda src, dest, fmt, **kw: dest.write_bytes(b"CV" + fmt.encode()))
+    env = env_with_files(tmp_path)
+    jid = create(env, mode="latest_n", n=1, storage="metadata").json()["id"]
+    rows = env.client.get(f"/v2/creators/jobs/{jid}/items", headers=hdr(env.token)).json()["items"]
+    vid = rows[0]["video_id"]
+
+    got = env.client.get(f"/v2/creators/jobs/{jid}/items/{vid}/file?fmt=mkv",
+                         headers=hdr(env.token))
+    assert got.status_code == 200 and got.content == b"CVmkv"
+    assert got.headers["content-type"] == "video/x-matroska"
+    # 临时文件不留在缓存目录里
+    left = [p for p in env.settings.cache_dir.glob("fmt-*")]
+    assert left == []

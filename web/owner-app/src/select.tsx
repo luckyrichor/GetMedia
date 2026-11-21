@@ -14,6 +14,8 @@ export interface SelectOption {
   label: string;
   /** 可选的一行说明（如存放方式），显示在名称右侧 */
   hint?: string;
+  /** 悬停在这一项上时弹出的小框（长一点的解释放这里，别把选项撑成两行） */
+  tip?: string;
 }
 
 export function Select({ value, options, onChange, ariaLabel, disabled, placeholder = '请选择' }: {
@@ -26,11 +28,13 @@ export function Select({ value, options, onChange, ariaLabel, disabled, placehol
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [tipAt, setTipAt] = useState<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLUListElement>(null);
 
   const current = options.find((o) => o.value === value);
+  const hasTips = options.some((o) => o.tip);
 
   // 点别处关掉；页面滚动也关掉，免得列表跟控件脱节
   useEffect(() => {
@@ -49,7 +53,10 @@ export function Select({ value, options, onChange, ariaLabel, disabled, placehol
 
   // 每次展开都把高亮落在当前值上
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setTipAt(null);
+      return;
+    }
     const idx = options.findIndex((o) => o.value === value);
     setActive(idx >= 0 ? idx : 0);
   }, [open]);
@@ -60,6 +67,12 @@ export function Select({ value, options, onChange, ariaLabel, disabled, placehol
     const el = menu.current?.querySelectorAll<HTMLElement>('[role="option"]')[active];
     if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' });
   }, [open, active]);
+
+  /** 鼠标悬停 / 键盘移动时只对「有说明的那一项」弹提示；刚展开时不弹，免得一开就顶一个框。 */
+  function moveTo(index: number) {
+    setActive(index);
+    setTipAt(options[index]?.tip ? index : null);
+  }
 
   function choose(index: number) {
     const opt = options[index];
@@ -84,16 +97,16 @@ export function Select({ value, options, onChange, ariaLabel, disabled, placehol
       trigger.current?.focus();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActive((i) => Math.min(options.length - 1, i + 1));
+      moveTo(Math.min(options.length - 1, active + 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActive((i) => Math.max(0, i - 1));
+      moveTo(Math.max(0, active - 1));
     } else if (e.key === 'Home') {
       e.preventDefault();
-      setActive(0);
+      moveTo(0);
     } else if (e.key === 'End') {
       e.preventDefault();
-      setActive(Math.max(0, options.length - 1));
+      moveTo(Math.max(0, options.length - 1));
     } else if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       choose(active);
@@ -119,7 +132,7 @@ export function Select({ value, options, onChange, ariaLabel, disabled, placehol
         <span class="select-caret" aria-hidden="true">▾</span>
       </button>
       {open && (
-        <ul class="select-menu" role="listbox" aria-label={ariaLabel} ref={menu}>
+        <ul class={hasTips ? 'select-menu tips' : 'select-menu'} role="listbox" aria-label={ariaLabel} ref={menu}>
           {options.map((o, i) => (
             <li
               key={o.value}
@@ -131,13 +144,93 @@ export function Select({ value, options, onChange, ariaLabel, disabled, placehol
                 i === active ? 'active' : '',
               ].filter(Boolean).join(' ')}
               onMouseDown={(e) => e.preventDefault()}
-              onMouseEnter={() => setActive(i)}
+              onMouseEnter={() => moveTo(i)}
+              onMouseLeave={() => setTipAt((cur) => (cur === i ? null : cur))}
               onClick={() => choose(i)}
             >
               <span class="select-label">{o.label}</span>
               {o.hint ? <span class="select-hint">{o.hint}</span> : null}
+              {o.tip && tipAt === i ? <span class="select-tip" role="tooltip">{o.tip}</span> : null}
             </li>
           ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** 多选下拉：候选是一列勾选项，勾完不关闭；框里始终显示「已选哪几个」。 */
+export function MultiSelect({ values, options, onChange, ariaLabel, disabled, placeholder = '请选择' }: {
+  values: string[];
+  options: SelectOption[];
+  onChange: (values: string[]) => void;
+  ariaLabel?: string;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onScroll = () => setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open]);
+
+  const picked = options.filter((o) => values.includes(o.value));
+
+  /** 至少留一个：全不选等于没说，而「要什么格式」没有默认含义。 */
+  function toggle(value: string) {
+    if (values.includes(value)) {
+      if (values.length === 1) return;
+      onChange(values.filter((v) => v !== value));
+    } else {
+      onChange([...values, value]);
+    }
+  }
+
+  return (
+    <div class="select" ref={root}>
+      <button
+        type="button"
+        class={open ? 'select-trigger on' : 'select-trigger'}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span class="select-value">
+          {picked.length ? picked.map((o) => o.label).join('、') : placeholder}
+        </span>
+        <span class="select-caret" aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <ul class="select-menu" role="listbox" aria-label={ariaLabel} aria-multiselectable="true">
+          {options.map((o) => {
+            const on = values.includes(o.value);
+            return (
+              <li
+                key={o.value}
+                role="option"
+                aria-selected={on}
+                class={on ? 'select-opt on' : 'select-opt'}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => toggle(o.value)}
+              >
+                <span class="select-label">{o.label}</span>
+                {o.hint ? <span class="select-hint">{o.hint}</span> : null}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

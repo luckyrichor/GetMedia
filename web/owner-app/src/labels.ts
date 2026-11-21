@@ -11,11 +11,40 @@ export const STORAGE: Record<string, string> = {
   phone: '只记清单',   // 旧数据里的「手机下载」，行为本来就等于只记清单
 };
 
-/** 三种存放方式各自会做什么（配额与曲库共用，满了都是删最旧的）。 */
+/** 三种存放方式各自会做什么（下拉里悬停某一行时弹出这段说明）。 */
 export const STORAGE_DESC: Record<string, string> = {
-  metadata: '只记录标题、时长和作品地址，不下载文件；以后点下载时再从平台取。',
-  cache: '提取时把文件下到服务器，7 天后自动清理；配额 1 GB，满了先删最久没用的。',
-  archive: '文件长期留在服务器，随时能下；配额 5 GB，满了先删最旧的。',
+  metadata: '只记录标题、时长和作品地址，不下载文件。',
+  cache: '文件下载到服务器，一天后失效，7 天后自动清理。',
+  archive: '文件长期留在服务器，但空间不足时同样会清理。',
+};
+
+/** 输出格式：视频四种、音频四种。名字短，说明放下拉提示里。 */
+export const FORMAT: Record<string, string> = {
+  source: '原样保存',
+  mp4: 'MP4',
+  mkv: 'MKV',
+  webm: 'WebM',
+  m4a: 'M4A',
+  mp3: 'MP3',
+  flac: 'FLAC',
+  wav: 'WAV',
+};
+
+export const FORMAT_TIP: Record<string, string> = {
+  source: '平台给什么就存什么，不转换，最快；不同作品的容器可能不一样。',
+  mp4: '通用 MP4，手机、电脑、剪辑软件都认；源文件是别的容器时只换封装，很快。',
+  mkv: 'MKV 封装，能装多条音轨与字幕；换封装为主，也比较快。',
+  webm: 'WebM（VP9 + Opus），体积小，但需要整条重新编码，很慢。',
+  m4a: '只留音轨，AAC 编码；源文件是 MP4 时几乎瞬间完成。',
+  mp3: '只留音轨转 MP3，什么设备都能放；需要重新编码。',
+  flac: '只留音轨转无损 FLAC，音质不损失，文件比较大。',
+  wav: '只留音轨转 WAV，完全不压缩，文件最大。',
+};
+
+/** 媒体类型决定能选哪些格式：视频任务不出现音频格式，反之亦然。 */
+export const FORMATS_OF: Record<string, string[]> = {
+  video: ['source', 'mp4', 'mkv', 'webm'],
+  audio: ['m4a', 'mp3', 'flac', 'wav'],
 };
 
 export const JOB: Record<string, string> = {

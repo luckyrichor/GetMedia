@@ -166,14 +166,17 @@ describe('批量提取', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('看条目'));
-    await click(button('看条目'));
+    await until(() => text().includes('显示条目'));
+    await click(button('显示条目'));
     await until(() => text().includes('第一条作品'));
 
-    expect(text()).toContain('已入库');
-    expect(text()).toContain('失败');
-    expect(text()).toContain('平台拒绝');
-    expect(text()).toContain('媒体库 #9');
+    // 表头：序号 / 标题 / 时长 / 发布 / 提取
+    const head = Array.from(document.querySelectorAll('.item-head span')).map((n) => n.textContent);
+    expect(head.slice(0, 5)).toEqual(['#', '标题', '时长', '发布', '提取']);
+    // 失败的条目有标记，不再有「条目总数 / 已入库 / 失败」三栏统计
+    expect(document.querySelectorAll('.kv-grid')).toHaveLength(0);
+    expect(Array.from(document.querySelectorAll('.item-row .tag.bad')).map((n) => n.textContent))
+      .toEqual(['失败']);
 
     // 每条都能直接下到本机：按钮点下去才发请求（先探 2 字节，能出流才真正下载）
     const rows = Array.from(document.querySelectorAll('.item-row button')) as HTMLButtonElement[];
@@ -181,8 +184,6 @@ describe('批量提取', () => {
     expect(text()).toContain('下载全部（2 条）');
     // 每条作品前有连续序号
     expect(Array.from(document.querySelectorAll('.item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
-    // done / failed 仍然有标记
-    expect(text()).toContain('已入库');
   });
 
   test('手机下载的任务条目一直 pending，不显示「待处理」三个字', async () => {    server(ownerRoutes({
@@ -202,8 +203,8 @@ describe('批量提取', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('看条目'));
-    await click(button('看条目'));
+    await until(() => text().includes('显示条目'));
+    await click(button('显示条目'));
     await until(() => text().includes('第一条作品'));
 
     expect(text()).not.toContain('待处理');
@@ -332,20 +333,26 @@ describe('批量提取', () => {
     expect(dates[0]!.value).toBe('');
   });
 
-  test('三种存放方式逐行解释，当前选中的那行高亮', async () => {
+  test('存放方式的说明做成悬停提示，不再在下面平铺三行', async () => {
     server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    const rows = Array.from(document.querySelectorAll('.storage-notes li'));
-    expect(rows).toHaveLength(3);
-    expect(rows.map((r) => r.querySelector('strong')?.textContent)).toEqual([
-      '只记清单', '服务器暂存', '服务器保留',
-    ]);
-    expect(rows[0]!.textContent).toContain('不下载文件');
-    expect(rows[0]!.classList.contains('on')).toBe(true);
-    expect(rows[1]!.textContent).toContain('7 天后自动清理');
-    expect(rows[1]!.classList.contains('on')).toBe(false);
+    // 页面正文里没有那段逐行说明了
+    expect(document.querySelectorAll('.storage-notes')).toHaveLength(0);
+
+    await click(document.querySelector('button[aria-label="存放方式"]')!);
+    const opts = Array.from(document.querySelectorAll('[role="option"]'));
+    expect(opts.map((o) => o.querySelector('.select-label')?.textContent))
+      .toEqual(['只记清单', '服务器暂存', '服务器保留']);
+    // 刚展开不弹提示，悬停到某一项才弹
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+
+    await act(async () => {
+      opts[1]!.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
+    });
+    const tip = document.querySelector('[role="tooltip"]');
+    expect(tip?.textContent).toContain('一天后失效，7 天后自动清理');
   });
 
   test('服务器存档：任务卡显示已存条数与占用，条目上标「已在服务器」', async () => {
@@ -375,7 +382,7 @@ describe('批量提取', () => {
     expect(text()).toContain('服务器暂存');
     expect(text()).toContain('240 MB');
 
-    await click(button('看条目'));
+    await click(button('显示条目'));
     await until(() => text().includes('存好的作品'));
     const tags = Array.from(document.querySelectorAll('.item-row .tag')).map((t) => t.textContent);
     expect(tags).toContain('已在服务器');
@@ -393,8 +400,8 @@ describe('批量提取', () => {
       'GET /v2/creators/jobs/3/items/BV1/file': { json: {} },
     }));
     mount('/creators');
-    await until(() => text().includes('看条目'));
-    await click(button('看条目'));
+    await until(() => text().includes('显示条目'));
+    await click(button('显示条目'));
     await until(() => text().includes('第一条作品'));
 
     await click(button('下载'));
@@ -415,8 +422,8 @@ describe('批量提取', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('看条目'));
-    await click(button('看条目'));
+    await until(() => text().includes('显示条目'));
+    await click(button('显示条目'));
     await until(() => text().includes('第一条作品'));
 
     await click(button('下载'));
@@ -441,8 +448,8 @@ describe('批量提取', () => {
       'GET /v2/creators/jobs/3/items/BV3/file': { json: {} },
     }));
     mount('/creators');
-    await until(() => text().includes('看条目'));
-    await click(button('看条目'));
+    await until(() => text().includes('显示条目'));
+    await click(button('显示条目'));
     await until(() => text().includes('下载全部（3 条）'));
 
     await click(button('下载全部（3 条）'));
@@ -451,5 +458,89 @@ describe('批量提取', () => {
     await until(() => text().includes('正在下载'));
     await click(button('停止下载'));
     await until(() => text().includes('已停止'));
+  });
+});
+
+
+describe('批量提取：多格式与任务卡信息', () => {
+  test('切到音频后格式候选跟着换，多选结果一起提交', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/jobs': { json: job({ status: 'pending' }) },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    // 视频默认「原样保存」
+    expect(document.querySelector('button[aria-label="输出格式"]')!.textContent).toContain('原样保存');
+
+    await choose('格式', '音频');
+    await until(() => document.querySelector('button[aria-label="输出格式"]')!.textContent!.includes('M4A'));
+
+    // 多选：M4A 已选，再勾 MP3
+    await click(document.querySelector('button[aria-label="输出格式"]')!);
+    const opts = Array.from(document.querySelectorAll('[role="option"]'));
+    expect(opts.map((o) => o.textContent)).toEqual(['M4A', 'MP3', 'FLAC', 'WAV']);
+    await click(opts[1]!);
+    expect(document.querySelector('button[aria-label="输出格式"]')!.textContent).toContain('M4A、MP3');
+
+    await fillUrl('https://space.bilibili.com/12345');
+    await click(button('开始提取'));
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.media_type).toBe('audio');
+    expect(body.formats).toEqual(['m4a', 'mp3']);
+  });
+
+  test('任务卡：昵称、抖音号、完整链接、绝对时间与「显示条目」', async () => {
+    const url = 'https://www.douyin.com/user/MS4wLjABAAAAR1Hyk5la2AbZ_a-00wgh6UnypbV35hOG_8bQvsBqDrNGzpxcHBu7ueuCbA';
+    server(ownerRoutes({
+      [JOBS]: {
+        json: {
+          jobs: [job({
+            platform: 'douyin', creator_name: '', source_input: '67194609689',
+            source_url: url, created_at: 1_800_000_000,
+          })],
+        },
+      },
+    }));
+    mount('/creators');
+    await until(() => text().includes('抖音号 67194609689'));
+
+    // 没取到昵称时用号码交代「抓的是谁」，链接完整显示、可复制
+    expect(document.querySelector('.job-url')!.textContent).toBe(url);
+    expect(text()).toContain('2027-01-15 03:00:00');
+    expect(() => button('复制链接')).not.toThrow();
+    expect(() => button('显示条目')).not.toThrow();
+  });
+
+  test('条目按表头对齐；提取时间用落盘时间；每种格式可单独下载', async () => {
+    const saved = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ storage: 'archive' })] } },
+      'GET /v2/creators/jobs/3/items?limit=100&offset=0': {
+        json: {
+          items: [row({
+            stored: true, bytes: 100, stored_at: 1_800_000_500, added_at: 1_799_999_000,
+            files: { source: { path: 'a.mp4', bytes: 50 }, mp3: { path: 'a.mp3', bytes: 50 } },
+          })],
+          total: 1, limit: 100, offset: 0,
+        },
+      },
+      'GET /v2/creators/jobs/3/items/BV1/file?fmt=mp3': { json: {} },
+    }));
+    mount('/creators');
+    await until(() => text().includes('显示条目'));
+    await click(button('显示条目'));
+    await until(() => text().includes('第一条作品'));
+
+    const heads = Array.from(document.querySelectorAll('.item-head span')).map((n) => n.textContent);
+    expect(heads.slice(0, 5)).toEqual(['#', '标题', '时长', '发布', '提取']);
+    expect(text()).toContain('2027-01-15 03:08');      // stored_at，不是 added_at
+
+    const chips = Array.from(document.querySelectorAll('.fmt-chip')).map((b) => b.textContent);
+    expect(chips).toEqual(['原样保存', 'MP3']);
+    await click(document.querySelectorAll('.fmt-chip')[1]!);
+    await until(() => calls.some((c) => (c.search ?? '').includes('fmt=mp3')));
+    expect(saved).toHaveBeenCalled();
   });
 });

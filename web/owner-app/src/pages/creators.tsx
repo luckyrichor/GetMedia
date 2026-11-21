@@ -8,12 +8,16 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import {
-  creatorItemUrl, ownerApi, type CreatorItem, type CreatorJob, type CreatorPreview, type JobStorage,
-  type MediaType, type SelectionMode,
+  creatorItemUrl, ownerApi, type CreatorItem, type CreatorJob, type CreatorPreview, type FormatKey,
+  type JobStorage, type MediaType, type SelectionMode,
 } from '../api';
-import { ITEM, JOB, SELECTION, STORAGE, STORAGE_DESC, TONE, platformName } from '../labels';
-import { Select } from '../select';
-import { Empty, ErrorBox, Field, fmtBytes, fmtDuration, fmtTime, Loading, relTime } from '../ui';
+import {
+  FORMAT, FORMATS_OF, FORMAT_TIP, ITEM, JOB, SELECTION, STORAGE, STORAGE_DESC, TONE, platformName,
+} from '../labels';
+import { MultiSelect, Select } from '../select';
+import {
+  Empty, ErrorBox, fmtBytes, fmtDateTime, fmtDuration, fmtTime, Loading, relTime,
+} from '../ui';
 
 /** 三种存放方式（旧的 phone 已并入「只记清单」，不再出现在选项里）。 */
 const STORAGE_OPTS: JobStorage[] = ['metadata', 'cache', 'archive'];
@@ -107,6 +111,20 @@ function showDatePicker(el: HTMLInputElement) {
   }
 }
 
+/** 任务抓的是谁：有昵称用昵称；只填了抖音号/B 站号的，就把号码写出来（用户填的就是它）。 */
+function who(j: CreatorJob): string {
+  const name = (j.creator_name || '').trim();
+  if (name) return name;
+  if (NUMERIC_ID.test(j.source_input || '')) return `${platformName(j.platform)}号 ${j.source_input}`;
+  return `${platformName(j.platform)} · 昵称未取到`;
+}
+
+/** 用户当初填的是号码时，单独做个标签，一眼看出这批是「按号抓的」。 */
+function inputBadge(j: CreatorJob): string {
+  const raw = (j.source_input || '').trim();
+  return NUMERIC_ID.test(raw) ? `${platformName(j.platform)}号 ${raw}` : '';
+}
+
 function fmtDay(ts: number | null): string {
   if (!ts) return '';
   const d = new Date(ts * 1000);
@@ -124,6 +142,8 @@ export function CreatorsPage() {
   const [pinned, setPinned] = useState(true);
   const [storage, setStorage] = useState<JobStorage>('metadata');
   const [mediaType, setMediaType] = useState<MediaType>('video');
+  // 输出格式可多选；切到音频/视频时换成那一类里最常用的那个
+  const [formats, setFormats] = useState<FormatKey[]>(['source']);
   const [preview, setPreview] = useState<CreatorPreview | null>(null);
   const [busy, setBusy] = useState<'' | 'preview' | 'create' | 'act'>('');
   const [err, setErr] = useState('');
@@ -132,6 +152,8 @@ export function CreatorsPage() {
   const [jobsErr, setJobsErr] = useState('');
   const [openId, setOpenId] = useState<number | null>(null);
   const [hidden, setHidden] = useState<number[]>(() => readHidden());
+  /** 刚复制过的任务 id（按钮上显示「已复制」）；0 表示没有 */
+  const [copied, setCopied] = useState(0);
   const timer = useRef<number | null>(null);
 
   function hideJob(id: number) {
@@ -145,6 +167,16 @@ export function CreatorsPage() {
   function showAllJobs() {
     setHidden([]);
     writeHidden([]);
+  }
+
+  async function copyText(text: string, id: number) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(id);
+      window.setTimeout(() => setCopied((cur) => (cur === id ? 0 : cur)), 1600);
+    } catch {
+      setErr('这个浏览器不允许自动复制，请手动选中链接复制');
+    }
   }
 
   async function loadJobs(silent = false) {
@@ -196,6 +228,7 @@ export function CreatorsPage() {
       since: mode === 'date_range' ? since || null : null,
       until: mode === 'date_range' ? until || null : null,
       include_pinned: pinned,
+      formats,
     };
   }
 
@@ -352,7 +385,9 @@ export function CreatorsPage() {
             <Select
               ariaLabel="存放方式"
               value={storage}
-              options={STORAGE_OPTS.map((s) => ({ value: s, label: STORAGE[s]! }))}
+              options={STORAGE_OPTS.map((s) => ({
+                value: s, label: STORAGE[s]!, tip: STORAGE_DESC[s],
+              }))}
               onChange={(v) => setStorage(v as JobStorage)}
             />
           </div>
@@ -362,22 +397,36 @@ export function CreatorsPage() {
               ariaLabel="格式"
               value={mediaType}
               options={[{ value: 'video', label: '视频' }, { value: 'audio', label: '音频' }]}
-              onChange={(v) => setMediaType(v as MediaType)}
+              onChange={(v) => {
+                setMediaType(v as MediaType);
+                // 换类别时把格式收成那一类最常用的一个，免得留下不合法组合
+                setFormats([(FORMATS_OF[v] ?? ['source'])[0] as FormatKey]);
+              }}
             />
           </div>
+          <div class="field">
+            <span>输出格式（可多选）</span>
+            <MultiSelect
+              ariaLabel="输出格式"
+              values={formats}
+              options={(FORMATS_OF[mediaType] ?? ['source']).map((f) => ({
+                value: f, label: FORMAT[f] ?? f,
+              }))}
+              onChange={(v) => setFormats(v as FormatKey[])}
+            />
+          </div>
+        </div>
+
+        <div class="pin-row">
           <label class="check">
             <input type="checkbox" checked={pinned} onChange={(e) => setPinned((e.target as HTMLInputElement).checked)} />
             <span>包含置顶作品</span>
           </label>
+          <span class="small muted">
+            博主置顶的那条通常不是最新发布的，按「最近 N 条」「指定日期」筛时会被时间条件排除；
+            勾上就不管时间、一起提。B 站与抖音都有置顶。
+          </span>
         </div>
-
-        <ul class="storage-notes small muted">
-          {STORAGE_OPTS.map((s) => (
-            <li class={s === storage ? 'on' : ''}>
-              <strong>{STORAGE[s]}</strong>：{STORAGE_DESC[s]}
-            </li>
-          ))}
-        </ul>
 
         <div class="row-actions">
           <button type="button" class="btn" disabled={busy !== ''} onClick={() => void doCreate()}>
@@ -449,8 +498,10 @@ export function CreatorsPage() {
               <div class="job-head">
                 <span class="job-no" aria-hidden="true">{idx + 1}</span>
                 <span class={`tag ${TONE[j.status] ?? ''}`}>{JOB[j.status] ?? j.status}</span>
-                <span class="grow ellipsis" title={j.creator_name}>{j.creator_name || j.source_url}</span>
-                <span class="small muted nowrap">{relTime(j.created_at)}</span>
+                <span class="grow ellipsis job-who" title={who(j)}>{who(j)}</span>
+                <span class="small muted nowrap" title="发起时间">
+                  {relTime(j.created_at)} · {fmtDateTime(j.created_at)}
+                </span>
                 <button
                   type="button"
                   class="job-hide nowrap"
@@ -460,6 +511,15 @@ export function CreatorsPage() {
                   不再显示
                 </button>
               </div>
+              <div class="job-src small">
+                {/* 填了号码的任务，「抖音号 123」已经说明平台，不再重复一个「抖音」标签 */}
+                <span class="tag">{inputBadge(j) || platformName(j.platform)}</span>
+                <code class="job-url" title={j.source_url}>{j.source_url}</code>
+                <button type="button" class="btn btn-ghost small nowrap"
+                        onClick={() => void copyText(j.source_url, j.id)}>
+                  {copied === j.id ? '已复制' : '复制链接'}
+                </button>
+              </div>
               <div class="small muted">
                 #{j.id} · {platformName(j.platform)} · {SELECTION[j.mode] ?? j.mode}
                 {j.limit_n ? `（${j.limit_n} 条）` : ''}
@@ -467,6 +527,7 @@ export function CreatorsPage() {
                 {j.until_ts ? ` 至 ${fmtDay(j.until_ts)}` : ''}
                 {' · '}{STORAGE[j.storage] ?? j.storage}
                 {' · '}{j.media_type === 'audio' ? '音频' : '视频'}
+                {' · '}{(j.formats ?? []).map((f) => FORMAT[f] ?? f).join('、')}
               </div>
               <div class="small">
                 进度：{j.done + j.failed} / {j.total || '?'}
@@ -483,7 +544,7 @@ export function CreatorsPage() {
               )}
               <div class="row-actions">
                 <button type="button" class="btn btn-ghost small" onClick={() => setOpenId(openId === j.id ? null : j.id)}>
-                  {openId === j.id ? '收起条目' : '看条目'}
+                  {openId === j.id ? '收起条目' : '显示条目'}
                 </button>
                 {(j.status === 'pending' || j.status === 'running') && (
                   <button type="button" class="btn btn-ghost small" disabled={busy === 'act'} onClick={() => void act(j.id, 'pauseJob')}>
@@ -605,8 +666,8 @@ function JobItems({ jobId }: { jobId: number }) {
   }
 
   /** 下一条。返回 false 表示这条没成（403/409/网络），由调用方决定是跳过还是停。 */
-  async function one(item: CreatorItem): Promise<boolean> {
-    const url = creatorItemUrl(jobId, item.video_id);
+  async function one(item: CreatorItem, fmt?: string): Promise<boolean> {
+    const url = creatorItemUrl(jobId, item.video_id, fmt);
     setBusyId(item.video_id);
     try {
       const r = await probe(url);
@@ -663,11 +724,6 @@ function JobItems({ jobId }: { jobId: number }) {
 
   return (
     <div class="items">
-      <div class="kv-grid">
-        <Field label="条目总数" value={total} />
-        <Field label="已入库" value={items.filter((i) => i.download_state === 'done').length} />
-        <Field label="失败" value={items.filter((i) => i.download_state === 'failed').length} />
-      </div>
       {items.length > 0 && (
         <div class="row-actions" style="margin-bottom:6px">
           {run ? (
@@ -685,34 +741,49 @@ function JobItems({ jobId }: { jobId: number }) {
         </div>
       )}
       {note && <p class="small muted">{note}</p>}
+      <div class="item-head small muted">
+        <span>#</span>
+        <span>标题</span>
+        <span>时长</span>
+        <span>发布</span>
+        <span>提取</span>
+        <span />
+      </div>
       <ul class="plain tight">
         {items.map((i, idx) => (
           <li class="item-row">
             <span class="item-no" aria-hidden="true">{idx + 1}</span>
-            {/* 手机下载的任务里，服务器只记账、不下载，也没有代码回写条目状态，
-                pending 会一直是 pending——所以「待处理」不显示，只有真落了盘或失败才有标记。 */}
-            {i.stored ? (
-              <span class="tag ok" title="服务器上已经有一份，点下载直接从服务器取">已在服务器</span>
-            ) : i.download_state !== 'pending' && (
-              <span class={`tag ${i.download_state === 'done' ? 'ok' : i.download_state === 'failed' ? 'bad' : ''}`}>
-                {ITEM[i.download_state] ?? i.download_state}
-              </span>
-            )}
-            <span class="grow ellipsis" title={i.title}>{i.title}</span>
-            <span class="small muted nowrap">
-              {fmtDuration(i.duration_sec)}
-              {i.published_at ? ` · ${fmtTime(i.published_at)}` : ''}
-              {i.stored && i.bytes ? ` · ${fmtBytes(i.bytes)}` : ''}
-              {i.track_id ? ` · 媒体库 #${i.track_id}` : ''}
+            {/* 手机下载的任务里服务器只记账、不下载，pending 会一直是 pending——所以「待处理」不显示，
+                只有真落了盘或失败才有标记。 */}
+            <span class="item-title">
+              {i.stored && <span class="tag ok" title="服务器上已经有一份，点下载直接从服务器取">已在服务器</span>}
+              {!i.stored && i.download_state === 'failed' && <span class="tag bad">失败</span>}
+              <span class="ellipsis" title={i.title}>{i.title}</span>
             </span>
-            <button
-              type="button"
-              class="btn btn-ghost small nowrap"
-              disabled={busyId === i.video_id || run !== null}
-              onClick={() => void one(i)}
-            >
-              {busyId === i.video_id ? '检查中…' : '下载'}
-            </button>
+            <span class="small muted nowrap">{fmtDuration(i.duration_sec)}</span>
+            <span class="small muted nowrap">{i.published_at ? fmtTime(i.published_at) : '—'}</span>
+            <span class="small muted nowrap">{fmtTime(i.stored_at ?? i.added_at)}</span>
+            <span class="item-act">
+              {Object.keys(i.files ?? {}).map((f) => (
+                <button
+                  type="button"
+                  class="fmt-chip"
+                  title={`下载 ${FORMAT[f] ?? f} 这一版`}
+                  disabled={busyId !== '' || run !== null}
+                  onClick={() => void one(i, f)}
+                >
+                  {FORMAT[f] ?? f}
+                </button>
+              ))}
+              <button
+                type="button"
+                class="btn btn-ghost small nowrap"
+                disabled={busyId === i.video_id || run !== null}
+                onClick={() => void one(i)}
+              >
+                {busyId === i.video_id ? '检查中…' : '下载'}
+              </button>
+            </span>
           </li>
         ))}
       </ul>

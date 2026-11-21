@@ -174,10 +174,18 @@ def attachment_disposition(name: str, track_id: int, ext: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
+_MIME_BY_EXT = {
+    ".mp4": "video/mp4", ".mkv": "video/x-matroska", ".webm": "video/webm",
+    ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".flac": "audio/flac", ".wav": "audio/wav",
+}
+
+
 def _file_response(path: Path, range_header: str | None, media_type: str,
                    disposition: str | None = None) -> Response:
     size = path.stat().st_size
-    ctype = "video/mp4" if media_type == "video" else "audio/mp4"
+    # 转换过的文件（mp3/flac/wav…）不能一律报 video/mp4：浏览器存下来的类型会错
+    ctype = _MIME_BY_EXT.get(path.suffix.lower()) or (
+        "video/mp4" if media_type == "video" else "audio/mp4")
     extra = {"Content-Disposition": disposition} if disposition else {}
     rng = _parse_range(range_header, size)
     if range_header and rng is None:

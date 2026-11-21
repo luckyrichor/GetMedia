@@ -96,6 +96,15 @@ export function fmtTime(unix: number | null | undefined): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
 }
 
+/** `2026-11-16 08:50:12`：要精确到秒的场景（任务发起时间）用它。 */
+export function fmtDateTime(unix: number | null | undefined): string {
+  if (!unix) return '—';
+  const d = new Date(unix * 1000);
+  const two = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} `
+    + `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+}
+
 export function relTime(unix: number | null | undefined, now = Date.now()): string {
   if (!unix) return '—';
   const d = Math.round(now / 1000 - unix);

@@ -297,8 +297,25 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .nowrap { white-space: nowrap; }
 
 .items { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 10px; }
-.item-row { display: flex; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+/* 条目按表格排：序号 / 标题 / 时长 / 发布 / 提取 / 操作，表头用同一套列宽 */
+.item-head, .item-row {
+  display: grid; gap: 8px; align-items: center;
+  grid-template-columns: 2.4rem minmax(0, 1fr) 3.6rem 8.2rem 8.2rem auto;
+}
+.item-head { padding: 2px 0 4px; border-bottom: 1px solid var(--line); }
+.item-row { padding: 5px 0; border-bottom: 1px dashed var(--line); }
 .item-row:last-child { border-bottom: 0; }
+.item-title { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.item-title .ellipsis { min-width: 0; }
+.item-act { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+/* 服务器上每个格式一个小方块，点它下这一版 */
+.fmt-chip {
+  font: inherit; font-size: 0.72rem; line-height: 1.4; cursor: pointer;
+  padding: 0 6px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--muted); white-space: nowrap;
+}
+.fmt-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.fmt-chip:disabled { opacity: 0.6; cursor: not-allowed; }
 /* 作品序号：右对齐等宽，几百条时也能一眼对齐 */
 .item-no {
   flex: none; min-width: 2.2rem; text-align: right;
@@ -372,3 +389,30 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .select-opt.on { justify-content: flex-start; }
 .select-hint { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: auto; }
 .select-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+/* 下拉项悬停提示：小框贴在候选右侧，不参与排版（菜单本身不裁切才能画出来） */
+.select-menu.tips { overflow: visible; }
+.select-opt { position: relative; }
+.select-tip {
+  position: absolute; left: calc(100% + 8px); top: -2px; z-index: 60;
+  width: 15rem; padding: 7px 9px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 10px 26px rgba(12, 18, 30, 0.16);
+  color: var(--text); font-size: 0.78rem; font-weight: 400; line-height: 1.5;
+  white-space: normal;
+}
+
+/* 任务卡：抓的是谁、抓的哪个地址（长链接换行显示、可复制） */
+.job-who { font-weight: 600; }
+.job-src { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 2px 0 4px; }
+.job-url {
+  flex: 1 1 18rem; min-width: 0;
+  font-size: 0.78rem; color: var(--muted);
+  word-break: break-all; white-space: normal;
+  user-select: text;
+}
+
+/* 置顶选项单独一行：跟说明文字排在一块儿，不再挤在「格式」右边 */
+.pin-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 0 0 4px; }
+.pin-row .check { margin-bottom: 0; }
