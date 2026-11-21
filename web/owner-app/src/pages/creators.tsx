@@ -161,6 +161,20 @@ function fmtDay(ts: number | null): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
+/** 'YYYY-MM-DD' → 当天 00:00:00 的 unix 秒；空串或非法返回 null（不筛）。 */
+function dayStartSec(iso: string): number | null {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return Math.floor(new Date(y, m - 1, d).getTime() / 1000);
+}
+
+/** 'YYYY-MM-DD' → 当天 23:59:59 的 unix 秒（闭区间上限）；空串或非法返回 null。 */
+function dayEndSec(iso: string): number | null {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return Math.floor(new Date(y, m - 1, d, 23, 59, 59).getTime() / 1000);
+}
+
 export function CreatorsPage() {
   const [kind, setKind] = useState<CreatorKind>('url');
   const [url, setUrl] = useState('');
@@ -183,6 +197,30 @@ export function CreatorsPage() {
   const [hidden, setHidden] = useState<number[]>(() => readHidden());
   /** 刚复制过的任务 id（按钮上显示「已复制」）；0 表示没有 */
   const [copied, setCopied] = useState(0);
+
+  // —— 批量任务筛选：每项为空 = 不筛；多项之间是「且」关系 ——
+  const [fStatus, setFStatus] = useState('');
+  const [fPlatform, setFPlatform] = useState('');
+  const [fDouyin, setFDouyin] = useState('');
+  const [fNick, setFNick] = useState('');
+  const [fSince, setFSince] = useState('');
+  const [fUntil, setFUntil] = useState(() => todayISO());
+  const [fMedia, setFMedia] = useState('');
+  const [fStorage, setFStorage] = useState('');
+  const [fMode, setFMode] = useState('');
+
+  function resetFilters() {
+    setFStatus('');
+    setFPlatform('');
+    setFDouyin('');
+    setFNick('');
+    setFSince('');
+    setFUntil(todayISO());
+    setFMedia('');
+    setFStorage('');
+    setFMode('');
+  }
+
   const timer = useRef<number | null>(null);
 
   function hideJob(id: number) {
@@ -334,9 +372,29 @@ export function CreatorsPage() {
     }
   }
 
-  const shownJobs = jobs.filter((j) => !hidden.includes(j.id));
+  /** 一个任务是否命中当前所有筛选条件；条件之间是「且」，空条件不参与。 */
+  function matchesFilters(j: CreatorJob): boolean {
+    if (fStatus && j.status !== fStatus) return false;
+    if (fPlatform && j.platform !== fPlatform) return false;
+    if (fDouyin.trim() && !creatorId(j).includes(fDouyin.trim())) return false;
+    if (fNick.trim() && !nickName(j).includes(fNick.trim())) return false;
+    const sinceSec = dayStartSec(fSince);
+    if (sinceSec != null && j.created_at < sinceSec) return false;
+    // 截止时间默认「今天」：按闭区间筛到今为止（真实任务都在过去，未来数据才会被它拦下）。
+    const untilSec = dayEndSec(fUntil);
+    if (untilSec != null && j.created_at > untilSec) return false;
+    if (fMedia && j.media_type !== fMedia) return false;
+    if (fStorage && j.storage !== fStorage) return false;
+    if (fMode && j.mode !== fMode) return false;
+    return true;
+  }
+
+  const shownJobs = jobs.filter((j) => !hidden.includes(j.id) && matchesFilters(j));
   // 只数当前列表里真的被隐藏的：陈旧的 id 不该让「已隐藏 N 个」虚高
   const hiddenCount = jobs.filter((j) => hidden.includes(j.id)).length;
+  // 是否有任一筛选被改动（用于显示「重置」与「清空筛选」提示）
+  const hasFilter = fStatus !== '' || fPlatform !== '' || fDouyin.trim() !== '' || fNick.trim() !== ''
+    || fSince !== '' || fUntil !== todayISO() || fMedia !== '' || fStorage !== '' || fMode !== '';
 
   return (
     <>
@@ -503,7 +561,130 @@ export function CreatorsPage() {
         </div>
       )}
 
-      <h2>批量任务</h2>
+      <div class="jobs-head">
+        <h2>批量任务</h2>
+        {hasFilter && (
+          <button type="button" class="btn btn-ghost small" onClick={resetFilters}>重置筛选</button>
+        )}
+      </div>
+
+      {/* 筛选栏：每项空 = 不筛，多项之间是「且」；下拉选「全部」即清空单项，文本框点 × 清空 */}
+      <div class="filter-bar">
+        <div class="filter">
+          <span>状态</span>
+          <Select
+            ariaLabel="筛选：状态"
+            value={fStatus}
+            options={[{ value: '', label: '全部状态' }].concat(
+              (['pending', 'running', 'paused', 'done', 'failed', 'cancelled'] as const)
+                .map((s) => ({ value: s, label: JOB[s] ?? s })),
+            )}
+            onChange={setFStatus}
+          />
+        </div>
+        <div class="filter">
+          <span>平台</span>
+          <Select
+            ariaLabel="筛选：平台"
+            value={fPlatform}
+            options={[
+              { value: '', label: '全部平台' },
+              { value: 'douyin', label: '抖音' },
+              { value: 'bilibili', label: 'B 站' },
+            ]}
+            onChange={setFPlatform}
+          />
+        </div>
+        <label class="filter">
+          <span>抖音号</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="输入抖音号"
+            value={fDouyin}
+            onInput={(e) => setFDouyin((e.target as HTMLInputElement).value)}
+          />
+          {fDouyin && (
+            <button type="button" class="filter-clear" aria-label="清除抖音号" onClick={() => setFDouyin('')}>×</button>
+          )}
+        </label>
+        <label class="filter">
+          <span>昵称</span>
+          <input
+            type="text"
+            placeholder="输入昵称"
+            value={fNick}
+            onInput={(e) => setFNick((e.target as HTMLInputElement).value)}
+          />
+          {fNick && (
+            <button type="button" class="filter-clear" aria-label="清除昵称" onClick={() => setFNick('')}>×</button>
+          )}
+        </label>
+        <div class="filter">
+          <span>发起时间</span>
+          <div class="filter-range">
+            <input
+              type="date"
+              aria-label="发起时间开始"
+              value={fSince}
+              onInput={(e) => setFSince((e.target as HTMLInputElement).value)}
+              onClick={(e) => showDatePicker(e.currentTarget as HTMLInputElement)}
+            />
+            <span class="muted">至</span>
+            <input
+              type="date"
+              aria-label="发起时间截止"
+              value={fUntil}
+              onInput={(e) => setFUntil((e.target as HTMLInputElement).value)}
+              onClick={(e) => showDatePicker(e.currentTarget as HTMLInputElement)}
+            />
+            {(fSince || fUntil !== todayISO()) && (
+              <button
+                type="button"
+                class="filter-clear"
+                aria-label="清除发起时间"
+                onClick={() => { setFSince(''); setFUntil(todayISO()); }}
+              >×</button>
+            )}
+          </div>
+        </div>
+        <div class="filter">
+          <span>媒体类型</span>
+          <Select
+            ariaLabel="筛选：媒体类型"
+            value={fMedia}
+            options={[
+              { value: '', label: '全部类型' },
+              { value: 'video', label: '视频' },
+              { value: 'audio', label: '音频' },
+            ]}
+            onChange={setFMedia}
+          />
+        </div>
+        <div class="filter">
+          <span>存放方式</span>
+          <Select
+            ariaLabel="筛选：存放方式"
+            value={fStorage}
+            options={[{ value: '', label: '全部存放' }].concat(
+              STORAGE_OPTS.map((s) => ({ value: s, label: STORAGE[s] ?? s })),
+            )}
+            onChange={setFStorage}
+          />
+        </div>
+        <div class="filter">
+          <span>选取方式</span>
+          <Select
+            ariaLabel="筛选：选取方式"
+            value={fMode}
+            options={[{ value: '', label: '全部方式' }].concat(
+              (['latest_n', 'date_range', 'all'] as const).map((m) => ({ value: m, label: SELECTION[m] ?? m })),
+            )}
+            onChange={setFMode}
+          />
+        </div>
+      </div>
+
       {hiddenCount > 0 && (
         <p class="small muted">
           已隐藏 {hiddenCount} 个任务（只在这台设备的这个浏览器里）。
@@ -520,8 +701,12 @@ export function CreatorsPage() {
       )}
       {jobsPhase === 'ok' && jobs.length > 0 && shownJobs.length === 0 && (
         <Empty>
-          <strong>任务都被隐藏了</strong>
-          <p class="small muted">点上面的「恢复显示」可以把它们放回来。</p>
+          <strong>{hasFilter ? '没有符合筛选条件的任务' : '任务都被隐藏了'}</strong>
+          <p class="small muted">
+            {hasFilter
+              ? '改一下筛选条件，或点上面的「重置筛选」看全部任务。'
+              : '点上面的「恢复显示」可以把它们放回来。'}
+          </p>
         </Empty>
       )}
       {jobsPhase === 'ok' && shownJobs.length > 0 && (

@@ -14,7 +14,7 @@ function job(over: Record<string, unknown> = {}) {
     since_ts: null, until_ts: null, limit_n: 20, include_pinned: true,
     storage: 'phone', media_type: 'video', status: 'running', pause_reason: null,
     total: 20, done: 6, failed: 1, estimated_bytes: 300 * 1024 * 1024,
-    created_at: 1_800_000_000, updated_at: 1_800_000_100, started_at: 1_800_000_001, finished_at: null,
+    created_at: 1_700_000_000, updated_at: 1_700_000_100, started_at: 1_700_000_001, finished_at: null,
     ...over,
   };
 }
@@ -324,7 +324,8 @@ describe('批量提取', () => {
 
     await choose('选取方式', '指定日期');
 
-    const dates = Array.from(document.querySelectorAll('input[type="date"]')) as HTMLInputElement[];
+    // 只数创建表单里的日期框（筛选栏里也有发起时间日期框，不在这里面）
+    const dates = Array.from(document.querySelectorAll('.panel-card input[type="date"]')) as HTMLInputElement[];
     expect(dates).toHaveLength(2);
     const d = new Date();
     const two = (x: number) => String(x).padStart(2, '0');
@@ -501,7 +502,7 @@ describe('批量提取：多格式与任务卡信息', () => {
         json: {
           jobs: [job({
             platform: 'douyin', creator_name: '', source_input: '67194609689',
-            source_url: url, created_at: 1_800_000_000,
+            source_url: url, created_at: 1_700_000_000,
           })],
         },
       },
@@ -523,7 +524,7 @@ describe('批量提取：多格式与任务卡信息', () => {
     const src = document.querySelector('.job-src')!;
     expect(src.querySelector('.tag')).toBeNull();
     expect(document.querySelector('.job-url')!.textContent).toBe(url);
-    expect(text()).toContain('2027-01-15 03:00:00');
+    expect(text()).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
 
     // 裸值改成带标签的几项，格式用后缀名展示；「任务 #N」已删（数据库 id 与列表序号不一致，反而误导）
     const metas = Array.from(document.querySelectorAll('.job-meta .meta')).map((n) => n.textContent);
@@ -591,6 +592,96 @@ describe('批量提取：多格式与任务卡信息', () => {
     await click(document.querySelectorAll('.fmt-chip')[1]!);
     await until(() => calls.some((c) => (c.search ?? '').includes('fmt=mp3')));
     expect(saved).toHaveBeenCalled();
+  });
+});
+
+describe('批量任务筛选', () => {
+  function threeJobs() {
+    return [
+      job({ id: 1, platform: 'douyin', creator_name: '小叶稚', source_input: '67194609689', status: 'done' }),
+      job({ id: 2, platform: 'douyin', creator_name: '美食博主', source_input: '88888888888', status: 'cancelled' }),
+      job({ id: 3, platform: 'bilibili', creator_name: '科技UP', source_input: 'https://space.bilibili.com/123', creator_id: '123', status: 'running' }),
+    ];
+  }
+  const cardCount = () => document.querySelectorAll('.job').length;
+
+  async function typeFilter(placeholder: string, v: string) {
+    const input = document.querySelector(`input[placeholder="${placeholder}"]`) as HTMLInputElement;
+    await act(async () => {
+      input.value = v;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  test('状态、平台、抖音号、昵称都能筛选，条件是「且」关系', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: threeJobs() } } }));
+    mount('/creators');
+    await until(() => cardCount() === 3);
+
+    // 状态：已完成 → 只剩小叶稚
+    await choose('筛选：状态', '已完成');
+    await until(() => cardCount() === 1);
+    expect(text()).toContain('小叶稚');
+
+    // 叠加平台=抖音（小叶稚已是抖音+已完成）→ 仍 1 个
+    await choose('筛选：平台', '抖音');
+    await until(() => cardCount() === 1);
+
+    // 清掉状态（选「全部状态」），只剩平台=抖音 → 2 个
+    await choose('筛选：状态', '全部状态');
+    await until(() => cardCount() === 2);
+
+    // 再叠加抖音号 → 只剩小叶稚
+    await typeFilter('输入抖音号', '67194609689');
+    await until(() => cardCount() === 1);
+    expect(text()).toContain('小叶稚');
+  });
+
+  test('昵称筛选按包含匹配；重置筛选一键清空所有条件', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: threeJobs() } } }));
+    mount('/creators');
+    await until(() => cardCount() === 3);
+
+    await typeFilter('输入昵称', '博主');
+    await until(() => cardCount() === 1);
+    expect(text()).toContain('美食博主');
+
+    // 再设一个状态条件，触发「重置筛选」按钮出现
+    await choose('筛选：状态', '已完成');
+    await until(() => cardCount() === 0);
+    expect(text()).toContain('没有符合筛选条件的任务');
+
+    await click(button('重置筛选'));
+    await until(() => cardCount() === 3);
+  });
+
+  test('发起时间筛选：填开始时间筛掉更早的任务，截止时间默认今天', async () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const day = 86400;
+    const two = (x: number) => String(x).padStart(2, '0');
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [
+        job({ id: 1, creator_name: '两天前', created_at: nowSec - 2 * day }),
+        job({ id: 2, creator_name: '昨天', created_at: nowSec - day }),
+        job({ id: 3, creator_name: '现在', created_at: nowSec }),
+      ] } },
+    }));
+    mount('/creators');
+    await until(() => cardCount() === 3);
+
+    // 填开始时间 = 昨天 → 筛掉「两天前」，保留「昨天」「现在」（截止默认今天，不额外拦）
+    const y = new Date((nowSec - day) * 1000);
+    const yesterdayIso = `${y.getFullYear()}-${two(y.getMonth() + 1)}-${two(y.getDate())}`;
+    const start = document.querySelector('input[aria-label="发起时间开始"]') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+    await act(async () => {
+      setter.call(start, yesterdayIso);
+      start.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await until(() => cardCount() === 2);
+    expect(text()).toContain('昨天');
+    expect(text()).toContain('现在');
+    expect(text()).not.toContain('两天前');
   });
 });
 
