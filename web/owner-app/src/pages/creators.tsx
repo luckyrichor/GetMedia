@@ -537,8 +537,6 @@ export function CreatorsPage() {
                 </button>
               </div>
               <div class="job-meta small">
-                <span class="meta"><b>任务</b>#{j.id}</span>
-                <span class="meta-sep" aria-hidden="true" />
                 <span class="meta"><b>选取</b>{selectionText(j)}</span>
                 <span class="meta-sep" aria-hidden="true" />
                 <span class="meta" title={STORAGE_DESC[j.storage]}>

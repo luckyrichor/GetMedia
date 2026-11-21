@@ -522,9 +522,9 @@ describe('批量提取：多格式与任务卡信息', () => {
     expect(document.querySelector('.job-url')!.textContent).toBe(url);
     expect(text()).toContain('2027-01-15 03:00:00');
 
-    // 裸值改成带标签的几项，格式用后缀名展示
+    // 裸值改成带标签的几项，格式用后缀名展示；「任务 #N」已删（数据库 id 与列表序号不一致，反而误导）
     const metas = Array.from(document.querySelectorAll('.job-meta .meta')).map((n) => n.textContent);
-    expect(metas).toEqual(['任务#3', '选取最近 N 条（20 条）', '存放只记清单', '输出视频原始格式']);
+    expect(metas).toEqual(['选取最近 N 条（20 条）', '存放只记清单', '输出视频原始格式']);
     // 媒体类型和格式拆成两个独立的块，各能单独定位
     expect(document.querySelector('.media-kind')!.textContent).toBe('视频');
     expect(document.querySelector('.format-list')!.textContent).toBe('原始格式');
