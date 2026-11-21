@@ -274,7 +274,7 @@ export function CreatorsPage() {
     <>
       <h1>批量提取</h1>
       <ul class="small muted lead-list">
-        <li>输入博主主页链接，或直接填抖音号 / B 站号（纯数字）。</li>
+        <li>输入博主主页链接，或直接填抖音号 / B 站号。</li>
         <li>选取方式：最近 N 条、指定日期、全部作品。</li>
         <li>可以先「预览」看会选多少条，再「开始提取」。</li>
       </ul>

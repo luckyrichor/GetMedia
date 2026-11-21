@@ -246,8 +246,11 @@ audio.player-media { background: none; }
 .storage-notes li { padding: 3px 8px; border-left: 2px solid transparent; border-radius: 4px; }
 .storage-notes li.on { border-left-color: var(--accent); background: var(--info-bg); color: var(--text); }
 .storage-notes strong { font-weight: 600; }
-.field-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+/* 顶部对齐：某列多一行说明（如主页链接的 hint）时，别把它的标签往上顶 */
+.field-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
 .field-row .field { flex: 1 1 10rem; margin-bottom: 10px; }
+/* 单独成列的复选框不是 .field，底部对齐才能和 input 同一基线 */
+.field-row .check { align-self: flex-end; }
 input[type="text"], input[type="number"], input[type="date"], textarea, select {
   font: inherit; color: var(--text); background: var(--bg);
   border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%;
