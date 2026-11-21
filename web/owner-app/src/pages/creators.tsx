@@ -201,7 +201,7 @@ export function CreatorsPage() {
   // —— 批量任务筛选：每项为空 = 不筛；多项之间是「且」关系 ——
   const [fStatus, setFStatus] = useState('');
   const [fPlatform, setFPlatform] = useState('');
-  const [fDouyin, setFDouyin] = useState('');
+  const [fUid, setFUid] = useState('');
   const [fNick, setFNick] = useState('');
   const [fSince, setFSince] = useState('');
   const [fUntil, setFUntil] = useState(() => todayISO());
@@ -212,7 +212,7 @@ export function CreatorsPage() {
   function resetFilters() {
     setFStatus('');
     setFPlatform('');
-    setFDouyin('');
+    setFUid('');
     setFNick('');
     setFSince('');
     setFUntil(todayISO());
@@ -376,7 +376,7 @@ export function CreatorsPage() {
   function matchesFilters(j: CreatorJob): boolean {
     if (fStatus && j.status !== fStatus) return false;
     if (fPlatform && j.platform !== fPlatform) return false;
-    if (fDouyin.trim() && !creatorId(j).includes(fDouyin.trim())) return false;
+    if (fUid.trim() && !creatorId(j).includes(fUid.trim())) return false;
     if (fNick.trim() && !nickName(j).includes(fNick.trim())) return false;
     const sinceSec = dayStartSec(fSince);
     if (sinceSec != null && j.created_at < sinceSec) return false;
@@ -399,7 +399,7 @@ export function CreatorsPage() {
   // 只数当前列表里真的被隐藏的：陈旧的 id 不该让「已隐藏 N 个」虚高
   const hiddenCount = jobs.filter((j) => hidden.includes(j.id)).length;
   // 是否有任一筛选被改动（用于显示「重置」与「清空筛选」提示）
-  const hasFilter = fStatus !== '' || fPlatform !== '' || fDouyin.trim() !== '' || fNick.trim() !== ''
+  const hasFilter = fStatus !== '' || fPlatform !== '' || fUid.trim() !== '' || fNick.trim() !== ''
     || fSince !== '' || fUntil !== todayISO() || fMedia !== '' || fStorage !== '' || fMode !== '';
 
   return (
@@ -602,16 +602,16 @@ export function CreatorsPage() {
           />
         </div>
         <label class="filter">
-          <span>抖音号</span>
+          <span>用户 ID</span>
           <input
             type="text"
             inputMode="numeric"
-            placeholder="输入抖音号"
-            value={fDouyin}
-            onInput={(e) => setFDouyin((e.target as HTMLInputElement).value)}
+            placeholder="输入用户 ID"
+            value={fUid}
+            onInput={(e) => setFUid((e.target as HTMLInputElement).value)}
           />
-          {fDouyin && (
-            <button type="button" class="filter-clear" aria-label="清除抖音号" onClick={() => setFDouyin('')}>×</button>
+          {fUid && (
+            <button type="button" class="filter-clear" aria-label="清除用户 ID" onClick={() => setFUid('')}>×</button>
           )}
         </label>
         <label class="filter">

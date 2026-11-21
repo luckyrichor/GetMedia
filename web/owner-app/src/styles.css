@@ -286,6 +286,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .filter { display: grid; gap: 4px; position: relative; }
 .filter > span { font-size: 0.78rem; color: var(--muted); }
 .filter input { min-width: 9rem; }
+/* 下拉框给一个稳定的最小宽度，避免选「抖音」后触发框变窄、整行换行位置跳动 */
+.filter .select { min-width: 7.5rem; }
 /* 文本框有内容时右上角浮一个 ×，点它清空这一项 */
 .filter-clear {
   position: absolute; right: 6px; top: 26px; width: 18px; height: 18px; padding: 0;

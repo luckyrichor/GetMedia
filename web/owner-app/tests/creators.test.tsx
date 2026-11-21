@@ -613,7 +613,7 @@ describe('批量任务筛选', () => {
     });
   }
 
-  test('状态、平台、抖音号、昵称都能筛选，条件是「且」关系', async () => {
+  test('状态、平台、用户 ID、昵称都能筛选，条件是「且」关系', async () => {
     server(ownerRoutes({ [JOBS]: { json: { jobs: threeJobs() } } }));
     mount('/creators');
     await until(() => cardCount() === 3);
@@ -631,8 +631,8 @@ describe('批量任务筛选', () => {
     await choose('筛选：状态', '全部状态');
     await until(() => cardCount() === 2);
 
-    // 再叠加抖音号 → 只剩小叶稚
-    await typeFilter('输入抖音号', '67194609689');
+    // 再叠加用户 ID → 只剩小叶稚
+    await typeFilter('输入用户 ID', '67194609689');
     await until(() => cardCount() === 1);
     expect(text()).toContain('小叶稚');
   });
