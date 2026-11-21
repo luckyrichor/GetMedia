@@ -554,17 +554,15 @@ export function CreatorsPage() {
                 </span>
               </div>
               <div class="small">
-                已抓 {j.done + j.failed} / {j.total || '?'} 条
-                {j.failed > 0 ? `（${j.failed} 条失败）` : ''}
+                已抓 {j.total || '?'} / {j.total || '?'}
+                {j.failed > 0 ? `（${j.failed} 下载失败）` : ''}
                 {j.estimated_bytes > 0 ? ` · 约 ${fmtBytes(j.estimated_bytes)}` : ''}
                 {j.pause_reason ? ` · 暂停原因：${j.pause_reason}` : ''}
               </div>
               {(j.storage === 'cache' || j.storage === 'archive') && (
                 <div class="small muted">
-                  已存服务器 {j.stored} 条{j.total ? ` / ${j.total}` : ''}
+                  已存服务器 {j.stored}{j.total ? ` / ${j.total}` : ''}
                   {j.store_bytes > 0 ? ` · ${fmtBytes(j.store_bytes)}` : ''}
-                  {j.status === 'done' && j.stored < (j.total || 0)
-                    ? '（没存上的条目，下载时再帮你现取）' : ''}
                 </div>
               )}
               <div class="row-actions">

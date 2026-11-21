@@ -99,8 +99,8 @@ describe('批量提取', () => {
 
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
     expect(body).toMatchObject({ url: '12345', mode: 'latest_n', n: 20, storage: 'archive', media_type: 'video' });
-    expect(text()).toContain('已抓 7 / 20 条');
-    expect(text()).toContain('1 条失败');
+    expect(text()).toContain('已抓 20 / 20');
+    expect(text()).toContain('1 下载失败');
   });
 
   test('暂停与重试只对相应状态出现，并且真的发请求', async () => {
@@ -110,7 +110,7 @@ describe('批量提取', () => {
       'POST /v2/creators/jobs/3/retry': { json: { job: job() } },
     }));
     mount('/creators');
-    await until(() => text().includes('已抓 7 / 20 条'));
+    await until(() => text().includes('已抓 20 / 20'));
 
     // 暂停态：有"继续"和"重试"，没有"暂停"
     expect(() => button('暂停')).toThrow();
@@ -129,7 +129,7 @@ describe('批量提取', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('已抓 7 / 20 条'));
+    await until(() => text().includes('已抓 20 / 20'));
 
     // 跑完的任务没有「重试失败条目」，给的是「刷新地址」
     expect(() => button('重试失败条目')).toThrow();
@@ -142,7 +142,7 @@ describe('批量提取', () => {
       [JOBS]: { json: { jobs: [job({ status: 'done' })] } },
     }));
     mount('/creators');
-    await until(() => text().includes('已抓 7 / 20 条'));
+    await until(() => text().includes('已抓 20 / 20'));
 
     expect(() => button('刷新地址')).toThrow();
     expect(() => button('重试失败条目')).toThrow();
@@ -378,7 +378,7 @@ describe('批量提取', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('已存服务器 12 条 / 20'));
+    await until(() => text().includes('已存服务器 12 / 20'));
     expect(text()).toContain('服务器暂存');
     expect(text()).toContain('240 MB');
 
