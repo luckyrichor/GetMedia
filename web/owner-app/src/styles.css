@@ -311,12 +311,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .job-hide {
   flex: none; margin-left: 2px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
-  padding: 3px 8px; font: inherit; font-size: 0.78rem; line-height: 1.25;
-  color: var(--muted); cursor: pointer;
+  background: #fff1f0; border: 1px solid #f0a49c; border-radius: 7px;
+  padding: 3px 9px; font: inherit; font-size: 0.78rem; line-height: 1.25;
+  color: #a4271c; cursor: pointer;
 }
-.job-hide:hover { color: var(--text); border-color: var(--muted); background: var(--bg); }
-.job-hide:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.job-hide:hover { background: #a4271c; border-color: #a4271c; color: #fff; }
+.job-hide:focus-visible { outline: 2px solid #a4271c; outline-offset: 1px; }
+@media (prefers-color-scheme: dark) {
+  .job-hide { background: #2b1a19; border-color: #f0a49c; color: #f0a49c; }
+  .job-hide:hover { background: #f0a49c; border-color: #f0a49c; color: #1a0d0c; }
+}
 .job .small + .small { margin-top: 2px; }
 .grow { flex: 1; min-width: 0; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -426,7 +430,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .select-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .select-caret { color: var(--muted); font-size: 0.8rem; flex: none; }
 .select-menu {
-  position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px);
+  position: absolute; z-index: 40; left: 0; top: calc(100% + 4px);
+  /* 至少和触发按钮一样宽，内容更长时自动撑开，避免「✓ 全部状态」被挤成省略号 */
+  min-width: 100%; width: max-content; max-width: 24rem;
   margin: 0; padding: 4px; list-style: none;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 14px 30px rgba(12, 18, 30, 0.18); max-height: 16rem; overflow: auto;
@@ -440,7 +446,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .select-opt.on::before { content: "✓"; font-size: 0.8rem; flex: none; margin-right: -2px; }
 .select-opt.on { justify-content: flex-start; }
 .select-hint { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: auto; }
-.select-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
 
 /* 多选：每行前面一个方框，勾了几个一眼可见；点整行就切换，不必非点方框 */
 .select-menu.multi .select-opt { align-items: center; }

@@ -683,6 +683,24 @@ describe('批量任务筛选', () => {
     expect(text()).toContain('现在');
     expect(text()).not.toContain('两天前');
   });
+
+  test('存放方式筛「只记不下载」同时命中 metadata 与旧数据 phone', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [
+        job({ id: 1, creator_name: '新只记', storage: 'metadata' }),
+        job({ id: 2, creator_name: '旧手机', storage: 'phone' }),
+        job({ id: 3, creator_name: '暂存', storage: 'cache' }),
+      ] } },
+    }));
+    mount('/creators');
+    await until(() => cardCount() === 3);
+
+    await choose('筛选：存放方式', '只记不下载');
+    await until(() => cardCount() === 2);
+    expect(text()).toContain('新只记');
+    expect(text()).toContain('旧手机');
+    expect(text()).not.toContain('暂存');
+  });
 });
 
 describe('条目翻页', () => {
