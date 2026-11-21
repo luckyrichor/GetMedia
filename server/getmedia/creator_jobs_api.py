@@ -278,14 +278,10 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
         state = service.request_refresh(ctx.user_id, jid)
         if state == "started":
             _spawn(service.run, jid, refresh=True)
-            raise ApiError(409, "media_link_expired",
-                           "这条的直链已失效（多半是地址过期，作品本身可能还在）。"
-                           "已在后台重新扫描换新地址，约 1 分钟后重试即可")
+            raise ApiError(409, "media_link_expired", "该链接已失效，请 1 分钟后重试。")
         if state == "busy":
-            raise ApiError(409, "media_link_expired",
-                           "这条的直链已失效。后台正在重新扫描换地址，请稍后再试")
-        raise ApiError(409, "media_link_expired",
-                       "这条的直链已失效，作品可能已被删除或设为私密，取不到文件")
+            raise ApiError(409, "media_link_expired", "该链接已失效，正在重新生成。")
+        raise ApiError(409, "media_link_expired", "该链接已失效，请输入新地址。")
 
     @app.post("/v2/creators/jobs/{job_id}/items/{video_id}/state")
     def item_state(job_id: str, video_id: str, body: ItemStateBody, ctx: AuthCtx = Depends(guard)):

@@ -387,7 +387,7 @@ describe('批量提取', () => {
     await until(() => saved.mock.calls.length > 0);
   });
 
-  test('直链过期时提示「服务器正在换新地址」，不把错误当文件存下来', async () => {
+  test('直链过期时原样显示服务端提示，不把错误当文件存下来', async () => {
     const saved = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job()] } },
@@ -396,8 +396,7 @@ describe('批量提取', () => {
       },
       'GET /v2/creators/jobs/3/items/BV1/file': {
         status: 409,
-        json: { detail: '这条的直链已失效（多半是地址过期，作品本身可能还在）。'
-          + '已在后台重新扫描换新地址，约 1 分钟后重试即可' },
+        json: { detail: '该链接已失效，请 1 分钟后重试。' },
       },
     }));
     mount('/creators');
@@ -406,7 +405,7 @@ describe('批量提取', () => {
     await until(() => text().includes('第一条作品'));
 
     await click(button('下载'));
-    await until(() => text().includes('服务器正在换新地址'));
+    await until(() => text().includes('该链接已失效，请 1 分钟后重试。'));
     // 409 不落盘：否则浏览器会把一段 JSON 报错存成 .mp4
     expect(saved).not.toHaveBeenCalled();
   });

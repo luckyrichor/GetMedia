@@ -597,9 +597,10 @@ function JobItems({ jobId }: { jobId: number }) {
         save(url);
         return true;
       }
+      // 409 的文案由服务端给（三种情形：等 1 分钟重试 / 正在重新生成 / 请换新地址），
+      // 前端不自己拼，免得两边不一致
       setNote(r.status === 409
-        // 服务端在后台重扫了，换完地址再点一次就行；不自动等 60 秒，免得批量下载卡在这里
-        ? `「${item.title}」的直链已过期${r.detail.includes('已在后台') ? '，服务器正在换新地址（约 1 分钟）' : ''}，稍后重试即可。`
+        ? `「${item.title}」${r.detail}`
         : `「${item.title}」下载失败：${r.detail}`);
       return false;
     } finally {
