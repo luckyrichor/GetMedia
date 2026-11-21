@@ -531,10 +531,6 @@ export function CreatorsPage() {
             <input type="checkbox" checked={pinned} onChange={(e) => setPinned((e.target as HTMLInputElement).checked)} />
             <span>包含置顶作品</span>
           </label>
-          <span class="small muted">
-            博主置顶的那条通常不是最新发布的，按「最近 N 条」「指定日期」筛时会被时间条件排除；
-            勾上就不管时间、一起提。B 站与抖音都有置顶。
-          </span>
         </div>
 
         <div class="row-actions">
