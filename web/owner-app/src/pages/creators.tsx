@@ -853,7 +853,7 @@ function JobItems({ jobId }: { jobId: number }) {
   /** 翻页：第几页（从 1 起）与每页条数。只看这一页，不再「加载更多」累加。 */
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(DEFAULT_PAGE_SIZE);
-  /** 正在翻页：只显示淡淡的「加载中」，不把旧表格抽掉，避免高度跳变带来的抖动。 */
+  /** 正在翻页：旧表格半透明过渡（不抽掉、不插占位，避免高度跳变抖动）。 */
   const [switching, setSwitching] = useState(false);
   /** 批量下载的进度；null 表示没在跑。stop 是给循环看的「立即停」标志。 */
   const [run, setRun] = useState<{ done: number; total: number } | null>(null);
@@ -994,7 +994,6 @@ function JobItems({ jobId }: { jobId: number }) {
 
   return (
     <div class={switching ? 'items switching' : 'items'}>
-      {switching && <p class="small muted items-loading">加载中…</p>}
       {items.length > 0 && (
         <div class="items-tools">
           {run ? (

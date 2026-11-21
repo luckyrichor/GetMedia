@@ -329,8 +329,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .nowrap { white-space: nowrap; }
 
 .items { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 10px; }
-/* 翻页时旧表格原位保留、只加淡淡的「加载中」，高度不跳，避免抖动 */
-.items-loading { margin: 0 0 6px; }
+/* 翻页时旧表格原位保留、只加淡淡的「加载中」半透明，高度不跳，避免抖动 */
 .items.switching .item-head, .items.switching .item-row { opacity: 0.5; transition: opacity 0.12s ease; }
 /* 条目按表格排：序号 / 标题 / 时长 / 发布 / 提取 / 操作。
    表头和数据行用同一份列宽（最后一列也给固定宽，否则两边 auto 宽度不同会错位） */
