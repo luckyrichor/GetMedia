@@ -16,6 +16,21 @@ import { Empty, ErrorBox, Field, fmtBytes, fmtDuration, fmtTime, Loading, relTim
 
 const STORAGE_OPTS: JobStorage[] = ['phone', 'metadata', 'archive', 'cache'];
 
+/** 输入类型：显式告诉后端这是链接、抖音号还是 B 站 UID，不再让它猜。 */
+type CreatorKind = 'url' | 'douyin' | 'bilibili';
+
+const KIND_LABEL: Record<CreatorKind, string> = {
+  url: '主页链接',
+  douyin: '抖音号',
+  bilibili: 'B 站号',
+};
+
+const KIND_HINT: Record<CreatorKind, string> = {
+  url: 'https://space.bilibili.com/12345 或抖音主页链接',
+  douyin: '纯数字抖音号，例如 67194609689',
+  bilibili: '纯数字 B 站 UID，例如 12345',
+};
+
 function fmtDay(ts: number | null): string {
   if (!ts) return '';
   const d = new Date(ts * 1000);
@@ -24,6 +39,7 @@ function fmtDay(ts: number | null): string {
 }
 
 export function CreatorsPage() {
+  const [kind, setKind] = useState<CreatorKind>('url');
   const [url, setUrl] = useState('');
   const [mode, setMode] = useState<SelectionMode>('latest_n');
   const [n, setN] = useState('20');
@@ -82,7 +98,9 @@ export function CreatorsPage() {
   function body() {
     return {
       url: url.trim(),
-      platform: null,
+      // 链接走 resolve（由后端按域名判平台）；选「抖音号 / B 站号」时把平台显式带上，
+      // 纯数字就不会被默认当成抖音号。
+      platform: kind === 'url' ? null : kind,
       mode,
       n: mode === 'latest_n' ? Number(n) || null : null,
       since: mode === 'date_range' ? since || null : null,
@@ -92,8 +110,13 @@ export function CreatorsPage() {
   }
 
   function check(): boolean {
-    if (!url.trim()) {
-      setErr('先填博主主页链接、UID 或抖音号');
+    const value = url.trim();
+    if (!value) {
+      setErr(kind === 'url' ? '先填博主主页链接' : `先填${KIND_LABEL[kind]}`);
+      return false;
+    }
+    if (kind !== 'url' && !/^\d+$/.test(value)) {
+      setErr(`${KIND_LABEL[kind]}只能填纯数字`);
       return false;
     }
     if (mode === 'latest_n' && !(Number(n) > 0)) {
@@ -158,16 +181,27 @@ export function CreatorsPage() {
       </p>
 
       <div class="panel-card">
-        <label class="field">
-          <span>博主主页链接 / UID / 抖音号</span>
-          <input
-            type="text"
-            maxLength={2000}
-            placeholder="https://space.bilibili.com/12345 或 抖音号"
-            value={url}
-            onInput={(e) => setUrl((e.target as HTMLInputElement).value)}
-          />
-        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>类型</span>
+            <select value={kind} onChange={(e) => setKind((e.target as HTMLSelectElement).value as CreatorKind)}>
+              {(Object.keys(KIND_LABEL) as CreatorKind[]).map((k) => (
+                <option value={k}>{KIND_LABEL[k]}</option>
+              ))}
+            </select>
+          </label>
+          <label class="field">
+            <span>{KIND_LABEL[kind]}</span>
+            <input
+              type="text"
+              maxLength={kind === 'url' ? 2000 : 40}
+              inputMode={kind === 'url' ? 'text' : 'numeric'}
+              placeholder={KIND_HINT[kind]}
+              value={url}
+              onInput={(e) => setUrl((e.target as HTMLInputElement).value)}
+            />
+          </label>
+        </div>
 
         <div class="field-row">
           <label class="field">

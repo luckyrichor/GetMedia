@@ -318,40 +318,69 @@ class CreatorJobService:
     # ---------- 列表扫描 ----------
     def preview(self, ref: CreatorRef, selection: Selection, *, max_items: int = 100,
                 media_type: str = "video") -> dict:
-        """预览：只扫到 ``max_items`` 条（或自然停止），不落库。"""
+        """预览：只扫到 ``max_items`` 条（或自然停止），不落库。
+
+        「全部作品」不再逐页跳扫：平台列表接口只有游标顺序翻页，按「绝对起点」跳页时
+        第二次请求就要翻到第 2N 条，抖音桥接单次抓不到那么深，会误报「不足以覆盖起点」。
+        所以 ``all`` 只扫**一批**（一次 ``fetch_window``），抓多少算多少、如实回 ``has_more``；
+        真正翻到底交给建任务后的 ``run()`` 循环（它每页落库游标，可续扫）。
+        """
         cookie_file, _src = self.cookie_fn(ref.platform)
         pinned = self.pinned_fn(ref, cookie_file)
         picked: list[dict] = []
-        start, pages = 1, 0
         total = None
         profile = None
-        while pages < 10 and len(picked) < max_items:
-            window = self.window_fn(ref, start, min(self.s.creator_page_size, 20), cookie_file)
+        has_more = False
+        if selection.mode == "all":
+            window = self.window_fn(ref, 1, min(self.s.creator_max_items, max_items), cookie_file)
             total = getattr(window, "total", total)
-            profile = profile or getattr(window, "profile", None)
-            if not window.items:
-                break
-            stop = False
+            profile = getattr(window, "profile", None)
             for v in window.items:
                 item = self._select_one(v, selection, pinned)
                 if item is None:
-                    if selection.mode == "date_range":
-                        stop = True
                     continue
                 picked.append(item)
-                if selection.mode == "latest_n" and selection.n and len(picked) >= selection.n:
-                    stop = True
-                    break
                 if len(picked) >= max_items:
-                    stop = True
                     break
-            start += len(window.items)
-            pages += 1
-            if stop or not window.has_more:
-                break
+            has_more = bool(getattr(window, "has_more", False)) or len(picked) >= max_items
+        else:
+            start, pages = 1, 0
+            while pages < 10 and len(picked) < max_items:
+                try:
+                    window = self.window_fn(ref, start, min(self.s.creator_page_size, 20), cookie_file)
+                except CreatorError as exc:
+                    # 已经拿到一部分时不要把整次预览判死：抓不到更深就如实说「还有更多」。
+                    if picked:
+                        log.info("预览在起点 %s 处停止：%s", start, type(exc).__name__)
+                        has_more = True
+                        break
+                    raise
+                total = getattr(window, "total", total)
+                profile = profile or getattr(window, "profile", None)
+                if not window.items:
+                    break
+                stop = False
+                for v in window.items:
+                    item = self._select_one(v, selection, pinned)
+                    if item is None:
+                        if selection.mode == "date_range":
+                            stop = True
+                        continue
+                    picked.append(item)
+                    if selection.mode == "latest_n" and selection.n and len(picked) >= selection.n:
+                        stop = True
+                        break
+                    if len(picked) >= max_items:
+                        stop = True
+                        break
+                start += len(window.items)
+                pages += 1
+                if stop or not window.has_more:
+                    break
         for p in picked:
             p["estimated_bytes"] = estimate_bytes(p["duration_sec"], "video", self.s)
         return {"items": picked[:max_items], "total": total, "profile": profile,
+                "has_more": has_more,
                 "estimated_bytes": sum(p["estimated_bytes"] for p in picked[:max_items])}
 
     def _select_one(self, v: CreatorVideo, sel: Selection, pinned: set[str]) -> dict | None:

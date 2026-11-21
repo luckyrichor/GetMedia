@@ -154,6 +154,11 @@ def play_urls(raw: dict) -> tuple[str, ...]:
 
 _SEC_UID_RE = re.compile(r"^MS4wLjAB[A-Za-z0-9_-]{8,}$")
 
+# 浏览器桥接单次抓取的硬上限。max_items 跟着 need 长（否则「全部作品」翻不深），
+# scrolls 也按 need 反推，但两者都要封顶：滚得越多越慢、越容易触发验证码。
+_MAX_CAPTURE_ITEMS = 600
+_MAX_CAPTURE_SCROLLS = 40
+
 
 def _iter_users(value: Any):
     """从搜索接口/页面状态里递归揪出用户对象，不依赖固定的嵌套结构。"""
@@ -388,7 +393,12 @@ class DouyinBrowserBridge:
                 if isinstance(user, dict):
                     meta["profile"] = user
 
-        max_items = min(max(need + 18, 36), 120)
+        max_items = min(max(need + 18, 36), _MAX_CAPTURE_ITEMS)
+        # 滚动的次数必须跟得上 need：平台每页约 18 条，只按配置的固定次数滚，
+        # 「全部作品」在几十条处就撞上限，报「不足以覆盖起点」。这里按 need 反推下限，
+        # 再用 _MAX_CAPTURE_SCROLLS 兜住时间与风控成本。
+        scrolls = max(1, int(settings.douyin_browser_max_scrolls))
+        scrolls = max(scrolls, min((need + 17) // 18 + 2, _MAX_CAPTURE_SCROLLS))
         timeout_ms = int(settings.douyin_browser_timeout * 1000)
 
         with sync_playwright() as playwright:
@@ -444,7 +454,7 @@ class DouyinBrowserBridge:
                     if _blocked_reason(page):
                         raise CreatorUnavailable("抖音安全验证未完成，请重试")
 
-                for _ in range(max(1, int(settings.douyin_browser_max_scrolls))):
+                for _ in range(scrolls):
                     if len(captured) >= max_items and not meta["has_more"]:
                         break
                     try:
@@ -601,7 +611,12 @@ class DouyinCreatorProvider:
             raise CreatorRangeError(f"范围超出：该博主只有 {total} 条公开视频")
         if start > len(items):
             if catalog.get("has_more"):
-                raise CreatorUnavailable(f"只抓取到 {len(items)} 条视频，不足以覆盖起点 {start}；请缩小起点后重试")
+                # 这不是「起点设得太大」——是单次能抓到的深度上限（桥接滚动次数/条数）。
+                # 真正的「全部作品」由建任务后的 run() 循环按游标续扫，不要去调小起点。
+                raise CreatorUnavailable(
+                    f"本次只抓到 {len(items)} 条，距起点 {start} 还不够；"
+                    "这是单次抓取深度上限，不是起点问题——请改用「建批量任务」，它会从游标续扫"
+                )
             raise CreatorRangeError(f"范围超出：该博主只有 {len(items)} 条公开视频")
 
         videos = [self._to_video(raw, index + 1, ref) for index, raw in enumerate(items)]

@@ -86,8 +86,8 @@ describe('博主批量', () => {
     await fillUrl('12345');
     const selects = document.querySelectorAll('select');
     await act(async () => {
-      // 0 选取方式 / 1 存放方式 / 2 格式
-      const storage = selects[1] as HTMLSelectElement;
+      // 0 类型 / 1 选取方式 / 2 存放方式 / 3 格式
+      const storage = selects[2] as HTMLSelectElement;
       storage.value = 'archive';
       storage.dispatchEvent(new Event('change', { bubbles: true }));
     });
@@ -166,5 +166,48 @@ describe('博主批量', () => {
     await click(button('先预览会选哪些'));
     await until(() => text().includes('平台拒绝了这次请求'));
     expect(text()).not.toContain('网络不稳定');
+  });
+
+  test('选「抖音号」时显式带 platform=douyin，纯数字不再靠后端猜', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    // 类型下拉切到「抖音号」（第 0 个 select）
+    const selects = document.querySelectorAll('select');
+    await act(async () => {
+      const kind = selects[0] as HTMLSelectElement;
+      kind.value = 'douyin';
+      kind.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await fillUrl('67194609689');
+    await click(button('先预览会选哪些'));
+    await until(() => text().includes('会选中 2 条'));
+
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.platform).toBe('douyin');
+    expect(body.url).toBe('67194609689');
+    // 「全部作品」抓不到更深时如实说还有更多，而不是报「不足以覆盖起点」
+    expect(text()).toContain('还有更多');
+  });
+
+  test('选「抖音号」后填非数字直接拦下，不发请求', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    const selects = document.querySelectorAll('select');
+    await act(async () => {
+      const kind = selects[0] as HTMLSelectElement;
+      kind.value = 'douyin';
+      kind.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await fillUrl('https://space.bilibili.com/1');
+    await click(button('先预览会选哪些'));
+    await until(() => text().includes('只能填纯数字'));
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 });

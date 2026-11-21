@@ -239,7 +239,7 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
             range=CreatorRangeOut(start=1, count=len(items)),
             items=items,
             total=out.get("total"),
-            has_more=False,
+            has_more=bool(out.get("has_more")),
             fetched_at=datetime.now(timezone.utc).isoformat(),
             cookie_source="configured",
             mode=body.mode,

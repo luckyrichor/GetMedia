@@ -230,6 +230,50 @@ def test_batch_preview_supports_modes(jenv):
     assert body["profile"]["name"] == "测试博主"
 
 
+class ShallowLister:
+    """模拟抖音桥接：单次最多抓到 ``depth`` 条，起点超过它就报「抓不够」。
+
+    旧实现用「递增 start 跳页」扫「全部作品」，第二次请求到 start=57 就会被这个上限挡住、
+    整次预览 400；现在 ``all`` 只扫一批并如实回 ``has_more``。
+    """
+
+    def __init__(self, total: int = 300, depth: int = 56):
+        self.videos = make_videos(total)
+        self.depth = depth
+        self.calls = []
+
+    def __call__(self, ref, start, count, cookie_file=None):
+        from getmedia.creators.base import CreatorUnavailable
+        self.calls.append((start, count))
+        if start > self.depth:
+            raise CreatorUnavailable(f"只抓取到 {self.depth} 条，不足以覆盖起点 {start}")
+        end = min(start - 1 + count, self.depth)
+        return CreatorWindow(
+            profile=CreatorProfile(platform=Platform.BILIBILI, creator_id="2", name="测试博主",
+                                   url="https://space.bilibili.com/2/video", total_videos=len(self.videos)),
+            items=self.videos[start - 1:end],
+            total=len(self.videos),
+            has_more=True,
+        )
+
+
+def test_all_preview_survives_shallow_list(tmp_path):
+    """「全部作品」预览不该因为单次抓不深而整体失败（抖音 56/57 那个报错）。"""
+    lister = ShallowLister()
+    env = build(tmp_path, lister=lister)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/preview", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "all"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "all"
+    assert body["has_more"] is True
+    assert 0 < len(body["items"]) <= 50
+    # 只发一批：不再用递增起点跳页
+    assert len(lister.calls) == 1 and lister.calls[0][0] == 1
+
+
 def test_creator_batch_is_isolated_between_users(tmp_path):
     env = build(tmp_path)
     env.app.state.runtime.write(registration_open=True)
