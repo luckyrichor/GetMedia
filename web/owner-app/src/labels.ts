@@ -10,6 +10,14 @@ export const STORAGE: Record<string, string> = {
   cache: '服务端缓存',
 };
 
+/** 四种存放方式各自实际会做什么（批量任务只扫列表，文件另走下载入口）。 */
+export const STORAGE_DESC: Record<string, string> = {
+  phone: '只记作品清单和播放地址，文件由手机逐条下载。',
+  metadata: '只记标题、时长这些信息，不下载文件。',
+  archive: '记清单；之后在网页点单条下载时由服务器转发，不长期占用服务器空间。',
+  cache: '记清单；网页按需下载的文件进临时缓存，到期自动清理。',
+};
+
 export const JOB: Record<string, string> = {
   queued: '排队中',
   running: '进行中',
@@ -55,7 +63,7 @@ export const ACTION: Record<string, string> = {
 
 export const SELECTION: Record<string, string> = {
   latest_n: '最近 N 条',
-  date_range: '日期区间',
+  date_range: '指定日期',
   all: '全部作品',
 };
 

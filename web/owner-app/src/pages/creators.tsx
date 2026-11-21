@@ -1,4 +1,4 @@
-/** 5d：博主批量。
+/** 5d：批量提取（原「博主批量」）。
  *
  * 预览走 `/v2/creators/preview`（不落库，只告诉你"会选多少条、大约多大"），
  * 建任务走 `/v2/creators/jobs`；任务由服务端跑，页面只轮询进度。
@@ -11,7 +11,7 @@ import {
   creatorItemUrl, ownerApi, type CreatorItem, type CreatorJob, type CreatorPreview, type JobStorage,
   type MediaType, type SelectionMode,
 } from '../api';
-import { ITEM, JOB, SELECTION, STORAGE, TONE, platformName } from '../labels';
+import { ITEM, JOB, SELECTION, STORAGE, STORAGE_DESC, TONE, platformName } from '../labels';
 import { Empty, ErrorBox, Field, fmtBytes, fmtDuration, fmtTime, Loading, relTime } from '../ui';
 
 const STORAGE_OPTS: JobStorage[] = ['phone', 'metadata', 'archive', 'cache'];
@@ -48,10 +48,62 @@ const KIND_LABEL: Record<CreatorKind, string> = {
 };
 
 const KIND_HINT: Record<CreatorKind, string> = {
-  url: 'https://space.bilibili.com/12345 或抖音主页链接',
-  douyin: '纯数字抖音号，例如 67194609689',
-  bilibili: '纯数字 B 站 UID，例如 12345',
+  url: 'https://space.bilibili.com/12345',
+  douyin: '例如 67194609689',
+  bilibili: '例如 12345',
 };
+
+const URL_IN_TEXT = /https?:\/\/[^\s"'<>，。；、）】」》]+/i;
+/** 只写了域名、没写 https:// 的情况（手机分享里常见）。 */
+const BARE_HOST = /^(?:space\.bilibili\.com|www\.bilibili\.com|b23\.tv|www\.douyin\.com|v\.douyin\.com)\/\S*/i;
+
+function todayISO(): string {
+  const d = new Date();
+  const two = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+/** 把用户粘进来的整段内容收成「核心标识」。
+ *
+ * 抖音分享文案长这样：`7.53 复制打开抖音，看看… https://v.douyin.com/iRxxx/ 复制此链接…`，
+ * 整段丢给后端既超长又容易带进中文标点；这里只留第一个链接，并去掉 ?/# 尾巴
+ * （B 站空间、抖音主页都靠路径定位，查询串是分享埋点）。
+ * 选「抖音号 / B 站号」时只认数字：先把「抖音号：123」里的数字挑出来，贴了链接就不猜，原样交给校验报错。
+ */
+export function normalizeCreatorInput(raw: string, kind: CreatorKind): string {
+  const text = (raw || '').trim();
+  if (!text) return '';
+  if (kind === 'url') {
+    const found = text.match(URL_IN_TEXT)?.[0].replace(/[.,;:!?)\]}>'"”’]+$/, '');
+    if (!found) {
+      const bare = text.match(BARE_HOST)?.[0];
+      return bare ? normalizeCreatorInput(`https://${bare}`, 'url') : text.slice(0, 2000);
+    }
+    try {
+      const u = new URL(found);
+      u.search = '';
+      u.hash = '';
+      return u.toString();
+    } catch {
+      return found;
+    }
+  }
+  if (URL_IN_TEXT.test(text)) return text.slice(0, 40);   // 贴了链接就别猜数字，交给校验
+  const digits = text.match(/\d{1,20}/g);
+  return digits ? digits.sort((a, b) => b.length - a.length)[0]! : text.slice(0, 40);
+}
+
+const NUMERIC_ID = /^\d{1,20}$/;
+
+/** 点日期框直接弹日历，省得用户手敲 2026-11-21 这种格式。 */
+function showDatePicker(el: HTMLInputElement) {
+  const picker = (el as HTMLInputElement & { showPicker?: () => void }).showPicker;
+  try {
+    picker?.call(el);
+  } catch {
+    // 浏览器不支持或不在用户手势里时忽略，退回原生输入
+  }
+}
 
 function fmtDay(ts: number | null): string {
   if (!ts) return '';
@@ -66,7 +118,7 @@ export function CreatorsPage() {
   const [mode, setMode] = useState<SelectionMode>('latest_n');
   const [n, setN] = useState('20');
   const [since, setSince] = useState('');
-  const [until, setUntil] = useState('');
+  const [until, setUntil] = useState(() => todayISO());
   const [pinned, setPinned] = useState(true);
   const [storage, setStorage] = useState<JobStorage>('phone');
   const [mediaType, setMediaType] = useState<MediaType>('video');
@@ -133,7 +185,7 @@ export function CreatorsPage() {
 
   function body() {
     return {
-      url: url.trim(),
+      url: normalizeCreatorInput(url, kind),
       // 链接走 resolve（由后端按域名判平台）；选「抖音号 / B 站号」时把平台显式带上，
       // 纯数字就不会被默认当成抖音号。
       platform: kind === 'url' ? null : kind,
@@ -146,13 +198,15 @@ export function CreatorsPage() {
   }
 
   function check(): boolean {
-    const value = url.trim();
+    const value = normalizeCreatorInput(url, kind);
     if (!value) {
       setErr(kind === 'url' ? '先填博主主页链接' : `先填${KIND_LABEL[kind]}`);
       return false;
     }
-    if (kind !== 'url' && !/^\d+$/.test(value)) {
-      setErr(`${KIND_LABEL[kind]}只能填纯数字`);
+    // 粘贴的整段文案只留核心部分，并回填到输入框，让用户看到实际提交的是什么
+    if (value !== url) setUrl(value);
+    if (kind !== 'url' && !NUMERIC_ID.test(value)) {
+      setErr(`${KIND_LABEL[kind]}只能填纯数字（1–20 位），不要带链接或昵称`);
       return false;
     }
     if (mode === 'latest_n' && !(Number(n) > 0)) {
@@ -160,7 +214,11 @@ export function CreatorsPage() {
       return false;
     }
     if (mode === 'date_range' && !since) {
-      setErr('日期区间要至少填开始日期（北京时间）');
+      setErr('指定日期要至少选开始日期');
+      return false;
+    }
+    if (mode === 'date_range' && since && until && since > until) {
+      setErr('开始日期不能晚于结束日期');
       return false;
     }
     return true;
@@ -214,11 +272,12 @@ export function CreatorsPage() {
 
   return (
     <>
-      <h1>博主批量</h1>
-      <p class="lead">
-        选一个博主，按"最近 N 条 / 日期区间 / 全部"把作品批量入库。列表抓取在服务器上做，
-        所以抖音在这台机器上通常拿不到列表（403）；这种情况改用手机端建任务——手机列作品、服务器只负责下载记账。
-      </p>
+      <h1>批量提取</h1>
+      <ul class="small muted lead-list">
+        <li>输入博主主页链接，或直接填抖音号 / B 站号（纯数字）。</li>
+        <li>选取方式：最近 N 条、指定日期、全部作品。</li>
+        <li>可以先「预览」看会选多少条，再「开始提取」。</li>
+      </ul>
 
       <div class="panel-card">
         <div class="field-row">
@@ -240,6 +299,9 @@ export function CreatorsPage() {
               value={url}
               onInput={(e) => setUrl((e.target as HTMLInputElement).value)}
             />
+            <em class="field-hint">
+              {kind === 'url' ? 'B 站空间或抖音主页链接，粘贴整段分享文案也行' : '只填数字，不要带链接'}
+            </em>
           </label>
         </div>
 
@@ -262,23 +324,33 @@ export function CreatorsPage() {
             <>
               <label class="field">
                 <span>开始日期</span>
-                <input type="date" value={since} onInput={(e) => setSince((e.target as HTMLInputElement).value)} />
+                <input
+                  type="date"
+                  value={since}
+                  onInput={(e) => setSince((e.target as HTMLInputElement).value)}
+                  onClick={(e) => showDatePicker(e.currentTarget as HTMLInputElement)}
+                />
               </label>
               <label class="field">
-                <span>结束日期（可空）</span>
-                <input type="date" value={until} onInput={(e) => setUntil((e.target as HTMLInputElement).value)} />
+                <span>结束日期</span>
+                <input
+                  type="date"
+                  value={until}
+                  onInput={(e) => setUntil((e.target as HTMLInputElement).value)}
+                  onClick={(e) => showDatePicker(e.currentTarget as HTMLInputElement)}
+                />
               </label>
             </>
           )}
         </div>
 
         <div class="field-row">
-          <label class="field">
+          <div class="field">
             <span>存放方式</span>
             <select value={storage} onChange={(e) => setStorage((e.target as HTMLSelectElement).value as JobStorage)}>
               {STORAGE_OPTS.map((s) => <option value={s}>{STORAGE[s]}</option>)}
             </select>
-          </label>
+          </div>
           <label class="field">
             <span>格式</span>
             <select value={mediaType} onChange={(e) => setMediaType((e.target as HTMLSelectElement).value as MediaType)}>
@@ -292,18 +364,22 @@ export function CreatorsPage() {
           </label>
         </div>
 
+        <ul class="storage-notes small muted">
+          {STORAGE_OPTS.map((s) => (
+            <li class={s === storage ? 'on' : ''}>
+              <strong>{STORAGE[s]}</strong>：{STORAGE_DESC[s]}
+            </li>
+          ))}
+        </ul>
+
         <div class="row-actions">
           <button type="button" class="btn" disabled={busy !== ''} onClick={() => void doCreate()}>
-            {busy === 'create' ? '正在建任务…' : '建批量任务'}
+            {busy === 'create' ? '正在开始…' : '开始提取'}
           </button>
           <button type="button" class="btn btn-ghost" disabled={busy !== ''} onClick={() => void doPreview()}>
-            {busy === 'preview' ? '扫描中…' : '先预览会选哪些'}
+            {busy === 'preview' ? '预览中…' : '预览'}
           </button>
         </div>
-        <p class="small muted">
-          「手机下载」表示服务器只记元数据，文件由手机自己下；选归档/缓存才会在服务器落盘并计入配额。
-          「全部作品」会做有界扫描，条数受服务端上限约束。
-        </p>
         {err && <div class="alert warn small">{err}</div>}
       </div>
 

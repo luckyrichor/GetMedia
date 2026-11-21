@@ -67,7 +67,7 @@ export const SECTIONS: Section[] = [
   },
   {
     path: '/creators',
-    label: '博主批量',
+    label: '批量提取',
     phase: '5d',
     done: true,
     blurb: '按三种方式选作品、批量入库，支持暂停/续跑/重试。',
@@ -84,7 +84,7 @@ export const SECTIONS: Section[] = [
     label: '定时任务',
     phase: '5d',
     done: true,
-    blurb: '给博主批量设定时，按小时/天执行，可立刻跑一次。',
+    blurb: '给批量提取设定时，按小时/天执行，可立刻跑一次。',
     endpoints: [
       { method: 'GET', path: '/v2/schedules', note: '列表（含 next_run / last_status）' },
       { method: 'POST', path: '/v2/schedules', note: '新建（间隔 15 分钟–7 天）' },

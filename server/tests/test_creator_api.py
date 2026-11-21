@@ -160,3 +160,25 @@ def test_preview_rejects_single_video(creator):
 def test_limits_endpoint(creator):
     r = creator.client.get("/v2/creators/limits", headers=hdr(_token(creator)))
     assert r.json() == {"max_items": 50, "max_start": 500}
+
+
+def test_preview_rejects_link_when_numeric_platform_given(creator):
+    """选了「抖音号 / B 站号」就只能填数字，链接要走「主页链接」。"""
+    r = creator.client.post(
+        "/v2/creators/preview",
+        json={"url": "https://space.bilibili.com/2", "platform": "bilibili", "mode": "latest_n", "n": 3},
+        headers=hdr(_token(creator)),
+    )
+    assert r.status_code == 400
+    assert r.json()["code"] == "creator_input"
+    assert "只能填纯数字" in r.json()["detail"]
+
+
+def test_preview_rejects_non_numeric_text_even_in_window_mode(creator):
+    r = creator.client.post(
+        "/v2/creators/preview",
+        json={"url": "碧诗", "platform": "bilibili"},
+        headers=hdr(_token(creator)),
+    )
+    assert r.status_code == 400
+    assert r.json()["code"] == "creator_input"

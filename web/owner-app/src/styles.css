@@ -76,6 +76,8 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 .content h1 { font-size: 1.45rem; margin: 4px 0 6px; }
 .content h2 { font-size: 1.05rem; margin: 22px 0 8px; }
 .lead { color: var(--muted); margin-top: 0; }
+.lead-list { margin: 0 0 14px; padding-left: 1.15em; }
+.lead-list li { margin: 3px 0; }
 .muted { color: var(--muted); }
 .small { font-size: 0.875rem; }
 .plain { list-style: none; padding: 0; margin: 8px 0; }
@@ -237,6 +239,13 @@ audio.player-media { background: none; }
 }
 .field { display: grid; gap: 4px; margin: 0 0 10px; }
 .field > span { font-size: 0.82rem; color: var(--muted); }
+/* 输入框下的一行说明：不是错误提示，别用红色也别斜体 */
+.field-hint { font-style: normal; font-size: 0.76rem; color: var(--muted); }
+/* 四种存放方式逐行解释，当前选中的那行做浅色高亮 */
+.storage-notes { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 2px; }
+.storage-notes li { padding: 3px 8px; border-left: 2px solid transparent; border-radius: 4px; }
+.storage-notes li.on { border-left-color: var(--accent); background: var(--info-bg); color: var(--text); }
+.storage-notes strong { font-weight: 600; }
 .field-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
 .field-row .field { flex: 1 1 10rem; margin-bottom: 10px; }
 input[type="text"], input[type="number"], input[type="date"], textarea, select {

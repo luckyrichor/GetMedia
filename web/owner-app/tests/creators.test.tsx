@@ -1,4 +1,4 @@
-/** 5d：博主批量。 */
+/** 5d：批量提取。 */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act } from 'preact/test-utils';
 import {
@@ -51,7 +51,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('博主批量', () => {
+describe('批量提取', () => {
   test('预览：显示会选中多少条、预计占用、列表来源', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [] } },
@@ -61,7 +61,7 @@ describe('博主批量', () => {
     await until(() => text().includes('还没有批量任务'));
 
     await fillUrl('https://space.bilibili.com/12345');
-    await click(button('先预览会选哪些'));
+    await click(button('预览'));
     await until(() => text().includes('会选中 2 条'));
 
     expect(text()).toContain('某个 UP 主');
@@ -92,7 +92,7 @@ describe('博主批量', () => {
       storage.value = 'archive';
       storage.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    await click(button('建批量任务'));
+    await click(button('开始提取'));
     await until(() => text().includes('某个 UP 主'));
 
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
@@ -197,7 +197,7 @@ describe('博主批量', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
     await fillUrl('抖音号');
-    await click(button('先预览会选哪些'));
+    await click(button('预览'));
     await until(() => text().includes('平台拒绝了这次请求'));
     expect(text()).not.toContain('网络不稳定');
   });
@@ -218,7 +218,7 @@ describe('博主批量', () => {
       kind.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await fillUrl('67194609689');
-    await click(button('先预览会选哪些'));
+    await click(button('预览'));
     await until(() => text().includes('会选中 2 条'));
 
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
@@ -240,7 +240,7 @@ describe('博主批量', () => {
       kind.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await fillUrl('https://space.bilibili.com/1');
-    await click(button('先预览会选哪些'));
+    await click(button('预览'));
     await until(() => text().includes('只能填纯数字'));
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
@@ -281,5 +281,60 @@ describe('博主批量', () => {
     await until(() => text().includes('被隐藏的博主'));
     expect(text()).not.toContain('已隐藏');
     expect(window.localStorage.getItem('getmedia.creators.hiddenJobs')).toBe('[]');
+  });
+
+  test('粘贴整段分享文案，只把核心主页链接交给后端', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await fillUrl('7.53 复制打开抖音，看看【某某】的主页 https://www.douyin.com/user/MS4wLjABAAAAxxxx?from_tab_name=main 复制此链接');
+    await click(button('预览'));
+    await until(() => text().includes('会选中 2 条'));
+
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.url).toBe('https://www.douyin.com/user/MS4wLjABAAAAxxxx');
+    // 输入框也被收回核心链接，用户看得到实际提交的是什么
+    const input = document.querySelector('input[type="text"]') as HTMLInputElement;
+    expect(input.value).toBe('https://www.douyin.com/user/MS4wLjABAAAAxxxx');
+  });
+
+  test('指定日期的结束日期默认今天，两个日期都是日期选择器', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    const selects = document.querySelectorAll('select');
+    await act(async () => {
+      const mode = selects[1] as HTMLSelectElement;
+      mode.value = 'date_range';
+      mode.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const dates = Array.from(document.querySelectorAll('input[type="date"]')) as HTMLInputElement[];
+    expect(dates).toHaveLength(2);
+    const d = new Date();
+    const two = (x: number) => String(x).padStart(2, '0');
+    expect(dates[1]!.value).toBe(`${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`);
+    // 只选了结束日期还不够，开始日期为空时要点出来
+    expect(dates[0]!.value).toBe('');
+  });
+
+  test('四种存放方式逐行解释，当前选中的那行高亮', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    const rows = Array.from(document.querySelectorAll('.storage-notes li'));
+    expect(rows).toHaveLength(4);
+    expect(rows.map((r) => r.querySelector('strong')?.textContent)).toEqual([
+      '手机下载', '仅元数据', '服务端归档', '服务端缓存',
+    ]);
+    expect(rows[0]!.textContent).toContain('文件由手机逐条下载');
+    expect(rows[0]!.classList.contains('on')).toBe(true);
+    expect(rows[1]!.classList.contains('on')).toBe(false);
   });
 });

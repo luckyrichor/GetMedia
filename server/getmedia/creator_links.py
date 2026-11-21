@@ -134,6 +134,25 @@ def _platform_of_value(value) -> Platform | None:
         raise LinkError(f"不支持的平台：{value}") from None
 
 
+_NUMERIC_ID_RE = re.compile(r"\d{1,20}")
+
+
+def require_numeric_id(platform, value: str) -> None:
+    """显式选了「抖音号 / B 站号」时只接受纯数字。
+
+    前端已经拦一道，这里再拦一道：链接（含分享文案）走「主页链接」类型，
+    号码类型不接受昵称或 URL，免得后端拿一串中文去平台搜人。
+    """
+    if platform is None:
+        return
+    name = getattr(platform, "value", platform)
+    if name not in ("douyin", "bilibili"):
+        return
+    v = (value or "").strip()
+    if not _NUMERIC_ID_RE.fullmatch(v):
+        raise LinkError("选了抖音号 / B 站号时只能填纯数字；链接请把类型改成「主页链接」")
+
+
 def parse_creator_input(text: str, platform=None) -> CreatorInput:
     """「抖音号：xxx」「B站UID：xxx」「昵称」→ 统一查询。"""
     raw = (text or "").strip()

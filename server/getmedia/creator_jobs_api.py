@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .creator_jobs import CreatorJobService, JobError, Selection, parse_day
+from .creator_links import LinkError, require_numeric_id
 from .errors import ApiError
 from .media_api import attachment_disposition, attachment_name
 from .service import AuthCtx
@@ -79,6 +80,7 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
     @app.post("/v2/creators/jobs", status_code=202)
     def create_job(body: JobCreateBody, background: BackgroundTasks, ctx: AuthCtx = Depends(guard)):
         try:
+            require_numeric_id(body.platform, body.url)
             selection = Selection(
                 mode=body.mode,
                 since=parse_day(body.since) if body.since else None,
@@ -90,6 +92,8 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
                                  media_type=body.media_type, platform=body.platform)
         except JobError as exc:
             _job_error(exc)
+        except LinkError as exc:
+            raise ApiError(400, "creator_input", str(exc)) from exc
         background.add_task(service.run, job["id"])
         return job
 
@@ -133,6 +137,8 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
             job = service.resume(ctx.user_id, _id(job_id))
         except JobError as exc:
             _job_error(exc)
+        except LinkError as exc:
+            raise ApiError(400, "creator_input", str(exc)) from exc
         background.add_task(service.run, job["id"])
         return job
 

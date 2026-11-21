@@ -109,6 +109,14 @@ def create(env, **body):
     return env.client.post("/v2/creators/jobs", headers=hdr(env.token), json=payload)
 
 
+def test_create_rejects_link_when_numeric_platform_given(jenv):
+    """前端已拦一道，后端也要拦：号码类型不接受链接或昵称。"""
+    r = create(jenv, url="https://space.bilibili.com/2/video", platform="bilibili", mode="latest_n", n=3)
+    assert r.status_code == 400, r.text
+    assert r.json()["code"] == "creator_input"
+    assert "只能填纯数字" in r.json()["detail"]
+
+
 def test_latest_n_stops_at_n(jenv):
     r = create(jenv, mode="latest_n", n=5)
     assert r.status_code == 202, r.text

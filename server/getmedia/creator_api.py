@@ -18,7 +18,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from . import creator_service, ratelimit
 from .creator_jobs import JobError, Selection, parse_day
-from .creator_links import LinkError
+from .creator_links import LinkError, require_numeric_id
 from .creator_rt import settings
 from .creators import CreatorAuthError, CreatorError, CreatorNotFound, CreatorUnavailable
 from .creators.base import CreatorComment, CreatorProfile, CreatorVideo, VideoStats
@@ -249,6 +249,10 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
     @app.post("/v2/creators/preview", response_model=CreatorPreviewOut)
     def preview(body: CreatorPreviewBody, ctx: AuthCtx = Depends(guard)):
         _hit(ctx)
+        try:
+            require_numeric_id(body.platform, body.url)
+        except LinkError as exc:
+            raise ApiError(400, "creator_input", str(exc)) from exc
         if body.mode != "window":
             return _batch_preview(body)
         try:

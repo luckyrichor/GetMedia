@@ -1,7 +1,7 @@
 /** 5d：定时抓取。
  *
  * 服务端用 `interval_minutes` 而不是 cron：网页可安全改写，不需要解析器；每次触发只是建一个批量任务，
- * 进度要去「博主批量」看。页面负责：建、开关、立刻跑一次、看历史、删。
+ * 进度要去「批量提取」看。页面负责：建、开关、立刻跑一次、看历史、删。
  */
 import { useEffect, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
@@ -127,7 +127,7 @@ export function SchedulesPage() {
       <h1>定时任务</h1>
       <p class="lead">
         给一个博主设"每 N 小时/天检查一次，有新作品就建批量任务"。触发只是建任务，
-        下载进度和失败条目去「博主批量」看。下一次执行时间由服务端算，页面只显示。
+        下载进度和失败条目去「批量提取」看。下一次执行时间由服务端算，页面只显示。
       </p>
 
       <div class="panel-card">

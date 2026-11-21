@@ -151,7 +151,7 @@ export interface ExtractionJob {
   finished_at?: number | null;
 }
 
-// ---------------- 博主批量（5d） ----------------
+// ---------------- 批量提取（5d） ----------------
 export type SelectionMode = 'latest_n' | 'date_range' | 'all';
 
 export interface CreatorProfile {
@@ -470,7 +470,7 @@ export const ownerApi = {
   extractionJobs: async (limit = 50): Promise<ExtractionJob[]> =>
     (await api.request<{ jobs: ExtractionJob[] }>('GET', `/v2/extraction-jobs?limit=${limit}`)).jobs,
 
-  // ---------- 博主批量（5d） ----------
+  // ---------- 批量提取（5d） ----------
   creatorLimits: () => api.request<{ max_items: number; max_start: number }>('GET', '/v2/creators/limits'),
   creatorPreview: (body: {
     url: string; platform?: string | null; mode: SelectionMode;
