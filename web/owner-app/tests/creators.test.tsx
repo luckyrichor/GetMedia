@@ -119,6 +119,22 @@ describe('批量提取', () => {
     await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/retry'));
   });
 
+  test('已完成的任务给「刷新地址」，点了就调 retry', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ status: 'done' })] } },
+      'POST /v2/creators/jobs/3/retry': {
+        json: { requeued: 0, rescan: true, job: job({ status: 'done' }) },
+      },
+    }));
+    mount('/creators');
+    await until(() => text().includes('进度：7 / 20'));
+
+    // 跑完的任务没有「重试失败条目」，给的是「刷新地址」
+    expect(() => button('重试失败条目')).toThrow();
+    await click(button('刷新地址'));
+    await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/retry'));
+  });
+
   test('展开条目：取分页条目并显示每个条目的状态', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job()] } },

@@ -488,6 +488,17 @@ export function CreatorsPage() {
                     重试失败条目
                   </button>
                 )}
+                {j.status === 'done' && (
+                  <button
+                    type="button"
+                    class="btn btn-ghost small"
+                    disabled={busy === 'act'}
+                    title="重新扫描一遍，把过期的播放地址换成新的"
+                    onClick={() => void act(j.id, 'retryJob')}
+                  >
+                    刷新地址
+                  </button>
+                )}
               </div>
               {openId === j.id && <JobItems jobId={j.id} />}
             </li>

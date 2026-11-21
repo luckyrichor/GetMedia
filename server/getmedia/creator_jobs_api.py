@@ -256,8 +256,8 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
                 return StreamingResponse(body(), status_code=resp.status_code, headers=headers)
 
         raise ApiError(409, "media_link_expired",
-                       "这条的播放地址已失效（作品可能已删除或设为私密）。"
-                       "可对该任务点「重试」刷新播放地址后再下载")
+                       "这条的播放地址已失效（作品可能已删除或设为私密），"
+                       "需要重新扫描任务换一批地址后再下载")
 
     @app.post("/v2/creators/jobs/{job_id}/items/{video_id}/state")
     def item_state(job_id: str, video_id: str, body: ItemStateBody, ctx: AuthCtx = Depends(guard)):
