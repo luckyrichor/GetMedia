@@ -280,10 +280,10 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .job-no {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   min-width: 1.4rem; height: 1.4rem; padding: 0 5px;
-  border-radius: 999px; border: 1px solid var(--line);
-  background: var(--info-bg);   /* 淡蓝底，让序号一眼可见 */
+  border-radius: 999px; border: 1px solid transparent;
+  background: var(--accent);   /* 主题蓝作底，比淡蓝更醒目 */
   font-size: 0.78rem; font-variant-numeric: tabular-nums;
-  font-weight: 600; color: var(--accent);   /* 数字用蓝，淡蓝底上依然清晰 */
+  font-weight: 600; color: var(--accent-ink);   /* 配套反色，明暗主题都清晰 */
 }
 .job-hide {
   flex: none; margin-left: 2px;
