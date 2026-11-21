@@ -452,6 +452,17 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
             created_at INTEGER NOT NULL)""",
         "CREATE INDEX IF NOT EXISTS idx_meta_backups_user ON metadata_backups(user_id, created_at DESC)",
     ]),
+    # v14 批量提取真的落盘：条目可以带一份服务器文件（暂存 / 长期保存）。
+    # 文件路径只是相对名，真实位置由 job.storage 决定（cache_dir / media_dir），
+    # 与曲库共用同一套配额账本，这样「服务器一共多少空间」只有一个答案。
+    (14, [
+        "ALTER TABLE creator_items ADD COLUMN media_path TEXT",
+        "ALTER TABLE creator_items ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE creator_items ADD COLUMN stored_at INTEGER",
+        "ALTER TABLE creator_items ADD COLUMN store_expires_at INTEGER",
+        "ALTER TABLE creator_items ADD COLUMN store_error TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_creator_items_stored ON creator_items(stored_at)",
+    ]),
 ]
 
 

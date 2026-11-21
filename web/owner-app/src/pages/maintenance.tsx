@@ -9,7 +9,7 @@ import { ownerApi, type DiagReport, type StorageReport } from '../api';
 import { platformName } from '../labels';
 import { Empty, ErrorBox, Field, fmtBytes, fmtTime, Loading } from '../ui';
 
-const STORAGE_LABEL: Record<string, string> = { metadata: '仅元数据', archive: '归档', cache: '缓存' };
+const STORAGE_LABEL: Record<string, string> = { metadata: '只记清单', archive: '长期保存', cache: '暂存' };
 
 export function MaintenancePage() {
   const [st, setSt] = useState<StorageReport | null>(null);
@@ -38,7 +38,7 @@ export function MaintenancePage() {
   }, []);
 
   async function prune() {
-    if (!confirm('清理过期缓存？会把过期的缓存文件删掉，记录退回"仅元数据"。正在播放的最近 5 分钟内访问过的会跳过。')) return;
+    if (!confirm('清理过期缓存？会把过期的缓存文件删掉，记录退回"只记清单"。正在播放的最近 5 分钟内访问过的会跳过。')) return;
     setBusy(true);
     setErr('');
     try {
@@ -133,6 +133,13 @@ export function MaintenancePage() {
                   <td>{fmtBytes(v.bytes)}</td>
                 </tr>
               ))}
+              {Object.entries(st.batch ?? {}).map(([k, v]) => (
+                <tr>
+                  <td>批量提取（{STORAGE_LABEL[k] ?? k}）</td>
+                  <td>{v.items}</td>
+                  <td>{fmtBytes(v.bytes)}</td>
+                </tr>
+              ))}
               {ai.files > 0 && (
                 <tr>
                   <td>AI 素材与产物（计入归档）</td>
@@ -140,7 +147,8 @@ export function MaintenancePage() {
                   <td>{fmtBytes(ai.bytes)}</td>
                 </tr>
               )}
-              {Object.keys(st.by_storage).length === 0 && ai.files === 0 && (
+              {Object.keys(st.by_storage).length === 0 && Object.keys(st.batch ?? {}).length === 0
+                && ai.files === 0 && (
                 <tr><td colSpan={3} class="muted">媒体库里还没有条目。</td></tr>
               )}
             </tbody>
@@ -158,7 +166,7 @@ export function MaintenancePage() {
           </div>
           <p class="small muted">
             这三个操作是<strong>全库</strong>的，不按账号过滤——服务器上只有 owner 会用到服务端媒体库。
-            前两个删除文件不会删除记录（记录退回"仅元数据"），播放时会重新解析；
+            前两个删除文件不会删除记录（记录退回"只记清单"），播放时会重新解析；
             AI 清理只删超过保留期（默认 14 天，由 <code>getmedia-ai-gc.timer</code> 每天自动跑）
             且没有排队/执行中任务的项目文件，记录保留并把状态置"文件已过期"。
           </p>

@@ -12,6 +12,7 @@ import {
   ownerApi, recreationSourceUrl, recreationVideoUrl,
   type AiCapabilities, type Recreation, type RecreationRun, type Track,
 } from '../api';
+import { Select } from '../select';
 import { fmtBytes, fmtTime, Loading, ErrorBox, Empty, relTime } from '../ui';
 
 const RUN: Record<string, string> = {
@@ -236,14 +237,20 @@ export function AiPage() {
           </div>
         )}
         <div class="field-row">
-          <label class="field">
+          <div class="field">
             <span>用媒体库里的视频（仅"服务器上有文件"的视频）</span>
-            <select value={trackId} onChange={(e) => setTrackId((e.target as HTMLSelectElement).value)}
-                    disabled={off || busy || tracks.length === 0}>
-              <option value="">{tracks.length === 0 ? '没有可用的视频' : '选择一个视频'}</option>
-              {tracks.map((t) => <option value={String(t.id)}>#{t.id} {t.title}</option>)}
-            </select>
-          </label>
+            <Select
+              ariaLabel="用媒体库里的视频"
+              value={trackId}
+              placeholder={tracks.length === 0 ? '没有可用的视频' : '选择一个视频'}
+              disabled={off || busy || tracks.length === 0}
+              options={[
+                { value: '', label: tracks.length === 0 ? '没有可用的视频' : '选择一个视频' },
+                ...tracks.map((t) => ({ value: String(t.id), label: `#${t.id} ${t.title}` })),
+              ]}
+              onChange={setTrackId}
+            />
+          </div>
           <button type="button" class="btn" disabled={off || busy || !trackId} onClick={() => void fromTrack()}>
             用这个视频建项目
           </button>

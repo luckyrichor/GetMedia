@@ -8,10 +8,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { ownerApi, type ExtractionJob, type MediaType, type ResolvedMedia, type Storage } from '../api';
-import { EXTRACT, STORAGE, platformName } from '../labels';
+import { EXTRACT, STORAGE, STORAGE_DESC, platformName } from '../labels';
+import { Select } from '../select';
 import { Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading, relTime } from '../ui';
 
-const STORAGE_OPTS: Storage[] = ['metadata', 'archive', 'cache'];
+const STORAGE_OPTS: Storage[] = ['metadata', 'cache', 'archive'];
 
 export function ExtractPage() {
   const [input, setInput] = useState('');
@@ -123,19 +124,27 @@ export function ExtractPage() {
         </label>
 
         <div class="field-row">
-          <label class="field">
+          <div class="field">
             <span>要的格式</span>
-            <select value={mediaType} onChange={(e) => setMediaType((e.target as HTMLSelectElement).value as MediaType)}>
-              <option value="video">视频（原画/清晰度由平台给）</option>
-              <option value="audio">音频（提取音轨）</option>
-            </select>
-          </label>
-          <label class="field">
+            <Select
+              ariaLabel="要的格式"
+              value={mediaType}
+              options={[
+                { value: 'video', label: '视频', hint: '清晰度由平台给' },
+                { value: 'audio', label: '音频', hint: '只取音轨' },
+              ]}
+              onChange={(v) => setMediaType(v as MediaType)}
+            />
+          </div>
+          <div class="field">
             <span>存放方式</span>
-            <select value={storage} onChange={(e) => setStorage((e.target as HTMLSelectElement).value as Storage)}>
-              {STORAGE_OPTS.map((s) => <option value={s}>{STORAGE[s]}</option>)}
-            </select>
-          </label>
+            <Select
+              ariaLabel="存放方式"
+              value={storage}
+              options={STORAGE_OPTS.map((s) => ({ value: s, label: STORAGE[s]! }))}
+              onChange={(v) => setStorage(v as Storage)}
+            />
+          </div>
         </div>
 
         <div class="row-actions">
@@ -146,9 +155,13 @@ export function ExtractPage() {
             {busy === 'resolve' ? '解析中…' : '只解析，不入库'}
           </button>
         </div>
-        <p class="small muted">
-          「仅元数据」只存标题与来源，播放时由客户端当场解析；「归档/缓存」会把文件下到服务器并计入配额。
-        </p>
+        <ul class="storage-notes small muted">
+          {STORAGE_OPTS.map((s) => (
+            <li class={s === storage ? 'on' : ''}>
+              <strong>{STORAGE[s]}</strong>：{STORAGE_DESC[s]}
+            </li>
+          ))}
+        </ul>
         {err && <div class="alert warn small">{err}</div>}
       </div>
 

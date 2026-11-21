@@ -2,7 +2,7 @@
  *
  * 只读/改标题/删文件/删记录四件事，全部走当前登录账号的 `/v2/tracks`（不跨账号）。
  * 播放交给浏览器的 `<audio>/<video>` 直接取 `/v2/media/{id}`：服务端支持 Range，拖动进度条不会重下整段；
- * 没有落盘文件时服务端会当场解析并中转（不写盘），所以"仅元数据"的条目也能放。
+ * 没有落盘文件时服务端会当场解析并中转（不写盘），所以"只记清单"的条目也能放。
  * 「下载」是同一个地址加 `?download=1`，服务端回 `Content-Disposition: attachment`，
  * 浏览器存到打开这个页面的那台电脑上（不需要 App、不经过手机）。
  */
@@ -16,7 +16,7 @@ type Filter = 'all' | MediaType;
 const STORAGE_LABEL: Record<Track['storage'], string> = {
   archive: '归档',
   cache: '缓存',
-  metadata: '仅元数据',
+  metadata: '只记清单',
 };
 
 export function LibraryPage() {

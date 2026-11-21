@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .creator_jobs import CreatorJobService, JobError, Selection, parse_day
 from .creator_links import LinkError, require_numeric_id
 from .errors import ApiError
-from .media_api import attachment_disposition, attachment_name
+from .media_api import _file_response, attachment_disposition, attachment_name
 from .service import AuthCtx
 
 log = logging.getLogger("getmedia.creator_jobs_api")
@@ -34,7 +34,7 @@ class JobCreateBody(BaseModel):
     until: str | None = Field(None, description="YYYY-MM-DD（北京时间，含当日）")
     n: int | None = Field(None, ge=1, le=100000)
     include_pinned: bool = True
-    storage: Literal["phone", "metadata", "archive", "cache"] = "phone"
+    storage: Literal["phone", "metadata", "archive", "cache"] = "metadata"
     media_type: Literal["audio", "video"] = "video"
 
 
@@ -79,10 +79,12 @@ def _spawn(fn, /, *args, **kwargs) -> None:
 
 
 def register(app, guard, engine, clock, *, service: CreatorJobService | None = None,
-             lister=None, resolver=None, pinned=None, cookies=None) -> CreatorJobService:
+             lister=None, resolver=None, pinned=None, cookies=None,
+             store=None, media_resolver=None) -> CreatorJobService:
     service = service or CreatorJobService(engine, app.state.settings, clock,
                                           resolve_fn=resolver, window_fn=lister, pinned_fn=pinned,
-                                          cookie_fn=cookies)
+                                          cookie_fn=cookies, store=store,
+                                          media_resolver=media_resolver)
     app.state.creator_jobs = service
 
     def _id(raw: str) -> int:
@@ -239,6 +241,16 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
         media_type = job.get("media_type") or "video"
         ext = "m4a" if media_type == "audio" else "mp4"
         disposition = attachment_disposition(attachment_name(item["title"], jid, ext), jid, ext)
+
+        # 服务器已经存了一份（暂存 / 长期保存）：直接从本地读，秒开、也不用担心地址过期
+        if item.get("media_path"):
+            stored = service.store.dir_for(job["storage"]) / item["media_path"]
+            if stored.is_file():
+                stored_ext = stored.suffix.lstrip(".") or ext
+                disposition = attachment_disposition(
+                    attachment_name(item["title"], jid, stored_ext), jid, stored_ext)
+                return _file_response(stored, range_header, media_type, disposition)
+
         forwarded = _forward(urls, platform=item["platform"], range_header=range_header,
                              disposition=disposition, media_type=media_type)
         if forwarded is not None:

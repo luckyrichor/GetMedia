@@ -141,7 +141,7 @@ describe('媒体库与播放', () => {
 
     vi.stubGlobal('confirm', () => true);
     await click(button('删文件'));
-    await until(() => text().includes('仅元数据'));
+    await until(() => text().includes('只记清单'));
     expect(callKeys()).toContain('DELETE /v2/tracks/1/file');
     expect(text()).toContain('无文件');
   });

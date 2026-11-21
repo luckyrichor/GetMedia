@@ -1,7 +1,7 @@
 /** 5d：服务器提取。 */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
-  button, calls, callKeys, cleanup, click, mount, ownerRoutes, server, text, until,
+  button, calls, callKeys, choose, cleanup, click, mount, ownerRoutes, server, text, until,
 } from './harness';
 import { act } from 'preact/test-utils';
 
@@ -71,11 +71,7 @@ describe('服务器提取', () => {
     await until(() => text().includes('还没有提取任务'));
 
     await type(document.querySelector('textarea')!, '  BV1xx411c7mD  ');
-    await act(async () => {
-      const sel = document.querySelectorAll('select')[1] as HTMLSelectElement;   // 存放方式
-      sel.value = 'archive';
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await choose('存放方式', '服务器长期保存');
     await click(button('提取并入库'));
     await until(() => text().includes('已入库'));
 

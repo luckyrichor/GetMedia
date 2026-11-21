@@ -65,18 +65,14 @@ describe('AI 视频重建', () => {
       'GET /v2/recreations/4': detail(),
     }));
     mount('/ai');
-    await until(() => document.querySelectorAll('select option').length > 1);
+    await until(() => document.querySelector('button[aria-label="用媒体库里的视频"]') !== null);
 
     // 只列"视频且服务器上有文件"的条目：音频不在选项里
-    const opts = Array.from(document.querySelectorAll('select option')).map((o) => o.textContent ?? '');
+    await click(document.querySelector('button[aria-label="用媒体库里的视频"]')!);
+    const opts = Array.from(document.querySelectorAll('[role="option"]')).map((o) => o.textContent ?? '');
     expect(opts.some((t) => t.includes('#12'))).toBe(true);
     expect(opts.some((t) => t.includes('#13'))).toBe(false);
-
-    const sel = document.querySelector('select') as HTMLSelectElement;
-    await act(async () => {
-      sel.value = '12';
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await click(Array.from(document.querySelectorAll('[role="option"]')).find((o) => o.textContent?.includes('#12'))!);
     await click(button('用这个视频建项目'));
     await until(() => text().includes('已用媒体库 #12 建项目 #4'));
 

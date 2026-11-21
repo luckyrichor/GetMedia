@@ -101,9 +101,11 @@ class Settings:
     # 为空表示未配置，需要凭据的接口一律 503，不静默降级成明文。
     credential_key: bytes = b""
     # 服务端可选落盘的配额（0 = 禁用该模式）
-    cache_ttl_seconds: int = 86400          # web 临时缓存保留 1 天
-    cache_quota_bytes: int = 5 * 1024**3    # 网页缓存 5 GiB
-    archive_quota_bytes: int = 3 * 1024**3  # owner 服务器库 3 GiB
+    cache_ttl_seconds: int = 86400          # 单条提取的临时缓存保留 1 天
+    cache_quota_bytes: int = 1 * 1024**3    # 服务器暂存（缓存）1 GiB
+    archive_quota_bytes: int = 5 * 1024**3  # 服务器长期保存（归档）5 GiB，满了按时间删最旧
+    # 批量提取“服务器暂存”的保留期：一次任务可能跑几小时，1 天太短，给 7 天
+    creator_cache_ttl_seconds: int = 7 * 86400
     # 每账号曲库行数上限（只算未删除的元数据行）。手机端同步会往里写，防跑飞；0 = 不限制
     library_max_rows: int = 20000
     # 手机端写入配额：每账号 60 条/分钟（与备份上传同一套固定窗口，落库、重启不丢）
@@ -253,8 +255,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         bind=env.get("GETMEDIA_BIND", "127.0.0.1:8700"),
         credential_key=decode_credential_key(env.get("GETMEDIA_CRED_KEY", "")),
         cache_ttl_seconds=_int_env(env, "GETMEDIA_CACHE_TTL_SECONDS", 86400, 60, 30 * 86400),
-        cache_quota_bytes=_int_env(env, "GETMEDIA_CACHE_QUOTA_MB", 5120, 0, 51200) * 1024**2,
-        archive_quota_bytes=_int_env(env, "GETMEDIA_ARCHIVE_QUOTA_MB", 3072, 0, 51200) * 1024**2,
+        cache_quota_bytes=_int_env(env, "GETMEDIA_CACHE_QUOTA_MB", 1024, 0, 51200) * 1024**2,
+        archive_quota_bytes=_int_env(env, "GETMEDIA_ARCHIVE_QUOTA_MB", 5120, 0, 51200) * 1024**2,
+        creator_cache_ttl_seconds=_int_env(env, "GETMEDIA_CREATOR_CACHE_TTL_DAYS", 7, 1, 30) * 86400,
         library_max_rows=_int_env(env, "GETMEDIA_LIBRARY_MAX_ROWS", 20000, 0, 100000),
         argon_memory_kib=argon_mem,
         argon_iterations=argon_iter,

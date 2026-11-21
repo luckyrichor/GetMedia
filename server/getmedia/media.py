@@ -119,21 +119,37 @@ class MediaStore:
         return [_row_to_dict(r) for r in rows]
 
     def storage_used(self, storage: str, *, now: int | None = None) -> int:
-        """当前占用：archive 全量（含 AI 素材与产物）；cache 只算未过期的。"""
+        """当前占用：archive 全量（含 AI 素材与产物）；cache 只算未过期的。
+
+        批量提取落下的文件也算进同一个池子——服务器只有一块盘，配额必须只有一本账。
+        """
         now = self.now() if now is None else now
         with self.engine.begin() as c:
             if storage == "cache":
-                return int(c.execute(text(
+                used = int(c.execute(text(
                     "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage='cache' AND deleted=0 "
                     "AND (cache_expires_at IS NULL OR cache_expires_at>:n)"), {"n": now}).scalar_one())
-            used = int(c.execute(text(
-                "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage=:s AND deleted=0"),
-                {"s": storage}).scalar_one())
+            else:
+                used = int(c.execute(text(
+                    "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage=:s AND deleted=0"),
+                    {"s": storage}).scalar_one())
+            used += self._creator_used(c, storage, now)
         # AI 重建的源文件与产物不在 tracks 表里（在 media_dir/ai/<项目号>/），
-        # 但按方案 §8.1 计入服务器库（archive）3 GiB，所以这里要一起算。
+        # 但按方案 §8.1 计入服务器库（archive）配额，所以这里要一起算。
         if storage == "archive":
             used += self.ai_stats()["bytes"]
         return used
+
+    @staticmethod
+    def _creator_used(c, storage: str, now: int) -> int:
+        sql = ("SELECT COALESCE(SUM(i.bytes),0) FROM creator_items i"
+               " JOIN creator_jobs j ON j.id=i.job_id"
+               " WHERE j.storage=:s AND i.media_path IS NOT NULL")
+        params = {"s": storage}
+        if storage == "cache":
+            sql += " AND (i.store_expires_at IS NULL OR i.store_expires_at>:n)"
+            params["n"] = now
+        return int(c.execute(text(sql), params).scalar_one())
 
     def ai_stats(self) -> dict:
         """``media_dir/ai`` 下的文件数与字节数（按目录求和，不新增表字段）。"""
@@ -154,20 +170,102 @@ class MediaStore:
         return self.s.archive_quota_bytes if storage == "archive" else self.s.cache_quota_bytes
 
     def ensure_room(self, storage: str, need_bytes: int) -> None:
-        """只有 archive/cache 需要预先拒绝；metadata/phone 模式不落盘。"""
+        """落盘前腾地方：缓存删过期/最久没用的；归档满了按存入时间删最旧的。
+
+        两种池子都**不再直接拒绝**（用户明确要求：归档满了也要删），只有实在腾不出来
+        （比如单个文件就比整个配额大）才报错。
+        """
         if storage not in ("archive", "cache"):
             return
         quota = self.quota_of(storage)
         if quota <= 0:
             raise MediaError("storage_disabled", f"{storage} 模式未开启", 409)
+        need = max(0, int(need_bytes))
         used = self.storage_used(storage)
-        if used + max(0, need_bytes) > quota:
+        if used + need > quota:
+            over = used + need - quota
             if storage == "cache":
-                self.prune_cache(force_bytes=used + need_bytes - quota)
-                used = self.storage_used(storage)
-            if used + max(0, need_bytes) > quota:
-                label = "服务器库" if storage == "archive" else "网页缓存"
-                raise MediaError("quota_exceeded", f"{label}空间不足，请先清理或改用其他存储方式", 409)
+                self.prune_cache(force_bytes=over)
+            else:
+                self.evict_archive(over)
+            used = self.storage_used(storage)
+        if used + need > quota:
+            label = "服务器长期保存" if storage == "archive" else "服务器暂存"
+            raise MediaError("quota_exceeded", f"{label}空间不足：单个文件比配额还大，换个存储方式试试", 409)
+
+    # ---------- 淘汰 ----------
+    def _file_rows(self, c, storage: str, *, now: int, expired: bool) -> list[dict]:
+        """tracks 与批量条目里属于该池子的文件，统一成可比的行。"""
+        rows: list[dict] = []
+        if storage == "cache":
+            track_sql = ("SELECT id, media_path, bytes, COALESCE(last_access_at, updated_at) AS at"
+                         " FROM tracks WHERE storage='cache' AND deleted=0")
+            item_sql = ("SELECT i.id, i.media_path, i.bytes, COALESCE(i.stored_at, 0) AS at"
+                        " FROM creator_items i JOIN creator_jobs j ON j.id=i.job_id"
+                        " WHERE j.storage='cache' AND i.media_path IS NOT NULL")
+            if expired:
+                track_sql += " AND cache_expires_at IS NOT NULL AND cache_expires_at<=:n"
+                item_sql += " AND i.store_expires_at IS NOT NULL AND i.store_expires_at<=:n"
+            else:
+                track_sql += (" AND (cache_expires_at IS NULL OR cache_expires_at>:n)"
+                              " AND (last_access_at IS NULL OR last_access_at<:k)")
+                item_sql += " AND (i.store_expires_at IS NULL OR i.store_expires_at>:n)"
+        else:
+            track_sql = ("SELECT id, media_path, bytes, COALESCE(created_at, 0) AS at"
+                         " FROM tracks WHERE storage='archive' AND deleted=0 AND media_path IS NOT NULL")
+            item_sql = ("SELECT i.id, i.media_path, i.bytes, COALESCE(i.stored_at, 0) AS at"
+                        " FROM creator_items i JOIN creator_jobs j ON j.id=i.job_id"
+                        " WHERE j.storage='archive' AND i.media_path IS NOT NULL")
+        params = {"n": now, "k": now - 300}
+        for kind, sql in (("track", track_sql), ("item", item_sql)):
+            for r in c.execute(text(sql), params).all():
+                m = r._mapping
+                rows.append({"kind": kind, "id": int(m["id"]), "path": m["media_path"],
+                             "bytes": int(m["bytes"] or 0), "at": int(m["at"] or 0)})
+        rows.sort(key=lambda r: r["at"])
+        return rows
+
+    def evict_archive(self, free_bytes: int, *, now: int | None = None) -> dict:
+        """归档池满了：按「存入时间」从旧到新删，腾出 ``free_bytes``。
+
+        曲库条目只删文件、保留清单（自动降级为 metadata）；批量条目保留条目本身，
+        之后还能再下载（会重新拉一遍）。AI 素材不在淘汰范围内。
+        """
+        now = self.now() if now is None else now
+        removed = {"rows": 0, "bytes": 0, "tracks": 0, "items": 0}
+        if free_bytes <= 0:
+            return removed
+        with self.engine.begin() as c:
+            for r in self._file_rows(c, "archive", now=now, expired=False):
+                if removed["bytes"] >= free_bytes:
+                    break
+                self._drop_one(c, r, "archive")
+                removed["bytes"] += r["bytes"]
+                removed["rows"] += 1
+                removed["tracks" if r["kind"] == "track" else "items"] += 1
+        return removed
+
+    def _drop_one(self, c, row: dict, storage: str) -> None:
+        """删掉一个落盘文件并清掉记录里的文件字段（条目本身保留）。"""
+        base = self.dir_for(storage)
+        if row["path"]:
+            p = base / row["path"]
+            try:
+                if p.is_file():
+                    p.unlink()
+            except OSError:
+                log.warning("%s 文件删除失败：%s", storage, row["path"])
+        now = self.now()
+        if row["kind"] == "track":
+            seq = self._next_seq(c)
+            c.execute(text("UPDATE tracks SET media_path=NULL, bytes=0, storage='metadata',"
+                           " cache_expires_at=NULL, updated_seq=:s, updated_at=:n WHERE id=:i"),
+                      {"s": seq, "n": now, "i": row["id"]})
+        else:
+            c.execute(text("UPDATE creator_items SET media_path=NULL, bytes=0, stored_at=NULL,"
+                           " store_expires_at=NULL, download_state='pending',"
+                           " store_error='服务器空间已满，文件已清理（可重新下载）', updated_at=:n"
+                           " WHERE id=:i"), {"n": now, "i": row["id"]})
 
     # ---------- 写 ----------
     def upsert(self, user_id: str, *, media_type: str, platform: str, video_id: str, page: int,
@@ -481,43 +579,26 @@ class MediaStore:
         return final, size, digest.hexdigest()
 
     def prune_cache(self, *, force_bytes: int = 0, now: int | None = None) -> dict:
-        """先删过期，再按 last_access_at 淘汰到配额内；跳过最近 5 分钟被访问的文件。"""
+        """先删过期的，再按最近访问/存入时间淘汰到配额内；最近 5 分钟动过的先留着。
+
+        曲库与批量任务共用这个缓存池，所以两边一起删。
+        """
         now = self.now() if now is None else now
-        removed = {"rows": 0, "bytes": 0}
+        removed = {"rows": 0, "bytes": 0, "tracks": 0, "items": 0}
         with self.engine.begin() as c:
-            expired = c.execute(text(
-                "SELECT id, media_path, bytes FROM tracks WHERE storage='cache' AND deleted=0"
-                " AND cache_expires_at IS NOT NULL AND cache_expires_at<=:n"), {"n": now}).all()
-            keep_after = now - 300
-            need = force_bytes
-            if need > 0:
-                rows = c.execute(text(
-                    "SELECT id, media_path, bytes FROM tracks WHERE storage='cache' AND deleted=0"
-                    " AND (cache_expires_at IS NULL OR cache_expires_at>:n)"
-                    " AND (last_access_at IS NULL OR last_access_at<:k)"
-                    " ORDER BY COALESCE(last_access_at, updated_at) ASC"), {"n": now, "k": keep_after}).all()
-                freed = 0
-                for r in rows:
-                    if freed >= need:
+            victims = self._file_rows(c, "cache", now=now, expired=True)
+            freed = sum(r["bytes"] for r in victims)
+            if freed < force_bytes:
+                for r in self._file_rows(c, "cache", now=now, expired=False):
+                    if freed >= force_bytes:
                         break
-                    expired.append(r)
-                    freed += int(r._mapping["bytes"] or 0)
-            for r in expired:
-                tid, rel, nb = int(r._mapping["id"]), r._mapping["media_path"], int(r._mapping["bytes"] or 0)
-                if rel:
-                    p = self.s.cache_dir / rel
-                    try:
-                        if p.is_file():
-                            size = p.stat().st_size
-                            p.unlink()
-                            removed["bytes"] += size
-                    except OSError:
-                        log.warning("缓存文件删除失败：%s", rel)
-                seq = self._next_seq(c)
-                c.execute(text("UPDATE tracks SET media_path=NULL, bytes=0, storage='metadata',"
-                               " cache_expires_at=NULL, updated_seq=:s, updated_at=:n WHERE id=:i"),
-                          {"s": seq, "n": now, "i": tid})
+                    victims.append(r)
+                    freed += r["bytes"]
+            for r in victims:
+                self._drop_one(c, r, "cache")
+                removed["bytes"] += r["bytes"]
                 removed["rows"] += 1
+                removed["tracks" if r["kind"] == "track" else "items"] += 1
         return removed
 
     def remove_file(self, user_id: str, track_id: int) -> dict:
@@ -593,10 +674,26 @@ class MediaStore:
         return {r._mapping["storage"]: {"tracks": int(r._mapping["n"]), "bytes": int(r._mapping["b"])}
                 for r in rows}
 
+    def creator_stats(self) -> dict:
+        """批量任务落在服务器上的文件（与曲库同池，但分开列，便于看清构成）。"""
+        with self.engine.begin() as c:
+            rows = c.execute(text(
+                "SELECT j.storage s, COUNT(*) n, COALESCE(SUM(i.bytes),0) b"
+                " FROM creator_items i JOIN creator_jobs j ON j.id=i.job_id"
+                " WHERE i.media_path IS NOT NULL GROUP BY j.storage")).all()
+        return {r._mapping["s"]: {"items": int(r._mapping["n"]), "bytes": int(r._mapping["b"])}
+                for r in rows}
+
     def purge_orphans(self) -> int:
-        """删掉库里没有记录指向的媒体文件（迁移/异常退出后的清理）。"""
+        """删掉库里没有记录指向的媒体文件（迁移/异常退出后的清理）。
+
+        批量任务的文件也在同一批目录里，必须一起算「有记录」，否则一次清理就会把
+        「服务器长期保存」的全删了。
+        """
         with self.engine.begin() as c:
             known = {r[0] for r in c.execute(text("SELECT media_path FROM tracks WHERE media_path IS NOT NULL"))}
+            known |= {r[0] for r in c.execute(
+                text("SELECT media_path FROM creator_items WHERE media_path IS NOT NULL"))}
         n = 0
         for d in (self.s.media_dir, self.s.cache_dir):
             if not d.is_dir():

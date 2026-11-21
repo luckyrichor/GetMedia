@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act } from 'preact/test-utils';
 import {
-  button, calls, cleanup, click, mount, ownerRoutes, server, text, until,
+  button, calls, choose, cleanup, click, mount, ownerRoutes, server, text, until,
 } from './harness';
 
 const JOBS = 'GET /v2/creators/jobs?limit=50';
@@ -93,13 +93,7 @@ describe('批量提取', () => {
     await until(() => text().includes('还没有批量任务'));
 
     await fillUrl('12345');
-    const selects = document.querySelectorAll('select');
-    await act(async () => {
-      // 0 类型 / 1 选取方式 / 2 存放方式 / 3 格式
-      const storage = selects[2] as HTMLSelectElement;
-      storage.value = 'archive';
-      storage.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await choose('存放方式', '服务器长期保存');
     await click(button('开始提取'));
     await until(() => text().includes('某个 UP 主'));
 
@@ -240,13 +234,8 @@ describe('批量提取', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    // 类型下拉切到「抖音号」（第 0 个 select）
-    const selects = document.querySelectorAll('select');
-    await act(async () => {
-      const kind = selects[0] as HTMLSelectElement;
-      kind.value = 'douyin';
-      kind.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    // 类型下拉切到「抖音号」
+    await choose('输入类型', '抖音号');
     await fillUrl('67194609689');
     await click(button('预览'));
     await until(() => text().includes('会选中 2 条'));
@@ -263,12 +252,7 @@ describe('批量提取', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    const selects = document.querySelectorAll('select');
-    await act(async () => {
-      const kind = selects[0] as HTMLSelectElement;
-      kind.value = 'douyin';
-      kind.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await choose('输入类型', '抖音号');
     await fillUrl('https://space.bilibili.com/1');
     await click(button('预览'));
     await until(() => text().includes('只能填纯数字'));
@@ -337,12 +321,7 @@ describe('批量提取', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    const selects = document.querySelectorAll('select');
-    await act(async () => {
-      const mode = selects[1] as HTMLSelectElement;
-      mode.value = 'date_range';
-      mode.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await choose('选取方式', '指定日期');
 
     const dates = Array.from(document.querySelectorAll('input[type="date"]')) as HTMLInputElement[];
     expect(dates).toHaveLength(2);
@@ -353,19 +332,55 @@ describe('批量提取', () => {
     expect(dates[0]!.value).toBe('');
   });
 
-  test('四种存放方式逐行解释，当前选中的那行高亮', async () => {
+  test('三种存放方式逐行解释，当前选中的那行高亮', async () => {
     server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
     const rows = Array.from(document.querySelectorAll('.storage-notes li'));
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(3);
     expect(rows.map((r) => r.querySelector('strong')?.textContent)).toEqual([
-      '手机下载', '仅元数据', '服务端归档', '服务端缓存',
+      '只记清单', '服务器暂存', '服务器长期保存',
     ]);
-    expect(rows[0]!.textContent).toContain('文件由手机逐条下载');
+    expect(rows[0]!.textContent).toContain('不下载文件');
     expect(rows[0]!.classList.contains('on')).toBe(true);
+    expect(rows[1]!.textContent).toContain('7 天后自动清理');
     expect(rows[1]!.classList.contains('on')).toBe(false);
+  });
+
+  test('服务器存档：任务卡显示已存条数与占用，条目上标「已在服务器」', async () => {
+    server(ownerRoutes({
+      [JOBS]: {
+        json: {
+          jobs: [job({
+            id: 9, status: 'done', storage: 'cache', total: 20, done: 12, failed: 0,
+            stored: 12, store_bytes: 240 * 1024 * 1024,
+          })],
+        },
+      },
+      'GET /v2/creators/jobs/9/items?limit=100&offset=0': {
+        json: {
+          items: [
+            row({ id: 11, video_id: 'BV9', title: '存好的作品', stored: true, bytes: 1024 * 1024,
+                  download_state: 'done' }),
+            row({ id: 12, video_id: 'BV10', title: '没存上的作品', stored: false, bytes: 0,
+                  download_state: 'pending', store_error: '空间已满' }),
+          ],
+          total: 2, limit: 100, offset: 0,
+        },
+      },
+    }));
+    mount('/creators');
+    await until(() => text().includes('已在服务器：12 条'));
+    expect(text()).toContain('服务器暂存');
+    expect(text()).toContain('240 MB');
+
+    await click(button('看条目'));
+    await until(() => text().includes('存好的作品'));
+    const tags = Array.from(document.querySelectorAll('.item-row .tag')).map((t) => t.textContent);
+    expect(tags).toContain('已在服务器');
+    // 「只记清单」的任务条目没有这份标记
+    expect(tags.filter((t) => t === '已在服务器')).toHaveLength(1);
   });
 
   test('单条下载：先探 2 字节确认能出流，再交给浏览器存盘', async () => {

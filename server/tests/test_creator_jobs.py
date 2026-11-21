@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shutil
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -431,3 +432,75 @@ def test_invalid_bodies(jenv):
     assert create(jenv, mode="date_range").status_code == 400
     assert create(jenv, mode="latest_n").status_code == 400
     assert create(jenv, mode="latest_n", n=3, storage="weird").status_code == 422
+
+
+# ---------- 存放方式：真的落盘 ----------
+def fake_opener(payload: bytes = b"DATA"):
+    @contextmanager
+    def open_(_url, _platform):
+        yield [payload]
+    return open_
+
+
+def with_play_urls(n=3):
+    return [replace(v, play_urls=(f"https://cdn.example.invalid/{v.video_id}.mp4",))
+            for v in make_videos(n)]
+
+
+def env_with_files(tmp_path, **settings_kw):
+    """列表带播放地址 + 假取流，落盘路径不需要真的连 CDN。"""
+    env = build(tmp_path, lister=Lister(with_play_urls(3)), **settings_kw)
+    env.app.state.runtime.write(registration_open=True)
+    env.token = make_owner(env, name="boss")
+    env.app.state.creator_jobs.opener = fake_opener(b"DATA")
+    return env
+
+
+def test_cache_storage_puts_files_on_server(tmp_path):
+    env = env_with_files(tmp_path)
+    r = create(env, mode="latest_n", n=3, storage="cache")
+    assert r.status_code == 202, r.text
+    jid = r.json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["status"] == "done"
+    assert job["stored"] == 3
+    assert job["store_bytes"] == 12
+    files = [p for p in env.settings.cache_dir.glob("*") if p.is_file()]
+    assert len(files) == 3 and all(p.stat().st_size == 4 for p in files)
+
+    # 有本地文件就直接读，不再回上游（这里上游是假的，真去取会报错）
+    got = env.client.get(f"/v2/creators/jobs/{jid}/items/BVpin000001/file", headers=hdr(env.token))
+    assert got.status_code == 200, got.text
+    assert got.content == b"DATA"
+    assert got.headers["content-disposition"].startswith("attachment;")
+
+
+def test_metadata_storage_writes_nothing(tmp_path):
+    env = env_with_files(tmp_path)
+    jid = create(env, mode="latest_n", n=3).json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["storage"] == "metadata" and job["stored"] == 0
+    assert not env.settings.cache_dir.exists() or not any(env.settings.cache_dir.iterdir())
+    assert not env.settings.media_dir.exists() or not any(env.settings.media_dir.iterdir())
+
+
+def test_phone_storage_is_normalized_to_metadata(tmp_path):
+    env = env_with_files(tmp_path)
+    r = create(env, mode="latest_n", n=2, storage="phone")
+    assert r.status_code == 202, r.text
+    assert r.json()["storage"] == "metadata"
+
+
+def test_archive_evicts_oldest_when_quota_is_full(tmp_path):
+    # 配额只够两份 4 字节：第三条要落盘时必须把最早的那条删掉
+    env = env_with_files(tmp_path, archive_quota_bytes=8)
+    jid = create(env, mode="latest_n", n=3, storage="archive").json()["id"]
+    rows = env.client.get(f"/v2/creators/jobs/{jid}/items", headers=hdr(env.token)).json()["items"]
+    by_id = {r["video_id"]: r for r in rows}
+    assert by_id["BVpin000001"]["stored"] is False          # 最旧的被淘汰
+    assert "已清理" in (by_id["BVpin000001"]["store_error"] or "")
+    assert by_id["BVv00000002"]["stored"] is True          # 最新的留下来了
+    files = [p for p in env.settings.media_dir.glob("*") if p.is_file()]
+    assert len(files) == 2
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["stored"] == 2 and job["store_bytes"] == 8

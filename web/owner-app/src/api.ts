@@ -207,6 +207,9 @@ export interface CreatorJob {
   done: number;
   failed: number;
   estimated_bytes: number;
+  /** 已经在服务器上的条目数与占用（暂存 / 长期保存才有） */
+  stored: number;
+  store_bytes: number;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -229,6 +232,10 @@ export interface CreatorItem {
   download_state: ItemState;
   track_id: number | null;
   error: string | null;
+  /** 服务器上有没有这一份；有就点下载直接从服务器读 */
+  stored: boolean;
+  bytes: number;
+  store_error: string | null;
 }
 
 // ---------------- 定时（5d） ----------------
@@ -361,6 +368,8 @@ export interface AuthSession {
 // ---------------- 库维护（5e） ----------------
 export interface StorageReport {
   by_storage: Record<string, { tracks: number; bytes: number }>;
+  /** 批量提取落在服务器上的文件：与曲库同一个配额池，单独列出只是便于看清构成。 */
+  batch: Record<string, { items: number; bytes: number }>;
   /** AI 素材与产物：目录求和，已计入 used.archive，不能与 by_storage 相加。 */
   ai: { files: number; bytes: number };
   quota: { archive: number; cache: number };

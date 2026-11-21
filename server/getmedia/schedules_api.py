@@ -25,7 +25,7 @@ class ScheduleCreateBody(BaseModel):
     n: int | None = Field(None, ge=1, le=100000)
     interval_minutes: int = Field(360, ge=MIN_INTERVAL, le=MAX_INTERVAL)
     include_pinned: bool = True
-    storage: Literal["phone", "metadata", "archive", "cache"] = "phone"
+    storage: Literal["phone", "metadata", "archive", "cache"] = "metadata"
     media_type: Literal["audio", "video"] = "video"
 
 

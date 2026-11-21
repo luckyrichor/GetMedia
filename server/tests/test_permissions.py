@@ -113,6 +113,6 @@ def test_owner_config_requires_owner(open_reg):
     r = open_reg.client.get("/v2/config/owner", headers=hdr(owner_token))
     assert r.status_code == 200
     body = r.json()
-    assert body["archive_quota_bytes"] == 3 * 1024**3
+    assert body["archive_quota_bytes"] == 5 * 1024**3
     assert body["cache_ttl_seconds"] == 86400
     assert body["credential_vault"] is True

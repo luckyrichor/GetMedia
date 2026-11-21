@@ -3,19 +3,19 @@
 export const PLATFORM: Record<string, string> = { bilibili: 'B 站', douyin: '抖音', unknown: '未知' };
 export const platformName = (p: string | null | undefined) => (p ? PLATFORM[p] ?? p : '—');
 
+/** 存放方式：给用户看的说法，不是存储术语。 */
 export const STORAGE: Record<string, string> = {
-  phone: '手机下载',
-  metadata: '仅元数据',
-  archive: '服务端归档',
-  cache: '服务端缓存',
+  metadata: '只记清单',
+  cache: '服务器暂存',
+  archive: '服务器长期保存',
+  phone: '只记清单',   // 旧数据里的「手机下载」，行为本来就等于只记清单
 };
 
-/** 四种存放方式各自实际会做什么（批量任务只扫列表，文件另走下载入口）。 */
+/** 三种存放方式各自会做什么（配额与曲库共用，满了都是删最旧的）。 */
 export const STORAGE_DESC: Record<string, string> = {
-  phone: '只记作品清单和播放地址，文件由手机逐条下载。',
-  metadata: '只记标题、时长这些信息，不下载文件。',
-  archive: '记清单；之后在网页点单条下载时由服务器转发，不长期占用服务器空间。',
-  cache: '记清单；网页按需下载的文件进临时缓存，到期自动清理。',
+  metadata: '只记录标题、时长和作品地址，不下载文件；以后点下载时再从平台取。',
+  cache: '提取时把文件下到服务器，7 天后自动清理；配额 1 GB，满了先删最久没用的。',
+  archive: '文件长期留在服务器，随时能下；配额 5 GB，满了先删最旧的。',
 };
 
 export const JOB: Record<string, string> = {

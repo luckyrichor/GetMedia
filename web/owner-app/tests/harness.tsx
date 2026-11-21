@@ -80,6 +80,18 @@ export async function click(el: Element) {
   await act(async () => { (el as HTMLElement).click(); });
 }
 
+/** 自定义下拉框：先点开（按 aria-label 找控件），再点名字对得上的选项。 */
+export async function choose(ariaLabel: string, option: string) {
+  const trigger = document.querySelector(`button[aria-label="${ariaLabel}"]`);
+  if (!trigger) throw new Error(`找不到下拉框：${ariaLabel}`);
+  await click(trigger);
+  const opts = Array.from(document.querySelectorAll('[role="option"]'));
+  const hit = opts.find((li) => li.textContent?.trim() === option)
+    ?? opts.find((li) => li.textContent?.trim().startsWith(option));
+  if (!hit) throw new Error(`找不到选项：${option}（有：${opts.map((o) => o.textContent).join("|")}）`);
+  await click(hit);
+}
+
 export function cleanup() {
   if (container) {
     render(null, container);

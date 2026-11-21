@@ -47,7 +47,7 @@ export const SECTIONS: Section[] = [
       { method: 'GET', path: '/v2/tracks', note: '游标翻页（since_seq），按当前账号' },
       { method: 'GET', path: '/v2/media/{id}', note: '媒体流，支持 Range（拖动进度条）' },
       { method: 'PATCH', path: '/v2/tracks/{id}', note: '改标题/UP 主/置顶' },
-      { method: 'DELETE', path: '/v2/tracks/{id}/file', note: '只删文件，记录退回"仅元数据"' },
+      { method: 'DELETE', path: '/v2/tracks/{id}/file', note: '只删文件，记录退回"只记清单"' },
       { method: 'DELETE', path: '/v2/tracks/{id}', note: '逻辑删除，会同步到手机端' },
     ],
     missing: '不能上传或替换文件、不能新建播放列表；条目没有"分类"字段（旧版的分类没有迁过来）。',
@@ -131,7 +131,7 @@ export const SECTIONS: Section[] = [
     blurb: '看存储水位、清理缓存与孤儿文件、看提取失败上报。',
     endpoints: [
       { method: 'GET', path: '/v2/maintenance/storage', note: '按存放方式的条目与字节、配额与已用' },
-      { method: 'POST', path: '/v2/maintenance/prune-cache', note: '删过期缓存，顺手退回"仅元数据"' },
+      { method: 'POST', path: '/v2/maintenance/prune-cache', note: '删过期缓存，顺手退回"只记清单"' },
       { method: 'POST', path: '/v2/maintenance/orphans', note: '删没有记录指向的文件' },
       { method: 'GET', path: '/v2/diagnostics/extractions', note: '最近 50 条失败上报' },
     ],

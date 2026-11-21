@@ -520,6 +520,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
         # used.archive 已包含 AI 素材与产物（它们计入服务器库配额），另外单列 ai 便于看清构成：
         # by_storage 只来自 tracks 表，ai 是目录求和，两者不可相加（ai 已算在 used.archive 里）。
         return {"by_storage": store.stats(),
+                "batch": store.creator_stats(),
                 "ai": store.ai_stats(),
                 "quota": {"archive": store.quota_of("archive"), "cache": store.quota_of("cache")},
                 "used": {"archive": store.storage_used("archive"), "cache": store.storage_used("cache")}}

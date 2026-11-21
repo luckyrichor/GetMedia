@@ -7,6 +7,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { ownerApi, type JobStorage, type MediaType, type Schedule, type ScheduleRun, type SelectionMode } from '../api';
 import { SELECTION, STORAGE, intervalText, platformName } from '../labels';
+import { Select } from '../select';
 import { Empty, ErrorBox, fmtTime, Loading, relTime } from '../ui';
 
 const INTERVALS = [60, 360, 720, 1440, 4320, 10080];
@@ -26,7 +27,7 @@ export function SchedulesPage() {
   const [since, setSince] = useState('');
   const [until, setUntil] = useState('');
   const [every, setEvery] = useState('1440');
-  const [storage, setStorage] = useState<JobStorage>('phone');
+  const [storage, setStorage] = useState<JobStorage>('metadata');
   const [mediaType, setMediaType] = useState<MediaType>('video');
   const [pinned, setPinned] = useState(true);
 
@@ -136,19 +137,24 @@ export function SchedulesPage() {
             <span>名字（唯一）</span>
             <input type="text" maxLength={80} value={name} onInput={(e) => setName((e.target as HTMLInputElement).value)} />
           </label>
-          <label class="field">
+          <div class="field">
             <span>平台</span>
-            <select value={platform} onChange={(e) => setPlatform((e.target as HTMLSelectElement).value)}>
-              <option value="bilibili">B 站</option>
-              <option value="douyin">抖音</option>
-            </select>
-          </label>
-          <label class="field">
+            <Select
+              ariaLabel="平台"
+              value={platform}
+              options={[{ value: 'bilibili', label: 'B 站' }, { value: 'douyin', label: '抖音' }]}
+              onChange={setPlatform}
+            />
+          </div>
+          <div class="field">
             <span>间隔</span>
-            <select value={every} onChange={(e) => setEvery((e.target as HTMLSelectElement).value)}>
-              {INTERVALS.map((m) => <option value={String(m)}>{intervalText(m)}</option>)}
-            </select>
-          </label>
+            <Select
+              ariaLabel="间隔"
+              value={every}
+              options={INTERVALS.map((m) => ({ value: String(m), label: intervalText(m) }))}
+              onChange={setEvery}
+            />
+          </div>
         </div>
 
         <label class="field">
@@ -157,14 +163,16 @@ export function SchedulesPage() {
         </label>
 
         <div class="field-row">
-          <label class="field">
+          <div class="field">
             <span>选取方式</span>
-            <select value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as SelectionMode)}>
-              <option value="latest_n">{SELECTION.latest_n}</option>
-              <option value="date_range">{SELECTION.date_range}</option>
-              <option value="all">{SELECTION.all}</option>
-            </select>
-          </label>
+            <Select
+              ariaLabel="选取方式"
+              value={mode}
+              options={(['latest_n', 'date_range', 'all'] as SelectionMode[])
+                .map((m) => ({ value: m, label: SELECTION[m] ?? m }))}
+              onChange={(v) => setMode(v as SelectionMode)}
+            />
+          </div>
           {mode === 'latest_n' && (
             <label class="field">
               <span>条数</span>
@@ -183,19 +191,25 @@ export function SchedulesPage() {
               </label>
             </>
           )}
-          <label class="field">
+          <div class="field">
             <span>存放</span>
-            <select value={storage} onChange={(e) => setStorage((e.target as HTMLSelectElement).value as JobStorage)}>
-              {(['phone', 'metadata', 'archive', 'cache'] as JobStorage[]).map((s) => <option value={s}>{STORAGE[s]}</option>)}
-            </select>
-          </label>
-          <label class="field">
+            <Select
+              ariaLabel="存放方式"
+              value={storage}
+              options={(['metadata', 'cache', 'archive'] as JobStorage[])
+                .map((s) => ({ value: s, label: STORAGE[s]! }))}
+              onChange={(v) => setStorage(v as JobStorage)}
+            />
+          </div>
+          <div class="field">
             <span>格式</span>
-            <select value={mediaType} onChange={(e) => setMediaType((e.target as HTMLSelectElement).value as MediaType)}>
-              <option value="video">视频</option>
-              <option value="audio">音频</option>
-            </select>
-          </label>
+            <Select
+              ariaLabel="格式"
+              value={mediaType}
+              options={[{ value: 'video', label: '视频' }, { value: 'audio', label: '音频' }]}
+              onChange={(v) => setMediaType(v as MediaType)}
+            />
+          </div>
           <label class="check">
             <input type="checkbox" checked={pinned} onChange={(e) => setPinned((e.target as HTMLInputElement).checked)} />
             <span>包含置顶</span>

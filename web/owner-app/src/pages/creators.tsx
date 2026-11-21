@@ -12,9 +12,11 @@ import {
   type MediaType, type SelectionMode,
 } from '../api';
 import { ITEM, JOB, SELECTION, STORAGE, STORAGE_DESC, TONE, platformName } from '../labels';
+import { Select } from '../select';
 import { Empty, ErrorBox, Field, fmtBytes, fmtDuration, fmtTime, Loading, relTime } from '../ui';
 
-const STORAGE_OPTS: JobStorage[] = ['phone', 'metadata', 'archive', 'cache'];
+/** 三种存放方式（旧的 phone 已并入「只记清单」，不再出现在选项里）。 */
+const STORAGE_OPTS: JobStorage[] = ['metadata', 'cache', 'archive'];
 
 /** 「不再显示」只作用于这台设备的这个浏览器：任务本身还在服务端跑，只是不再占列表位置。
  *  记在 localStorage 里，刷新后依然隐藏；清站点数据或用别的设备会重新出现，所以下面留了「恢复显示」。 */
@@ -120,7 +122,7 @@ export function CreatorsPage() {
   const [since, setSince] = useState('');
   const [until, setUntil] = useState(() => todayISO());
   const [pinned, setPinned] = useState(true);
-  const [storage, setStorage] = useState<JobStorage>('phone');
+  const [storage, setStorage] = useState<JobStorage>('metadata');
   const [mediaType, setMediaType] = useState<MediaType>('video');
   const [preview, setPreview] = useState<CreatorPreview | null>(null);
   const [busy, setBusy] = useState<'' | 'preview' | 'create' | 'act'>('');
@@ -281,14 +283,15 @@ export function CreatorsPage() {
 
       <div class="panel-card">
         <div class="field-row">
-          <label class="field">
+          <div class="field">
             <span>类型</span>
-            <select value={kind} onChange={(e) => setKind((e.target as HTMLSelectElement).value as CreatorKind)}>
-              {(Object.keys(KIND_LABEL) as CreatorKind[]).map((k) => (
-                <option value={k}>{KIND_LABEL[k]}</option>
-              ))}
-            </select>
-          </label>
+            <Select
+              ariaLabel="输入类型"
+              value={kind}
+              options={(Object.keys(KIND_LABEL) as CreatorKind[]).map((k) => ({ value: k, label: KIND_LABEL[k] }))}
+              onChange={(v) => setKind(v as CreatorKind)}
+            />
+          </div>
           <label class="field">
             <span>{kind === 'url' ? '主页链接 / 分享文案' : KIND_LABEL[kind]}</span>
             <input
@@ -303,14 +306,16 @@ export function CreatorsPage() {
         </div>
 
         <div class="field-row">
-          <label class="field">
+          <div class="field">
             <span>选取方式</span>
-            <select value={mode} onChange={(e) => setMode((e.target as HTMLSelectElement).value as SelectionMode)}>
-              <option value="latest_n">{SELECTION.latest_n}</option>
-              <option value="date_range">{SELECTION.date_range}</option>
-              <option value="all">{SELECTION.all}</option>
-            </select>
-          </label>
+            <Select
+              ariaLabel="选取方式"
+              value={mode}
+              options={(['latest_n', 'date_range', 'all'] as SelectionMode[])
+                .map((m) => ({ value: m, label: SELECTION[m] ?? m }))}
+              onChange={(v) => setMode(v as SelectionMode)}
+            />
+          </div>
           {mode === 'latest_n' && (
             <label class="field">
               <span>条数</span>
@@ -344,17 +349,22 @@ export function CreatorsPage() {
         <div class="field-row">
           <div class="field">
             <span>存放方式</span>
-            <select value={storage} onChange={(e) => setStorage((e.target as HTMLSelectElement).value as JobStorage)}>
-              {STORAGE_OPTS.map((s) => <option value={s}>{STORAGE[s]}</option>)}
-            </select>
+            <Select
+              ariaLabel="存放方式"
+              value={storage}
+              options={STORAGE_OPTS.map((s) => ({ value: s, label: STORAGE[s]! }))}
+              onChange={(v) => setStorage(v as JobStorage)}
+            />
           </div>
-          <label class="field">
+          <div class="field">
             <span>格式</span>
-            <select value={mediaType} onChange={(e) => setMediaType((e.target as HTMLSelectElement).value as MediaType)}>
-              <option value="video">视频</option>
-              <option value="audio">音频</option>
-            </select>
-          </label>
+            <Select
+              ariaLabel="格式"
+              value={mediaType}
+              options={[{ value: 'video', label: '视频' }, { value: 'audio', label: '音频' }]}
+              onChange={(v) => setMediaType(v as MediaType)}
+            />
+          </div>
           <label class="check">
             <input type="checkbox" checked={pinned} onChange={(e) => setPinned((e.target as HTMLInputElement).checked)} />
             <span>包含置顶作品</span>
@@ -464,6 +474,13 @@ export function CreatorsPage() {
                 {j.estimated_bytes > 0 ? ` · 约 ${fmtBytes(j.estimated_bytes)}` : ''}
                 {j.pause_reason ? ` · 暂停原因：${j.pause_reason}` : ''}
               </div>
+              {(j.storage === 'cache' || j.storage === 'archive') && (
+                <div class="small muted">
+                  已在服务器：{j.stored} 条{j.total ? ` / ${j.total}` : ''}
+                  {j.store_bytes > 0 ? ` · ${fmtBytes(j.store_bytes)}` : ''}
+                  {j.status === 'done' && j.stored < (j.total || 0) ? '（没存上的条目仍可在下载时现取）' : ''}
+                </div>
+              )}
               <div class="row-actions">
                 <button type="button" class="btn btn-ghost small" onClick={() => setOpenId(openId === j.id ? null : j.id)}>
                   {openId === j.id ? '收起条目' : '看条目'}
@@ -674,7 +691,9 @@ function JobItems({ jobId }: { jobId: number }) {
             <span class="item-no" aria-hidden="true">{idx + 1}</span>
             {/* 手机下载的任务里，服务器只记账、不下载，也没有代码回写条目状态，
                 pending 会一直是 pending——所以「待处理」不显示，只有真落了盘或失败才有标记。 */}
-            {i.download_state !== 'pending' && (
+            {i.stored ? (
+              <span class="tag ok" title="服务器上已经有一份，点下载直接从服务器取">已在服务器</span>
+            ) : i.download_state !== 'pending' && (
               <span class={`tag ${i.download_state === 'done' ? 'ok' : i.download_state === 'failed' ? 'bad' : ''}`}>
                 {ITEM[i.download_state] ?? i.download_state}
               </span>
@@ -683,6 +702,7 @@ function JobItems({ jobId }: { jobId: number }) {
             <span class="small muted nowrap">
               {fmtDuration(i.duration_sec)}
               {i.published_at ? ` · ${fmtTime(i.published_at)}` : ''}
+              {i.stored && i.bytes ? ` · ${fmtBytes(i.bytes)}` : ''}
               {i.track_id ? ` · 媒体库 #${i.track_id}` : ''}
             </span>
             <button

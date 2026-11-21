@@ -306,6 +306,11 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     from .metadata_backup_api import register as register_metadata_backup
     register_metadata_backup(app, auth, engine, clock)
 
+    # 媒体库 / 提取 / 媒体流（P2a）：全部 owner 级。
+    # 先注册它：批量任务落盘要用这里的配额账本与媒体解析器（app.state.media/extractor）。
+    from .media_api import register as register_media_routes
+    media_store = register_media_routes(app, require_tier("owner"), engine, clock, resolver=media_resolver)
+
     # 博主批量：只取列表，媒体仍由手机端提取，因此不需要任务表
     from . import creator_rt
     from .creator_api import register as register_creator_routes
@@ -315,12 +320,9 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     # 批量任务先注册（预览要用它的扫描能力），再注册预览/上限
     creator_jobs = register_creator_jobs(app, require_tier("owner"), engine, clock,
                                         lister=creator_lister, resolver=creator_resolver,
-                                        cookies=creator_cookies, pinned=creator_pinned)
+                                        cookies=creator_cookies, pinned=creator_pinned,
+                                        store=media_store, media_resolver=app.state.extractor)
     register_creator_routes(app, require_tier("owner"), engine, clock, jobs=creator_jobs)
-
-    # 媒体库 / 提取 / 媒体流（P2a）：全部 owner 级
-    from .media_api import register as register_media_routes
-    media_store = register_media_routes(app, require_tier("owner"), engine, clock, resolver=media_resolver)
 
     # 反馈收件箱（P5c）：唯一一条"跨账号读"的通道，仍然只在 owner 级
     from .feedback_admin import register as register_feedback_admin
@@ -369,6 +371,11 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
                     schedules.tick()
                 except Exception as e:  # noqa: BLE001
                     log.error("schedules tick error: %s", type(e).__name__)
+                try:
+                    # 缓存到期就该消失：不等到"空间不够"才清（曲库 1 天、批量暂存 7 天）
+                    media_store.prune_cache()
+                except Exception as e:  # noqa: BLE001
+                    log.error("prune cache error: %s", type(e).__name__)
                 time.sleep(3600)
         threading.Thread(target=_ops_loop, name="ops", daemon=True).start()
 
