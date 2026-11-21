@@ -116,12 +116,17 @@ function nickName(j: CreatorJob): string {
   return (j.creator_name || '').trim() || '昵称未知';
 }
 
+/** 「抖音号」「B站号」这种连写，别写成「B 站号 123」中间还带空格。 */
+const ID_LABEL: Record<string, string> = { douyin: '抖音号', bilibili: 'B站号' };
+
 /** 用户当初填的是号码时，单独做个标签，一眼看出这批是「按号抓的」。
- *  填的是主页链接时没有号码可写（链接本身就是线索），返回空串。 */
+ *  填的是主页链接时没有号码可写（链接本身就是线索），返回空串——
+ *  链接里必有 :// 或 /，`NUMERIC_ID` 本来就不认，这里再挡一次平台未知的情况。 */
 function inputBadge(j: CreatorJob): string {
   const raw = (j.source_input || '').trim();
   if (!NUMERIC_ID.test(raw)) return '';
-  return `${platformName(j.platform)}号 ${raw}`;
+  const label = ID_LABEL[j.platform];
+  return label ? `${label} ${raw}` : '';
 }
 
 /** 这一批选了哪些作品：方式 + 条数/日期，拼成一句人能读的话。 */
