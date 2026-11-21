@@ -116,30 +116,34 @@ function nickName(j: CreatorJob): string {
   return (j.creator_name || '').trim() || '昵称未知';
 }
 
-/** 「抖音号」「B站号」这种连写，别写成「B 站号 123」中间还带空格。 */
+/** 平台号的前缀：抖音号 / B站号（连写）。后面跟「：数字」，见 creatorIdBadge。 */
 const ID_LABEL: Record<string, string> = { douyin: '抖音号', bilibili: 'B站号' };
 
 /** 用户当初填的是号码时，单独做个标签，一眼看出这批是「按号抓的」。
  *  填的是主页链接时没有号码可写（链接本身就是线索），返回空串——
  *  链接里必有 :// 或 /，`NUMERIC_ID` 本来就不认，这里再挡一次平台未知的情况。 */
-function inputBadge(j: CreatorJob): string {
+function inputId(j: CreatorJob): string {
   const raw = (j.source_input || '').trim();
-  if (!NUMERIC_ID.test(raw)) return '';
-  const label = ID_LABEL[j.platform];
-  return label ? `${label} ${raw}` : '';
+  return NUMERIC_ID.test(raw) ? raw : '';
 }
 
-/** 任务抓的博主号：
- *  用户填的是号码时，就显示用户填的那个（用户意图，最准）；
- *  填的是链接时，回退用后端解析出的平台号（creator_id）。
- *  这样按链接抓的任务也能亮出抖音号 / B 站号。 */
-function creatorIdBadge(j: CreatorJob): string {
-  const label = ID_LABEL[j.platform];
-  if (!label) return '';
-  const input = inputBadge(j);
+/** 任务抓的博主号（纯数字，不带前缀）：
+ *  用户填的是号码时用用户填的（用户意图，最准）；
+ *  填的是链接时回退用后端解析出的平台号（creator_id）。
+ *  返回空串表示这个任务没有可显示的号码。 */
+function creatorId(j: CreatorJob): string {
+  const input = inputId(j);
   if (input) return input;
   const id = (j.creator_id || '').trim();
-  return NUMERIC_ID.test(id) ? `${label} ${id}` : '';
+  return NUMERIC_ID.test(id) ? id : '';
+}
+
+/** 号码标签的整句：「抖音号：67194609689」/「B站号：12345」。没有号则空串。 */
+function creatorIdBadge(j: CreatorJob): string {
+  const label = ID_LABEL[j.platform];
+  const id = creatorId(j);
+  if (!label || !id) return '';
+  return `${label}：${id}`;
 }
 
 /** 这一批选了哪些作品：方式 + 条数/日期，拼成一句人能读的话。 */
@@ -530,9 +534,9 @@ export function CreatorsPage() {
                 <span class="job-no" aria-hidden="true">{idx + 1}</span>
                 <span class={`tag ${TONE[j.status] ?? ''}`}>{JOB[j.status] ?? j.status}</span>
                 <span class="tag">{platformName(j.platform)}</span>
-                <span class="job-who ellipsis" title={nickName(j)}>{nickName(j)}</span>
-                {/* 亮出博主号：按号抓的用填的号，按链接抓的用后端解析出的号 */}
+                {/* 号放昵称前面、固定不收缩：先亮「抖音号：xxx」，昵称在后可省略 */}
                 {creatorIdBadge(j) && <span class="tag job-id">{creatorIdBadge(j)}</span>}
+                <span class="job-who ellipsis" title={nickName(j)}>{nickName(j)}</span>
                 <span class="grow" />
                 <span class="small muted nowrap" title="发起时间">
                   {relTime(j.created_at)} · {fmtDateTime(j.created_at)}

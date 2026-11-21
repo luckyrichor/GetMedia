@@ -507,14 +507,14 @@ describe('批量提取：多格式与任务卡信息', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('抖音号 67194609689'));
+    await until(() => text().includes('抖音号：67194609689'));
 
-    // 头部依次是：状态 → 平台 → 昵称 → 号码；昵称没取到就说「昵称未知」
+    // 头部依次是：状态 → 平台 → 号码 → 昵称；号在昵称前、固定不收缩，昵称没取到就说「昵称未知」
     const tags = Array.from(document.querySelectorAll('.job-head .tag')).map((n) => n.textContent);
-    expect(tags).toEqual(['进行中', '抖音', '抖音号 67194609689']);
+    expect(tags).toEqual(['进行中', '抖音', '抖音号：67194609689']);
     expect(document.querySelector('.job-who')!.textContent).toBe('昵称未知');
     expect(document.querySelector('.job-head')!.textContent)
-      .toContain('抖音昵称未知抖音号 67194609689');
+      .toContain('抖音号：67194609689昵称未知');
 
     // 地址那一行只放地址本身，不再重复一个「抖音」标签
     const src = document.querySelector('.job-src')!;
@@ -533,7 +533,7 @@ describe('批量提取：多格式与任务卡信息', () => {
     expect(() => button('显示条目')).not.toThrow();
   });
 
-  test('按号发起：B 站号写成「B站号」；按链接发起也能显示后端解析出的号', async () => {
+  test('按号发起：B 站号写成「B站号：」；按链接发起也能显示后端解析出的号', async () => {
     const url = 'https://space.bilibili.com/12345';
     server(ownerRoutes({
       [JOBS]: {
@@ -551,10 +551,11 @@ describe('批量提取：多格式与任务卡信息', () => {
 
     const cards = Array.from(document.querySelectorAll('.job'));
     const tagsOf = (el: Element) => Array.from(el.querySelectorAll('.job-head .tag')).map((n) => n.textContent);
-    expect(tagsOf(cards[0]!)).toEqual(['进行中', 'B 站', 'B站号 12345']);
+    // 号在前、固定不收缩，昵称在后
+    expect(tagsOf(cards[0]!)).toEqual(['进行中', 'B 站', 'B站号：12345']);
     expect(cards[0]!.querySelector('.job-who')!.textContent).toBe('某个 UP 主');
     // 链接发起的那条：有昵称，也显示后端解析出的号
-    expect(tagsOf(cards[1]!)).toEqual(['进行中', 'B 站', 'B站号 67890']);
+    expect(tagsOf(cards[1]!)).toEqual(['进行中', 'B 站', 'B站号：67890']);
   });
 
   test('条目按表头对齐；提取时间用落盘时间；每种格式可单独下载', async () => {

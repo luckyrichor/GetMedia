@@ -443,7 +443,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 
 /* 任务卡：抓的是谁、抓的哪个地址（长链接单行，可以左右拖） */
 .job-who { min-width: 0; max-width: 22rem; font-weight: 600; }
-.job-id { font-variant-numeric: tabular-nums; }
+/* 号码标签固定不收缩，昵称在后负责省略，号不会被长昵称挤没 */
+.job-id { flex: none; font-variant-numeric: tabular-nums; }
 .job-src { display: flex; gap: 8px; align-items: center; margin: 2px 0 6px; }
 .job-url {
   flex: 1 1 auto; min-width: 0; display: block;
