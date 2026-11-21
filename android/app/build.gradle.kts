@@ -150,8 +150,8 @@ android {
         create("full") {
             dimension = "edition"
             applicationId = appIds.getProperty("fullApplicationId")
-            versionName = "0.1.18"
-            versionCode = 19
+            versionName = "0.1.19"
+            versionCode = 20
         }
     }
 

@@ -139,10 +139,13 @@ fun ExportSheet(
             track.id !in filledIds &&
                 (track.localPath.isNullOrBlank() || !File(track.localPath).isFile)
         }
-            // 阶段 6：能补回来的（云端行、清单恢复的空壳）都归到「先下载这 N 项」那一块；
-            // 只有本机产物真的丢了的才标"本机文件缺失"。
+            // 阶段 6：能补回来的（云端行、带链接的空壳）都归到「先下载这 N 项」那一块；
+            // 补不回来的再分两种：本机导入的（去原设备拿文件）与真的丢了的（只能重提取）。
             .partition { it.refillable }
     }
+    // 本机导入的空壳单列：它们没有来源链接，混进"本机文件缺失"会让人以为重提取就行。
+    val localImportShells = remember(missingLocalFiles) { missingLocalFiles.filter { it.restoredLocalImport } }
+    val lostLocalFiles = remember(missingLocalFiles) { missingLocalFiles.filterNot { it.restoredLocalImport } }
     val sanitizedFolder = folderName?.let {
         ExportNaming.sanitize(it, ExportNaming.MAX_FOLDER_CHARS, ExportNaming.MAX_FOLDER_BYTES)
     }
@@ -399,12 +402,20 @@ fun ExportSheet(
                         onSkip = { skipIds = skipIds + waitingForDownload.map { it.id } },
                     )
                 }
-                if (missingLocalFiles.isNotEmpty()) {
+                if (localImportShells.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     ExportUnavailableNotice(
-                        missingCount = missingLocalFiles.size,
+                        missingCount = localImportShells.size,
+                        reason = ExportPlan.REASON_LOCAL_IMPORT,
+                        onSkip = { skipIds = skipIds + localImportShells.map { it.id } },
+                    )
+                }
+                if (lostLocalFiles.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    ExportUnavailableNotice(
+                        missingCount = lostLocalFiles.size,
                         reason = ExportPlan.REASON_MISSING_LOCAL,
-                        onSkip = { skipIds = skipIds + missingLocalFiles.map { it.id } },
+                        onSkip = { skipIds = skipIds + lostLocalFiles.map { it.id } },
                     )
                 }
 

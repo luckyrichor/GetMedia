@@ -40,18 +40,42 @@ data class ExportTrack(
      * 而 [ExportTrack] 是纯数据（JVM 单测直接构造）。真正的闸门在下载入口里，这里只管显示。
      */
     val syncState: String? = null,
+    /** 来源链接。空串表示这一条从来没有链接（本机导入），补不回来。 */
+    val sourceUrl: String = "",
+    /** 平台原值；`local` 是本机导入。 */
+    val platform: String = "",
+    /** 作品号；空串表示身份不足以回填。 */
+    val videoId: String = "",
 ) {
     /** 云端有、本机没下过：导出失败原因要说"尚未下载"，不能让人去重提取一遍。 */
     val awaitingDownload: Boolean
         get() = localPath.isNullOrBlank() && serverId != null
 
     /**
-     * 缺文件、但能通过统一下载入口补回来（阶段 6）：云端行，或清单恢复出来的空壳。
-     * 本机产物真的丢了的行不在此列——那种只能重新提取或重新导入。
+     * 缺文件、但能通过统一下载入口补回来（阶段 6）：云端行，或**带来源链接且身份齐全**的空壳。
+     *
+     * 0.1.19 修的一处不一致：以前只要求 `syncState == "RESTORED"`，于是本机导入的音频
+     * （`platform=local`、`sourceUrl` 为空）也被算成"可补下载"，导出页给出「先下载这 N 项」，
+     * 点下去每一条都必然报「这条没有可用的来源链接」。[RepairRules] 那边一直判得对（只给移除），
+     * 两处口径不一致，这里按它的口径对齐。
+     *
+     * 判定用的三个字段都在 `main` 里，不引用 full 源码集的 `restoredKey()`。
      */
     val refillable: Boolean
-        get() = localPath.isNullOrBlank() &&
-            (serverId != null || syncState == "RESTORED")
+        get() = localPath.isNullOrBlank() && (
+            serverId != null ||
+                (syncState == "RESTORED" && sourceUrl.isNotBlank() &&
+                    platform.isNotBlank() && videoId.isNotBlank())
+            )
+
+    /**
+     * 「本机导入、文件已不在本机」的空壳：没有任何来源链接可补，只能重新导入或移除。
+     *
+     * 与"本机文件真的丢了"分开显示：前者去原设备拿文件就能回来，后者连文件都没有过。
+     */
+    val restoredLocalImport: Boolean
+        get() = localPath.isNullOrBlank() && serverId == null &&
+            syncState == "RESTORED" && platform.equals("local", ignoreCase = true)
 
     /** 显示名：重命名优先，空串仍回落到原标题。 */
     val displayTitle: String
@@ -73,6 +97,9 @@ data class ExportTrack(
             localPath = entity.localPath,
             serverId = entity.serverId,
             syncState = entity.syncState,
+            sourceUrl = entity.sourceUrl.orEmpty(),
+            platform = entity.platform,
+            videoId = entity.videoId,
         )
     }
 }
