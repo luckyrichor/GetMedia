@@ -42,6 +42,7 @@ async function fillUrl(v: string) {
 }
 
 beforeEach(() => {
+  window.localStorage.clear();
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
 });
 afterEach(() => {
@@ -209,5 +210,43 @@ describe('博主批量', () => {
     await click(button('先预览会选哪些'));
     await until(() => text().includes('只能填纯数字'));
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  test('任务按顺序编号，「不再显示」只隐藏这一个任务', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ id: 3, creator_name: '第一个博主' }), job({ id: 4, creator_name: '第二个博主' })] } },
+    }));
+    mount('/creators');
+    await until(() => text().includes('第二个博主'));
+
+    expect(Array.from(document.querySelectorAll('.job-no')).map((n) => n.textContent)).toEqual(['1', '2']);
+
+    const hides = Array.from(document.querySelectorAll('.job-hide')) as HTMLButtonElement[];
+    expect(hides.map((b) => b.textContent?.trim())).toEqual(['不再显示', '不再显示']);
+    await click(hides[1]!);
+
+    await until(() => !text().includes('第二个博主'));
+    // 只影响被点的那一个；剩下那个重新从 1 开始编号
+    expect(text()).toContain('第一个博主');
+    expect(document.querySelectorAll('.job')).toHaveLength(1);
+    expect(Array.from(document.querySelectorAll('.job-no')).map((n) => n.textContent)).toEqual(['1']);
+    // 记在本机，刷新后仍然不出现
+    expect(JSON.parse(window.localStorage.getItem('getmedia.creators.hiddenJobs')!)).toEqual([4]);
+    expect(text()).toContain('已隐藏 1 个任务');
+  });
+
+  test('隐藏是持久的，「恢复显示」能把任务放回来', async () => {
+    window.localStorage.setItem('getmedia.creators.hiddenJobs', JSON.stringify([4]));
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ id: 3, creator_name: '第一个博主' }), job({ id: 4, creator_name: '被隐藏的博主' })] } },
+    }));
+    mount('/creators');
+    await until(() => text().includes('第一个博主'));
+
+    expect(text()).not.toContain('被隐藏的博主');
+    await click(button('恢复显示'));
+    await until(() => text().includes('被隐藏的博主'));
+    expect(text()).not.toContain('已隐藏');
+    expect(window.localStorage.getItem('getmedia.creators.hiddenJobs')).toBe('[]');
   });
 });

@@ -16,6 +16,28 @@ import { Empty, ErrorBox, Field, fmtBytes, fmtDuration, fmtTime, Loading, relTim
 
 const STORAGE_OPTS: JobStorage[] = ['phone', 'metadata', 'archive', 'cache'];
 
+/** 「不再显示」只作用于这台设备的这个浏览器：任务本身还在服务端跑，只是不再占列表位置。
+ *  记在 localStorage 里，刷新后依然隐藏；清站点数据或用别的设备会重新出现，所以下面留了「恢复显示」。 */
+const HIDDEN_KEY = 'getmedia.creators.hiddenJobs';
+
+function readHidden(): number[] {
+  try {
+    const raw = window.localStorage.getItem(HIDDEN_KEY);
+    const list = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(list) ? list.filter((x): x is number => typeof x === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeHidden(ids: number[]) {
+  try {
+    window.localStorage.setItem(HIDDEN_KEY, JSON.stringify(ids));
+  } catch {
+    // 无痕模式或存储被禁用：只在本次会话里生效
+  }
+}
+
 /** 输入类型：显式告诉后端这是链接、抖音号还是 B 站 UID，不再让它猜。 */
 type CreatorKind = 'url' | 'douyin' | 'bilibili';
 
@@ -55,7 +77,21 @@ export function CreatorsPage() {
   const [jobsPhase, setJobsPhase] = useState<'loading' | 'ok' | 'error'>('loading');
   const [jobsErr, setJobsErr] = useState('');
   const [openId, setOpenId] = useState<number | null>(null);
+  const [hidden, setHidden] = useState<number[]>(() => readHidden());
   const timer = useRef<number | null>(null);
+
+  function hideJob(id: number) {
+    if (hidden.includes(id)) return;
+    const next = [...hidden, id];
+    setHidden(next);
+    writeHidden(next);
+    if (openId === id) setOpenId(null);
+  }
+
+  function showAllJobs() {
+    setHidden([]);
+    writeHidden([]);
+  }
 
   async function loadJobs(silent = false) {
     if (!silent) setJobsPhase('loading');
@@ -171,6 +207,10 @@ export function CreatorsPage() {
       setBusy('');
     }
   }
+
+  const shownJobs = jobs.filter((j) => !hidden.includes(j.id));
+  // 只数当前列表里真的被隐藏的：陈旧的 id 不该让「已隐藏 N 个」虚高
+  const hiddenCount = jobs.filter((j) => hidden.includes(j.id)).length;
 
   return (
     <>
@@ -299,6 +339,12 @@ export function CreatorsPage() {
       )}
 
       <h2>批量任务</h2>
+      {hiddenCount > 0 && (
+        <p class="small muted">
+          已隐藏 {hiddenCount} 个任务（只在这台设备的这个浏览器里）。
+          <button type="button" class="btn btn-ghost small" onClick={showAllJobs}>恢复显示</button>
+        </p>
+      )}
       {jobsPhase === 'loading' && <Loading what="批量任务" />}
       {jobsPhase === 'error' && <ErrorBox message={jobsErr} retry={() => void loadJobs()} />}
       {jobsPhase === 'ok' && jobs.length === 0 && (
@@ -307,14 +353,29 @@ export function CreatorsPage() {
           <p class="small muted">上面填一个博主，先预览再建任务。</p>
         </Empty>
       )}
-      {jobsPhase === 'ok' && jobs.length > 0 && (
+      {jobsPhase === 'ok' && jobs.length > 0 && shownJobs.length === 0 && (
+        <Empty>
+          <strong>任务都被隐藏了</strong>
+          <p class="small muted">点上面的「恢复显示」可以把它们放回来。</p>
+        </Empty>
+      )}
+      {jobsPhase === 'ok' && shownJobs.length > 0 && (
         <ul class="jobs">
-          {jobs.map((j) => (
+          {shownJobs.map((j, idx) => (
             <li class="job">
               <div class="job-head">
+                <span class="job-no" aria-hidden="true">{idx + 1}</span>
                 <span class={`tag ${TONE[j.status] ?? ''}`}>{JOB[j.status] ?? j.status}</span>
                 <span class="grow ellipsis" title={j.creator_name}>{j.creator_name || j.source_url}</span>
                 <span class="small muted nowrap">{relTime(j.created_at)}</span>
+                <button
+                  type="button"
+                  class="job-hide nowrap"
+                  title="只在这个浏览器里不再显示这个任务；任务本身照常跑，可随时恢复"
+                  onClick={() => hideJob(j.id)}
+                >
+                  不再显示
+                </button>
               </div>
               <div class="small muted">
                 #{j.id} · {platformName(j.platform)} · {SELECTION[j.mode] ?? j.mode}

@@ -264,6 +264,19 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .job.off { opacity: 0.72; }
 .job.on { border-color: var(--accent); }
 .job-head { display: flex; gap: 8px; align-items: center; }
+.job-no {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.4rem; height: 1.4rem; padding: 0 5px;
+  border-radius: 999px; border: 1px solid var(--line); background: var(--bg);
+  font-size: 0.78rem; font-variant-numeric: tabular-nums; color: var(--muted);
+}
+.job-hide {
+  flex: none; background: none; border: 0; padding: 2px 2px; margin-left: 2px;
+  font: inherit; font-size: 0.78rem; color: var(--muted); cursor: pointer;
+  border-bottom: 1px dashed transparent;
+}
+.job-hide:hover { color: var(--text); border-bottom-color: var(--line); }
+.job-hide:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .job .small + .small { margin-top: 2px; }
 .grow { flex: 1; min-width: 0; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
