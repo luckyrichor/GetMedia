@@ -421,6 +421,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 
 /* 下拉选择：候选展开在控件下方，当前值始终留在框里（原生 select 的弹出层会盖住控件） */
 .select { position: relative; }
+/* 展开的那个下拉要浮到兄弟控件之上：.filter 都带 position:relative，DOM 靠后的控件会盖住
+   前面控件展开的菜单（状态菜单底部的「已取消」就是这样被「平台」框挡住的） */
+.select:has(.select-menu) { z-index: 50; }
 .select-trigger {
   font: inherit; color: var(--text); background: var(--bg); text-align: left;
   border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%;
@@ -437,7 +440,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   min-width: 100%; width: max-content; max-width: 24rem;
   margin: 0; padding: 4px; list-style: none;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
-  box-shadow: 0 14px 30px rgba(12, 18, 30, 0.18); max-height: 16rem; overflow: auto;
+  box-shadow: 0 14px 30px rgba(12, 18, 30, 0.18); max-height: 20rem; overflow: auto;
 }
 .select-opt {
   display: flex; gap: 8px; align-items: baseline; justify-content: space-between;
