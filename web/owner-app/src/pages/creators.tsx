@@ -111,18 +111,26 @@ function showDatePicker(el: HTMLInputElement) {
   }
 }
 
-/** 任务抓的是谁：有昵称用昵称；只填了抖音号/B 站号的，就把号码写出来（用户填的就是它）。 */
-function who(j: CreatorJob): string {
-  const name = (j.creator_name || '').trim();
-  if (name) return name;
-  if (NUMERIC_ID.test(j.source_input || '')) return `${platformName(j.platform)}号 ${j.source_input}`;
-  return `${platformName(j.platform)} · 昵称未取到`;
+/** 任务抓的是谁：昵称取不到就说「昵称未知」，不猜也不空着。 */
+function nickName(j: CreatorJob): string {
+  return (j.creator_name || '').trim() || '昵称未知';
 }
 
-/** 用户当初填的是号码时，单独做个标签，一眼看出这批是「按号抓的」。 */
+/** 用户当初填的是号码时，单独做个标签，一眼看出这批是「按号抓的」。
+ *  填的是主页链接时没有号码可写（链接本身就是线索），返回空串。 */
 function inputBadge(j: CreatorJob): string {
   const raw = (j.source_input || '').trim();
-  return NUMERIC_ID.test(raw) ? `${platformName(j.platform)}号 ${raw}` : '';
+  if (!NUMERIC_ID.test(raw)) return '';
+  return `${platformName(j.platform)}号 ${raw}`;
+}
+
+/** 这一批选了哪些作品：方式 + 条数/日期，拼成一句人能读的话。 */
+function selectionText(j: CreatorJob): string {
+  let s = SELECTION[j.mode] ?? j.mode;
+  if (j.limit_n) s += `（${j.limit_n} 条）`;
+  if (j.since_ts) s += ` · ${fmtDay(j.since_ts)} 起`;
+  if (j.until_ts) s += ` 至 ${fmtDay(j.until_ts)}`;
+  return s;
 }
 
 function fmtDay(ts: number | null): string {
@@ -405,7 +413,7 @@ export function CreatorsPage() {
             />
           </div>
           <div class="field">
-            <span>输出格式（可多选）</span>
+            <span>输出格式</span>
             <MultiSelect
               ariaLabel="输出格式"
               values={formats}
@@ -498,7 +506,11 @@ export function CreatorsPage() {
               <div class="job-head">
                 <span class="job-no" aria-hidden="true">{idx + 1}</span>
                 <span class={`tag ${TONE[j.status] ?? ''}`}>{JOB[j.status] ?? j.status}</span>
-                <span class="grow ellipsis job-who" title={who(j)}>{who(j)}</span>
+                <span class="tag">{platformName(j.platform)}</span>
+                <span class="job-who ellipsis" title={nickName(j)}>{nickName(j)}</span>
+                {/* 按号抓的任务把号码也亮出来；按链接抓的没有号可写，就不占位置 */}
+                {inputBadge(j) && <span class="tag job-id">{inputBadge(j)}</span>}
+                <span class="grow" />
                 <span class="small muted nowrap" title="发起时间">
                   {relTime(j.created_at)} · {fmtDateTime(j.created_at)}
                 </span>
@@ -511,23 +523,25 @@ export function CreatorsPage() {
                   不再显示
                 </button>
               </div>
-              <div class="job-src small">
-                {/* 填了号码的任务，「抖音号 123」已经说明平台，不再重复一个「抖音」标签 */}
-                <span class="tag">{inputBadge(j) || platformName(j.platform)}</span>
+              <div class="job-src">
+                {/* 平台和号码已经在上面一行了，这里只放地址本身；长链接单行显示，可以左右拖 */}
                 <code class="job-url" title={j.source_url}>{j.source_url}</code>
                 <button type="button" class="btn btn-ghost small nowrap"
                         onClick={() => void copyText(j.source_url, j.id)}>
                   {copied === j.id ? '已复制' : '复制链接'}
                 </button>
               </div>
-              <div class="small muted">
-                #{j.id} · {platformName(j.platform)} · {SELECTION[j.mode] ?? j.mode}
-                {j.limit_n ? `（${j.limit_n} 条）` : ''}
-                {j.since_ts ? ` · ${fmtDay(j.since_ts)} 起` : ''}
-                {j.until_ts ? ` 至 ${fmtDay(j.until_ts)}` : ''}
-                {' · '}{STORAGE[j.storage] ?? j.storage}
-                {' · '}{j.media_type === 'audio' ? '音频' : '视频'}
-                {' · '}{(j.formats ?? []).map((f) => FORMAT[f] ?? f).join('、')}
+              <div class="job-meta small">
+                <span class="meta"><b>任务</b>#{j.id}</span>
+                <span class="meta"><b>选取</b>{selectionText(j)}</span>
+                <span class="meta" title={STORAGE_DESC[j.storage]}>
+                  <b>存放</b>{STORAGE[j.storage] ?? j.storage}
+                </span>
+                <span class="meta">
+                  <b>输出</b>{j.media_type === 'audio' ? '音频' : '视频'}
+                  {' · '}{(j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
+                    .map((f) => FORMAT[f] ?? f).join('、')}
+                </span>
               </div>
               <div class="small">
                 进度：{j.done + j.failed} / {j.total || '?'}
@@ -590,6 +604,23 @@ export function CreatorsPage() {
   );
 }
 
+/** 每页条数的可选值：默认 10 条，最多 20 条（再多就失去翻页的意义，也拖慢首屏）。 */
+const PAGE_SIZES = [5, 10, 20];
+const DEFAULT_PAGE_SIZE = 10;
+
+/** 页码太多时只画「首、当前±1、尾」，中间用省略号，免得按钮铺满一行。 */
+function pageList(cur: number, pages: number): (number | '…')[] {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const out: (number | '…')[] = [1];
+  const from = Math.max(2, cur - 1);
+  const to = Math.min(pages - 1, cur + 1);
+  if (from > 2) out.push('…');
+  for (let p = from; p <= to; p++) out.push(p);
+  if (to < pages - 1) out.push('…');
+  out.push(pages);
+  return out;
+}
+
 function JobItems({ jobId }: { jobId: number }) {
   const [items, setItems] = useState<CreatorItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -597,14 +628,26 @@ function JobItems({ jobId }: { jobId: number }) {
   const [err, setErr] = useState('');
   const [note, setNote] = useState('');
   const [busyId, setBusyId] = useState('');
+  /** 翻页：第几页（从 1 起）与每页条数。只看这一页，不再「加载更多」累加。 */
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState(DEFAULT_PAGE_SIZE);
   /** 批量下载的进度；null 表示没在跑。stop 是给循环看的「立即停」标志。 */
   const [run, setRun] = useState<{ done: number; total: number } | null>(null);
   const stopRef = useRef(false);
 
-  async function page(offset: number) {
+  const pages = Math.max(1, Math.ceil(total / size));
+
+  async function load(p: number, s: number) {
+    setPhase('loading');
     try {
-      const out = await ownerApi.creatorItems(jobId, offset);
-      setItems((prev) => (offset === 0 ? out.items : [...prev, ...out.items]));
+      const out = await ownerApi.creatorItems(jobId, (p - 1) * s, s);
+      // 条目可能被别处改动（重试后变少），页码越界就退回最后一页
+      const last = Math.max(1, Math.ceil(out.total / s));
+      if (p > last) {
+        setPage(last);
+        return;
+      }
+      setItems(out.items);
       setTotal(out.total);
       setPhase('ok');
     } catch (e) {
@@ -614,24 +657,23 @@ function JobItems({ jobId }: { jobId: number }) {
   }
 
   useEffect(() => {
-    void page(0);
-  }, [jobId]);
+    void load(page, size);
+  }, [jobId, page, size]);
 
-  if (phase === 'error') return <ErrorBox message={err} retry={() => void page(0)} />;
+  if (phase === 'error') return <ErrorBox message={err} retry={() => void load(page, size)} />;
   if (phase === 'loading') return <Loading what="任务条目" />;
 
   const sleep = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms));
 
-  /** 把任务的全部条目取回来（接口一页 100 条）。「下载全部」必须覆盖全部，
-   *  不能只用当前已经展开显示的那 100 条。 */
+  /** 把任务的全部条目取回来（内部按 100 条一页拉，跟界面上的每页条数无关）：
+   *  「下载全部」必须覆盖全部，不能只下当前这一页。 */
   async function fetchAll(): Promise<CreatorItem[]> {
     const acc: CreatorItem[] = [];
     let guard = 0;
     for (;;) {
-      const out = await ownerApi.creatorItems(jobId, acc.length);
+      const out = await ownerApi.creatorItems(jobId, acc.length, 100);
       acc.push(...out.items);
       setTotal(out.total);
-      setItems([...acc]);
       guard += 1;
       if (out.items.length === 0 || acc.length >= out.total || guard > 100) break;
     }
@@ -725,24 +767,40 @@ function JobItems({ jobId }: { jobId: number }) {
   return (
     <div class="items">
       {items.length > 0 && (
-        <div class="row-actions" style="margin-bottom:6px">
+        <div class="items-tools">
           {run ? (
-            <>
+            <div class="row-actions">
               <button type="button" class="btn btn-ghost small" onClick={() => { stopRef.current = true; }}>
                 停止下载
               </button>
               <span class="small muted">正在下载 {run.done} / {run.total}（点「停止下载」立即收手，已开始的这条会下完）</span>
-            </>
+            </div>
           ) : (
-            <button type="button" class="btn btn-ghost small" disabled={busyId !== ''} onClick={() => void downloadAll()}>
-              下载全部（{total || items.length} 条）
-            </button>
+            <div class="row-actions">
+              <button type="button" class="btn btn-ghost small" disabled={busyId !== ''} onClick={() => void downloadAll()}>
+                下载全部（{total || items.length} 条）
+              </button>
+            </div>
           )}
+          <div class="page-size">
+            <span class="small muted">每页</span>
+            <Select
+              ariaLabel="每页条数"
+              value={String(size)}
+              options={PAGE_SIZES.map((n) => ({ value: String(n), label: `${n} 条` }))}
+              onChange={(v) => {
+                // 换每页条数后回到第一页，不然页码会指到别的内容上
+                setSize(Number(v));
+                setPage(1);
+              }}
+            />
+            <span class="small muted">共 {total} 条</span>
+          </div>
         </div>
       )}
       {note && <p class="small muted">{note}</p>}
       <div class="item-head small muted">
-        <span>#</span>
+        <span class="item-no">#</span>
         <span>标题</span>
         <span>时长</span>
         <span>发布</span>
@@ -752,13 +810,14 @@ function JobItems({ jobId }: { jobId: number }) {
       <ul class="plain tight">
         {items.map((i, idx) => (
           <li class="item-row">
-            <span class="item-no" aria-hidden="true">{idx + 1}</span>
-            {/* 手机下载的任务里服务器只记账、不下载，pending 会一直是 pending——所以「待处理」不显示，
-                只有真落了盘或失败才有标记。 */}
+            {/* 序号接着上一页往下数，翻页后也知道这是第几条 */}
+            <span class="item-no" aria-hidden="true">{(page - 1) * size + idx + 1}</span>
             <span class="item-title">
+              <span class="ellipsis" title={i.title}>{i.title}</span>
+              {/* 手机下载的任务里服务器只记账、不下载，pending 会一直是 pending——所以「待处理」不显示，
+                  只有真落了盘或失败才有标记。标记放在标题右边，标题的起点才不会因它左右跳。 */}
               {i.stored && <span class="tag ok" title="服务器上已经有一份，点下载直接从服务器取">已在服务器</span>}
               {!i.stored && i.download_state === 'failed' && <span class="tag bad">失败</span>}
-              <span class="ellipsis" title={i.title}>{i.title}</span>
             </span>
             <span class="small muted nowrap">{fmtDuration(i.duration_sec)}</span>
             <span class="small muted nowrap">{i.published_at ? fmtTime(i.published_at) : '—'}</span>
@@ -790,10 +849,40 @@ function JobItems({ jobId }: { jobId: number }) {
       {items.some((i) => i.error) && (
         <p class="small bad-text">失败原因示例：{items.find((i) => i.error)?.error}</p>
       )}
-      {items.length < total && (
-        <button type="button" class="btn btn-ghost small" onClick={() => void page(items.length)}>
-          加载更多（还有 {total - items.length} 条）
-        </button>
+      {pages > 1 && (
+        <nav class="pager" aria-label="条目分页">
+          <button
+            type="button"
+            class="btn btn-ghost small"
+            disabled={page <= 1}
+            onClick={() => setPage(page - 1)}
+          >
+            上一页
+          </button>
+          {pageList(page, pages).map((p) => (
+            p === '…'
+              ? <span class="pager-gap" aria-hidden="true">…</span>
+              : (
+                <button
+                  type="button"
+                  class={p === page ? 'btn small pager-on' : 'btn btn-ghost small'}
+                  aria-current={p === page ? 'page' : undefined}
+                  onClick={() => setPage(p)}
+                >
+                  {p}
+                </button>
+              )
+          ))}
+          <button
+            type="button"
+            class="btn btn-ghost small"
+            disabled={page >= pages}
+            onClick={() => setPage(page + 1)}
+          >
+            下一页
+          </button>
+          <span class="small muted">第 {page} / {pages} 页</span>
+        </nav>
       )}
     </div>
   );

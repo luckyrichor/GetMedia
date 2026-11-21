@@ -214,7 +214,7 @@ export function MultiSelect({ values, options, onChange, ariaLabel, disabled, pl
         <span class="select-caret" aria-hidden="true">▾</span>
       </button>
       {open && (
-        <ul class="select-menu" role="listbox" aria-label={ariaLabel} aria-multiselectable="true">
+        <ul class="select-menu multi" role="listbox" aria-label={ariaLabel} aria-multiselectable="true">
           {options.map((o) => {
             const on = values.includes(o.value);
             return (
@@ -226,6 +226,8 @@ export function MultiSelect({ values, options, onChange, ariaLabel, disabled, pl
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => toggle(o.value)}
               >
+                {/* 方框只是「看得见选了几项」的标记，点这一行任何地方都算点它 */}
+                <span class={on ? 'select-box on' : 'select-box'} aria-hidden="true" />
                 <span class="select-label">{o.label}</span>
                 {o.hint ? <span class="select-hint">{o.hint}</span> : null}
               </li>

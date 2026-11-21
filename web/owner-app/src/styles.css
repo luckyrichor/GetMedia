@@ -272,8 +272,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .result-body .avatar { width: 56px; height: 56px; border-radius: 50%; object-fit: cover; flex: none; }
 .result-body ul { margin: 8px 0 0; }
 
-.jobs { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 8px; }
-.job { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 13px; }
+.jobs { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+.job { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 13px; min-width: 0; }
 .job.off { opacity: 0.72; }
 .job.on { border-color: var(--accent); }
 .job-head { display: flex; gap: 8px; align-items: center; }
@@ -297,17 +297,19 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .nowrap { white-space: nowrap; }
 
 .items { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 10px; }
-/* 条目按表格排：序号 / 标题 / 时长 / 发布 / 提取 / 操作，表头用同一套列宽 */
+/* 条目按表格排：序号 / 标题 / 时长 / 发布 / 提取 / 操作。
+   表头和数据行用同一份列宽（最后一列也给固定宽，否则两边 auto 宽度不同会错位） */
 .item-head, .item-row {
   display: grid; gap: 8px; align-items: center;
-  grid-template-columns: 2.4rem minmax(0, 1fr) 3.6rem 8.2rem 8.2rem auto;
+  grid-template-columns: 1.9rem minmax(0, 1fr) 3.6rem 8.4rem 8.4rem 11rem;
 }
 .item-head { padding: 2px 0 4px; border-bottom: 1px solid var(--line); }
 .item-row { padding: 5px 0; border-bottom: 1px dashed var(--line); }
 .item-row:last-child { border-bottom: 0; }
 .item-title { display: flex; gap: 6px; align-items: center; min-width: 0; }
-.item-title .ellipsis { min-width: 0; }
-.item-act { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+.item-title .ellipsis { flex: 1 1 auto; min-width: 0; }
+.item-title .tag { flex: none; }
+.item-act { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
 /* 服务器上每个格式一个小方块，点它下这一版 */
 .fmt-chip {
   font: inherit; font-size: 0.72rem; line-height: 1.4; cursor: pointer;
@@ -316,12 +318,33 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .fmt-chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .fmt-chip:disabled { opacity: 0.6; cursor: not-allowed; }
-/* 作品序号：右对齐等宽，几百条时也能一眼对齐 */
+/* 作品序号：跟表头的 # 一样左对齐，紧贴左边，不往中间飘 */
 .item-no {
-  flex: none; min-width: 2.2rem; text-align: right;
+  min-width: 0; text-align: left;
   font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums;
 }
 .plain.tight li { padding: 4px 0; }
+
+/* 条目工具条：左边下载全部，右边每页条数与总数 */
+.items-tools { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 6px; }
+.items-tools .row-actions { margin: 0; }
+.page-size { display: flex; gap: 6px; align-items: center; }
+.page-size .select { width: 6.5rem; }
+.page-size .select-trigger { min-height: 30px; padding: 3px 8px; font-size: 0.82rem; }
+
+/* 翻页：页码一排，当前页实心 */
+.pager { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.pager .btn, .pager .pager-gap { padding: 3px 9px; font-size: 0.82rem; }
+.pager .btn:disabled { opacity: 0.45; }
+.pager .pager-on { cursor: default; }
+.pager .pager-gap { color: var(--muted); }
+
+/* 窄屏放不下六列：收起「发布 / 提取」，只留序号、标题、时长和下载 */
+@media (max-width: 760px) {
+  .item-head, .item-row { grid-template-columns: 1.6rem minmax(0, 1fr) 3.2rem 7rem; }
+  .item-head > :nth-child(4), .item-head > :nth-child(5),
+  .item-row > :nth-child(4), .item-row > :nth-child(5) { display: none; }
+}
 
 .split { display: grid; grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr); gap: 16px; margin-top: 10px; }
 .col { min-width: 0; }
@@ -390,6 +413,18 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .select-hint { color: var(--muted); font-size: 0.78rem; font-weight: 400; margin-left: auto; }
 .select-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 多选：每行前面一个方框，勾了几个一眼可见；点整行就切换，不必非点方框 */
+.select-menu.multi .select-opt { align-items: center; }
+.select-menu.multi .select-opt.on::before { content: none; }
+.select-box {
+  flex: none; width: 0.86rem; height: 0.86rem; border-radius: 4px;
+  border: 1px solid var(--line); background: var(--bg);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.select-box.on { background: var(--accent); border-color: var(--accent); }
+.select-box.on::after { content: "✓"; color: #fff; font-size: 0.62rem; line-height: 1; font-weight: 700; }
+.select-menu.multi .select-label { flex: 1 1 auto; }
+
 
 /* 下拉项悬停提示：小框贴在候选右侧，不参与排版（菜单本身不裁切才能画出来） */
 .select-menu.tips { overflow: visible; }
@@ -403,15 +438,24 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   white-space: normal;
 }
 
-/* 任务卡：抓的是谁、抓的哪个地址（长链接换行显示、可复制） */
-.job-who { font-weight: 600; }
-.job-src { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 2px 0 4px; }
+/* 任务卡：抓的是谁、抓的哪个地址（长链接单行，可以左右拖） */
+.job-who { min-width: 0; max-width: 22rem; font-weight: 600; }
+.job-id { font-variant-numeric: tabular-nums; }
+.job-src { display: flex; gap: 8px; align-items: center; margin: 2px 0 6px; }
 .job-url {
-  flex: 1 1 18rem; min-width: 0;
+  flex: 1 1 auto; min-width: 0; display: block;
   font-size: 0.78rem; color: var(--muted);
-  word-break: break-all; white-space: normal;
-  user-select: text;
+  /* 地址不折行：内容长了就在这一条里横向滑，其它行不被撑高 */
+  white-space: nowrap; word-break: normal;
+  overflow-x: auto; overflow-y: hidden; padding: 2px 0;
+  user-select: text; scrollbar-width: thin;
 }
+.job-url::-webkit-scrollbar { height: 6px; }
+.job-url::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+/* 「任务 / 选取 / 存放 / 输出」逐项带标签，不再是一串靠 · 连起来的裸值 */
+.job-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 4px; color: var(--text); }
+.job-meta .meta { display: inline-flex; gap: 5px; align-items: baseline; min-width: 0; }
+.job-meta b { color: var(--muted); font-weight: 400; }
 
 /* 置顶选项单独一行：跟说明文字排在一块儿，不再挤在「格式」右边 */
 .pin-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 0 0 4px; }

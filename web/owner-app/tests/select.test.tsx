@@ -3,7 +3,7 @@ import { render } from 'preact';
 import { useState } from 'preact/hooks';
 import { act } from 'preact/test-utils';
 import { afterEach, describe, expect, test } from 'vitest';
-import { Select } from '../src/select';
+import { MultiSelect, Select } from '../src/select';
 
 const OPTIONS = [
   { value: 'a', label: '甲' },
@@ -94,5 +94,45 @@ describe('下拉框', () => {
       trigger().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     });
     expect(trigger().textContent).toContain('丙');
+  });
+});
+
+describe('多选下拉', () => {
+  function mountMulti() {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    function Demo() {
+      const [v, setV] = useState(['a']);
+      return <MultiSelect ariaLabel="多选演示" values={v} options={OPTIONS} onChange={setV} />;
+    }
+    render(<Demo />, host);
+    return host;
+  }
+  const boxes = () => Array.from(document.querySelectorAll('.select-box'));
+  const triggerM = () => document.querySelector('button[aria-label="多选演示"]') as HTMLButtonElement;
+  const optsM = () => Array.from(document.querySelectorAll('[role="option"]'));
+  const onBoxes = () => boxes().map((b) => b.classList.contains('on'));
+
+  test('每行文字前有方框，勾选状态直接看出来；点整行就切换、菜单不收起', async () => {
+    mountMulti();
+    await click(triggerM());
+    expect(boxes()).toHaveLength(3);
+    expect(onBoxes()).toEqual([true, false, false]);
+    // 方框只是标记，不是唯一的点击目标
+    await click(optsM()[1]!.querySelector('.select-label')!);
+    expect(onBoxes()).toEqual([true, true, false]);
+    expect(menu()).not.toBeNull();
+    // 再点一下同一行就等于取消勾选
+    await click(optsM()[1]!);
+    expect(onBoxes()).toEqual([true, false, false]);
+    expect(triggerM().textContent).toContain('甲');
+  });
+
+  test('至少留一个：最后一项点不掉', async () => {
+    mountMulti();
+    await click(triggerM());
+    await click(optsM()[0]!);
+    expect(onBoxes()).toEqual([true, false, false]);
+    expect(triggerM().textContent).toContain('甲');
   });
 });

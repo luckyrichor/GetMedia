@@ -507,10 +507,11 @@ export const ownerApi = {
   creatorJobs: async (): Promise<CreatorJob[]> =>
     (await api.request<{ jobs: CreatorJob[] }>('GET', '/v2/creators/jobs?limit=50')).jobs,
   creatorJob: (id: number) => api.request<CreatorJob>('GET', `/v2/creators/jobs/${id}`),
-  creatorItems: (id: number, offset = 0, state?: ItemState) => {
+  /** 条目分页：`limit` 是每页条数（服务端允许 1–500），`offset` 从 0 起。 */
+  creatorItems: (id: number, offset = 0, limit = 10, state?: ItemState) => {
     const st = state ? `&state=${state}` : '';
     return api.request<{ items: CreatorItem[]; total: number; limit: number; offset: number }>(
-      'GET', `/v2/creators/jobs/${id}/items?limit=100&offset=${offset}${st}`);
+      'GET', `/v2/creators/jobs/${id}/items?limit=${limit}&offset=${offset}${st}`);
   },
   pauseJob: (id: number) => api.request<CreatorJob>('POST', `/v2/creators/jobs/${id}/pause`),
   resumeJob: (id: number) => api.request<CreatorJob>('POST', `/v2/creators/jobs/${id}/resume`),
