@@ -148,6 +148,19 @@ describe('批量提取', () => {
     expect(() => button('重试失败条目')).toThrow();
   });
 
+  test('已取消任务按钮顺序：显示条目、刷新地址，再右侧多一个重试失败条目', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ status: 'cancelled', platform: 'douyin', source_url: 'https://www.douyin.com/user/1' })] } },
+    }));
+    mount('/creators');
+    await until(() => text().includes('已抓 20 / 20'));
+
+    const labels = Array.from(document.querySelectorAll('.job .row-actions button'))
+      .map((b) => b.textContent?.trim());
+    // 显示条目在最前，刷新地址随后，重试失败条目收尾（右侧额外多出的那个）
+    expect(labels).toEqual(['显示条目', '刷新地址', '重试失败条目']);
+  });
+
   test('展开条目：取分页条目并显示每个条目的状态', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job()] } },

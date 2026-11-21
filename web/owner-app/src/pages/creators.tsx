@@ -809,11 +809,6 @@ export function CreatorsPage() {
                     取消
                   </button>
                 )}
-                {(j.status === 'failed' || j.status === 'paused' || j.status === 'cancelled') && (
-                  <button type="button" class="btn btn-ghost small" disabled={busy === 'act'} onClick={() => void act(j.id, 'retryJob')}>
-                    重试失败条目
-                  </button>
-                )}
                 {/* 只有抖音需要「换地址」：直链是扫描时存下的签名地址，放久了会被 CDN 拒。
                     B 站每次下载都会现解析，这个按钮对它没有意义，所以不显示。
                     已取消（cancelled）的任务如果列表已扫完，地址同样会过期，也应能刷新地址；
@@ -827,6 +822,11 @@ export function CreatorsPage() {
                     onClick={() => void act(j.id, 'retryJob')}
                   >
                     刷新地址
+                  </button>
+                )}
+                {(j.status === 'failed' || j.status === 'paused' || j.status === 'cancelled') && (
+                  <button type="button" class="btn btn-ghost small" disabled={busy === 'act'} onClick={() => void act(j.id, 'retryJob')}>
+                    重试失败条目
                   </button>
                 )}
               </div>
