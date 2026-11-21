@@ -151,7 +151,7 @@ describe('批量提取', () => {
   test('展开条目：取分页条目并显示每个条目的状态', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job()] } },
-      'GET /v2/creators/jobs/3/items?limit=10&offset=0': {
+      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
         json: {
           items: [
             { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
@@ -172,7 +172,7 @@ describe('批量提取', () => {
 
     // 表头：序号 / 标题 / 时长 / 发布 / 提取
     const head = Array.from(document.querySelectorAll('.item-head span')).map((n) => n.textContent);
-    expect(head.slice(0, 5)).toEqual(['#', '标题', '时长', '发布', '提取']);
+    expect(head.slice(0, 5)).toEqual(['序号', '标题', '时长', '发布', '提取']);
     // 失败的条目有标记，不再有「条目总数 / 已入库 / 失败」三栏统计
     expect(document.querySelectorAll('.kv-grid')).toHaveLength(0);
     expect(Array.from(document.querySelectorAll('.item-row .tag.bad')).map((n) => n.textContent))
@@ -188,7 +188,7 @@ describe('批量提取', () => {
 
   test('手机下载的任务条目一直 pending，不显示「待处理」三个字', async () => {    server(ownerRoutes({
       [JOBS]: { json: { jobs: [job({ storage: 'phone' })] } },
-      'GET /v2/creators/jobs/3/items?limit=10&offset=0': {
+      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
         json: {
           items: [
             { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
@@ -365,7 +365,7 @@ describe('批量提取', () => {
           })],
         },
       },
-      'GET /v2/creators/jobs/9/items?limit=10&offset=0': {
+      'GET /v2/creators/jobs/9/items?limit=5&offset=0': {
         json: {
           items: [
             row({ id: 11, video_id: 'BV9', title: '存好的作品', stored: true, bytes: 1024 * 1024,
@@ -394,7 +394,7 @@ describe('批量提取', () => {
     const saved = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job()] } },
-      'GET /v2/creators/jobs/3/items?limit=10&offset=0': {
+      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
         json: { items: [row()], total: 1, limit: 100, offset: 0 },
       },
       'GET /v2/creators/jobs/3/items/BV1/file': { json: {} },
@@ -413,7 +413,7 @@ describe('批量提取', () => {
     const saved = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job()] } },
-      'GET /v2/creators/jobs/3/items?limit=10&offset=0': {
+      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
         json: { items: [row()], total: 1, limit: 100, offset: 0 },
       },
       'GET /v2/creators/jobs/3/items/BV1/file': {
@@ -437,7 +437,7 @@ describe('批量提取', () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job()] } },
-      'GET /v2/creators/jobs/3/items?limit=10&offset=0': {
+      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
         json: { items: [row(), row({ id: 2, video_id: 'BV2', title: '第二条作品' })], total: 3, limit: 10, offset: 0 },
       },
       'GET /v2/creators/jobs/3/items?limit=100&offset=0': {
@@ -524,7 +524,10 @@ describe('批量提取：多格式与任务卡信息', () => {
 
     // 裸值改成带标签的几项，免得看不出「只记清单」「原样保存」说的是什么
     const metas = Array.from(document.querySelectorAll('.job-meta .meta')).map((n) => n.textContent);
-    expect(metas).toEqual(['任务#3', '选取最近 N 条（20 条）', '存放只记清单', '输出视频 · 原样保存']);
+    expect(metas).toEqual(['任务#3', '选取最近 N 条（20 条）', '存放只记清单', '输出视频原样保存']);
+    // 媒体类型和格式拆成两个独立的块，各能单独定位
+    expect(document.querySelector('.media-kind')!.textContent).toBe('视频');
+    expect(document.querySelector('.format-list')!.textContent).toBe('原样保存');
 
     expect(() => button('复制链接')).not.toThrow();
     expect(() => button('显示条目')).not.toThrow();
@@ -559,7 +562,7 @@ describe('批量提取：多格式与任务卡信息', () => {
     const saved = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job({ storage: 'archive' })] } },
-      'GET /v2/creators/jobs/3/items?limit=10&offset=0': {
+      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
         json: {
           items: [row({
             stored: true, bytes: 100, stored_at: 1_800_000_500, added_at: 1_799_999_000,
@@ -576,7 +579,7 @@ describe('批量提取：多格式与任务卡信息', () => {
     await until(() => text().includes('第一条作品'));
 
     const heads = Array.from(document.querySelectorAll('.item-head span')).map((n) => n.textContent);
-    expect(heads.slice(0, 5)).toEqual(['#', '标题', '时长', '发布', '提取']);
+    expect(heads.slice(0, 5)).toEqual(['序号', '标题', '时长', '发布', '提取']);
     expect(text()).toContain('2027-01-15 03:08');      // stored_at，不是 added_at
 
     const chips = Array.from(document.querySelectorAll('.fmt-chip')).map((b) => b.textContent);
@@ -595,33 +598,33 @@ describe('条目翻页', () => {
   function routes() {
     return ownerRoutes({
       [JOBS]: { json: { jobs: [job({ total: 25 })] } },
-      'GET /v2/creators/jobs/3/items?limit=10&offset=0': { json: { items: rows(1, 10), total: 25, limit: 10, offset: 0 } },
-      'GET /v2/creators/jobs/3/items?limit=10&offset=10': { json: { items: rows(11, 10), total: 25, limit: 10, offset: 10 } },
-      'GET /v2/creators/jobs/3/items?limit=20&offset=0': { json: { items: rows(1, 20), total: 25, limit: 20, offset: 0 } },
       'GET /v2/creators/jobs/3/items?limit=5&offset=0': { json: { items: rows(1, 5), total: 25, limit: 5, offset: 0 } },
+      'GET /v2/creators/jobs/3/items?limit=5&offset=5': { json: { items: rows(6, 5), total: 25, limit: 5, offset: 5 } },
+      'GET /v2/creators/jobs/3/items?limit=20&offset=0': { json: { items: rows(1, 20), total: 25, limit: 20, offset: 0 } },
+      'GET /v2/creators/jobs/3/items?limit=10&offset=0': { json: { items: rows(1, 10), total: 25, limit: 10, offset: 0 } },
     });
   }
 
   const shown = () => Array.from(document.querySelectorAll('.item-row')).length;
   const firstNo = () => document.querySelector('.item-row .item-no')!.textContent;
 
-  test('默认每页 10 条；翻页只换这一页的内容，序号接着往下数', async () => {
+  test('默认每页 5 条；翻页只换这一页的内容，序号接着往下数', async () => {
     server(routes());
     mount('/creators');
     await until(() => text().includes('显示条目'));
     await click(button('显示条目'));
-    await until(() => shown() === 10);
+    await until(() => shown() === 5);
 
-    // 默认 10 条一页，不再是「一次 100 条 + 加载更多」
-    expect(calls.some((c) => c.search.includes('limit=10&offset=0'))).toBe(true);
-    expect(() => button('加载更多（还有 15 条）')).toThrow();
-    expect(text()).toContain('第 1 / 3 页');
+    // 默认 5 条一页，不再是「一次 100 条 + 加载更多」
+    expect(calls.some((c) => c.search.includes('limit=5&offset=0'))).toBe(true);
+    expect(() => button('加载更多（还有 20 条）')).toThrow();
+    expect(text()).toContain('第 1 / 5 页');
     expect(firstNo()).toBe('1');
 
     await click(button('2'));
-    await until(() => shown() === 10 && text().includes('作品 11'));
-    expect(firstNo()).toBe('11');           // 第 2 页从第 11 条接着数
-    expect(text()).toContain('第 2 / 3 页');
+    await until(() => shown() === 5 && text().includes('作品 6'));
+    expect(firstNo()).toBe('6');            // 第 2 页从第 6 条接着数
+    expect(text()).toContain('第 2 / 5 页');
 
     await click(button('上一页'));
     await until(() => text().includes('作品 1') && firstNo() === '1');
@@ -632,19 +635,19 @@ describe('条目翻页', () => {
     mount('/creators');
     await until(() => text().includes('显示条目'));
     await click(button('显示条目'));
-    await until(() => shown() === 10);
+    await until(() => shown() === 5);
 
     await click(button('2'));
-    await until(() => firstNo() === '11');
+    await until(() => firstNo() === '6');
 
     await choose('每页条数', '20 条');
     await until(() => shown() === 20);
     expect(firstNo()).toBe('1');            // 换了每页条数就回第一页
     expect(text()).toContain('第 1 / 2 页');
 
-    await choose('每页条数', '5 条');
-    await until(() => shown() === 5);
-    expect(text()).toContain('第 1 / 5 页');
+    await choose('每页条数', '10 条');
+    await until(() => shown() === 10);
+    expect(text()).toContain('第 1 / 3 页');
     // 候选只有三档：5 / 10 / 20
     await click(document.querySelector('button[aria-label="每页条数"]')!);
     expect(Array.from(document.querySelectorAll('[role="option"]')).map((o) => o.textContent))

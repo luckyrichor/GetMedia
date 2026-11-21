@@ -297,11 +297,14 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .nowrap { white-space: nowrap; }
 
 .items { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 10px; }
+/* 翻页时旧表格原位保留、只加淡淡的「加载中」，高度不跳，避免抖动 */
+.items-loading { margin: 0 0 6px; }
+.items.switching .item-head, .items.switching .item-row { opacity: 0.5; transition: opacity 0.12s ease; }
 /* 条目按表格排：序号 / 标题 / 时长 / 发布 / 提取 / 操作。
    表头和数据行用同一份列宽（最后一列也给固定宽，否则两边 auto 宽度不同会错位） */
 .item-head, .item-row {
   display: grid; gap: 8px; align-items: center;
-  grid-template-columns: 1.9rem minmax(0, 1fr) 3.6rem 8.4rem 8.4rem 11rem;
+  grid-template-columns: 2.8rem minmax(0, 1fr) 3.6rem 8.4rem 8.4rem 11rem;
 }
 .item-head { padding: 2px 0 4px; border-bottom: 1px solid var(--line); }
 .item-row { padding: 5px 0; border-bottom: 1px dashed var(--line); }
@@ -452,10 +455,22 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .job-url::-webkit-scrollbar { height: 6px; }
 .job-url::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
-/* 「任务 / 选取 / 存放 / 输出」逐项带标签，不再是一串靠 · 连起来的裸值 */
-.job-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 4px; color: var(--text); }
-.job-meta .meta { display: inline-flex; gap: 5px; align-items: baseline; min-width: 0; }
+/* 「任务 / 选取 / 存放 / 输出」逐项带标签，用竖线分组，不再是一串靠 · 连起来的裸值 */
+.job-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 4px; color: var(--text); }
+.job-meta .meta { display: inline-flex; gap: 6px; align-items: center; min-width: 0; }
 .job-meta b { color: var(--muted); font-weight: 400; }
+.job-meta .meta-sep { width: 1px; align-self: stretch; background: var(--line); }
+/* 媒体类型小徽章：视频蓝、音频橙，一眼分清存的是画面还是声音 */
+.media-kind {
+  font-size: 0.72rem; line-height: 1; padding: 2px 7px; border-radius: 6px;
+  border: 1px solid currentColor;
+}
+.media-kind.video { color: var(--accent); }
+.media-kind.audio { color: #8a5a00; }
+@media (prefers-color-scheme: dark) {
+  .media-kind.audio { color: #e0b567; }
+}
+.format-list { color: var(--text); font-variant-numeric: tabular-nums; }
 
 /* 置顶选项单独一行：跟说明文字排在一块儿，不再挤在「格式」右边 */
 .pin-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 0 0 4px; }

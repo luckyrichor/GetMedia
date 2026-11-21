@@ -538,14 +538,20 @@ export function CreatorsPage() {
               </div>
               <div class="job-meta small">
                 <span class="meta"><b>任务</b>#{j.id}</span>
+                <span class="meta-sep" aria-hidden="true" />
                 <span class="meta"><b>选取</b>{selectionText(j)}</span>
+                <span class="meta-sep" aria-hidden="true" />
                 <span class="meta" title={STORAGE_DESC[j.storage]}>
                   <b>存放</b>{STORAGE[j.storage] ?? j.storage}
                 </span>
+                <span class="meta-sep" aria-hidden="true" />
                 <span class="meta">
-                  <b>输出</b>{j.media_type === 'audio' ? '音频' : '视频'}
-                  {' · '}{(j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
-                    .map((f) => FORMAT[f] ?? f).join('、')}
+                  <b>输出</b>
+                  <span class={`media-kind ${j.media_type}`}>{j.media_type === 'audio' ? '音频' : '视频'}</span>
+                  <span class="format-list">
+                    {(j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
+                      .map((f) => FORMAT[f] ?? f).join(' · ')}
+                  </span>
                 </span>
               </div>
               <div class="small">
@@ -609,9 +615,9 @@ export function CreatorsPage() {
   );
 }
 
-/** 每页条数的可选值：默认 10 条，最多 20 条（再多就失去翻页的意义，也拖慢首屏）。 */
+/** 每页条数的可选值：默认 5 条，最多 20 条（再多就失去翻页的意义，也拖慢首屏）。 */
 const PAGE_SIZES = [5, 10, 20];
-const DEFAULT_PAGE_SIZE = 10;
+const DEFAULT_PAGE_SIZE = 5;
 
 /** 页码太多时只画「首、当前±1、尾」，中间用省略号，免得按钮铺满一行。 */
 function pageList(cur: number, pages: number): (number | '…')[] {
@@ -636,14 +642,18 @@ function JobItems({ jobId }: { jobId: number }) {
   /** 翻页：第几页（从 1 起）与每页条数。只看这一页，不再「加载更多」累加。 */
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(DEFAULT_PAGE_SIZE);
+  /** 正在翻页：只显示淡淡的「加载中」，不把旧表格抽掉，避免高度跳变带来的抖动。 */
+  const [switching, setSwitching] = useState(false);
   /** 批量下载的进度；null 表示没在跑。stop 是给循环看的「立即停」标志。 */
   const [run, setRun] = useState<{ done: number; total: number } | null>(null);
   const stopRef = useRef(false);
 
   const pages = Math.max(1, Math.ceil(total / size));
 
-  async function load(p: number, s: number) {
-    setPhase('loading');
+  async function load(p: number, s: number, opts?: { silent?: boolean }) {
+    // 首次打开仍走整块 loading；翻页/换每页条数时 silent，保持旧表格原位，等新数据到了再换
+    if (!opts?.silent) setPhase('loading');
+    else setSwitching(true);
     try {
       const out = await ownerApi.creatorItems(jobId, (p - 1) * s, s);
       // 条目可能被别处改动（重试后变少），页码越界就退回最后一页
@@ -658,11 +668,13 @@ function JobItems({ jobId }: { jobId: number }) {
     } catch (e) {
       setErr(messageFor(e));
       setPhase('error');
+    } finally {
+      setSwitching(false);
     }
   }
 
   useEffect(() => {
-    void load(page, size);
+    void load(page, size, { silent: phase === 'ok' });
   }, [jobId, page, size]);
 
   if (phase === 'error') return <ErrorBox message={err} retry={() => void load(page, size)} />;
@@ -770,7 +782,8 @@ function JobItems({ jobId }: { jobId: number }) {
   }
 
   return (
-    <div class="items">
+    <div class={switching ? 'items switching' : 'items'}>
+      {switching && <p class="small muted items-loading">加载中…</p>}
       {items.length > 0 && (
         <div class="items-tools">
           {run ? (
@@ -805,7 +818,7 @@ function JobItems({ jobId }: { jobId: number }) {
       )}
       {note && <p class="small muted">{note}</p>}
       <div class="item-head small muted">
-        <span class="item-no">#</span>
+        <span class="item-no">序号</span>
         <span>标题</span>
         <span>时长</span>
         <span>发布</span>
