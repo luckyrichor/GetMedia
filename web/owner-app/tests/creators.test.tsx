@@ -99,8 +99,8 @@ describe('批量提取', () => {
 
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
     expect(body).toMatchObject({ url: '12345', mode: 'latest_n', n: 20, storage: 'archive', media_type: 'video' });
-    expect(text()).toContain('进度：7 / 20');
-    expect(text()).toContain('失败 1');
+    expect(text()).toContain('已抓 7 / 20 条');
+    expect(text()).toContain('1 条失败');
   });
 
   test('暂停与重试只对相应状态出现，并且真的发请求', async () => {
@@ -110,7 +110,7 @@ describe('批量提取', () => {
       'POST /v2/creators/jobs/3/retry': { json: { job: job() } },
     }));
     mount('/creators');
-    await until(() => text().includes('进度：7 / 20'));
+    await until(() => text().includes('已抓 7 / 20 条'));
 
     // 暂停态：有"继续"和"重试"，没有"暂停"
     expect(() => button('暂停')).toThrow();
@@ -129,7 +129,7 @@ describe('批量提取', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('进度：7 / 20'));
+    await until(() => text().includes('已抓 7 / 20 条'));
 
     // 跑完的任务没有「重试失败条目」，给的是「刷新地址」
     expect(() => button('重试失败条目')).toThrow();
@@ -142,7 +142,7 @@ describe('批量提取', () => {
       [JOBS]: { json: { jobs: [job({ status: 'done' })] } },
     }));
     mount('/creators');
-    await until(() => text().includes('进度：7 / 20'));
+    await until(() => text().includes('已抓 7 / 20 条'));
 
     expect(() => button('刷新地址')).toThrow();
     expect(() => button('重试失败条目')).toThrow();
@@ -378,7 +378,7 @@ describe('批量提取', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('已在服务器：12 条'));
+    await until(() => text().includes('已存服务器 12 条 / 20'));
     expect(text()).toContain('服务器暂存');
     expect(text()).toContain('240 MB');
 
@@ -524,7 +524,7 @@ describe('批量提取：多格式与任务卡信息', () => {
 
     // 裸值改成带标签的几项，格式用后缀名展示；「任务 #N」已删（数据库 id 与列表序号不一致，反而误导）
     const metas = Array.from(document.querySelectorAll('.job-meta .meta')).map((n) => n.textContent);
-    expect(metas).toEqual(['选取最近 N 条（20 条）', '存放只记清单', '输出视频原始格式']);
+    expect(metas).toEqual(['选取最近 20 条', '存放只记清单', '输出视频原始格式']);
     // 媒体类型和格式拆成两个独立的块，各能单独定位
     expect(document.querySelector('.media-kind')!.textContent).toBe('视频');
     expect(document.querySelector('.format-list')!.textContent).toBe('原始格式');

@@ -131,8 +131,9 @@ function inputBadge(j: CreatorJob): string {
 
 /** 这一批选了哪些作品：方式 + 条数/日期，拼成一句人能读的话。 */
 function selectionText(j: CreatorJob): string {
+  // 「最近 N 条」直接带数字，说成「最近 20 条」，不再「最近 N 条（20 条）」那么绕
+  if (j.mode === 'latest_n') return j.limit_n ? `最近 ${j.limit_n} 条` : '最近若干条';
   let s = SELECTION[j.mode] ?? j.mode;
-  if (j.limit_n) s += `（${j.limit_n} 条）`;
   if (j.since_ts) s += ` · ${fmtDay(j.since_ts)} 起`;
   if (j.until_ts) s += ` 至 ${fmtDay(j.until_ts)}`;
   return s;
@@ -553,16 +554,17 @@ export function CreatorsPage() {
                 </span>
               </div>
               <div class="small">
-                进度：{j.done + j.failed} / {j.total || '?'}
-                {j.failed > 0 ? `（失败 ${j.failed}）` : ''}
+                已抓 {j.done + j.failed} / {j.total || '?'} 条
+                {j.failed > 0 ? `（${j.failed} 条失败）` : ''}
                 {j.estimated_bytes > 0 ? ` · 约 ${fmtBytes(j.estimated_bytes)}` : ''}
                 {j.pause_reason ? ` · 暂停原因：${j.pause_reason}` : ''}
               </div>
               {(j.storage === 'cache' || j.storage === 'archive') && (
                 <div class="small muted">
-                  已在服务器：{j.stored} 条{j.total ? ` / ${j.total}` : ''}
+                  已存服务器 {j.stored} 条{j.total ? ` / ${j.total}` : ''}
                   {j.store_bytes > 0 ? ` · ${fmtBytes(j.store_bytes)}` : ''}
-                  {j.status === 'done' && j.stored < (j.total || 0) ? '（没存上的条目仍可在下载时现取）' : ''}
+                  {j.status === 'done' && j.stored < (j.total || 0)
+                    ? '（没存上的条目，下载时再帮你现取）' : ''}
                 </div>
               )}
               <div class="row-actions">
