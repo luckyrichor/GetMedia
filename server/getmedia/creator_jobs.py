@@ -338,11 +338,16 @@ class CreatorJobService:
         已经扫到列表末尾的任务，游标越过最后一条，再跑一次什么也碰不到——这种时候改成
         「从第一条重扫、只刷新播放地址」：平台在列表里给的直链会失效，只有重扫能换新的。
         还在中途（暂停 / 失败）的任务仍然按原游标续扫，不去动已入库的地址。
+
+        判定「列表是否扫完」：``done`` 一定扫完了；``cancelled`` 要看游标里有没有
+        ``scan_done`` 标记（用户扫完后又取消的任务会有这个标记，它的地址同样会过期，
+        也应重扫换地址）。还在中途（暂停 / 失败）的任务仍然按原游标续扫，不去动已入库的地址。
         """
         job = self._owned(user_id, job_id)
         total = int(job["total"] or 0)
-        start = int((job["cursor"] or {}).get("start") or 1)
-        rescan = job["status"] == "done" and total > 0 and start - 1 >= total
+        cursor = job["cursor"] or {}
+        scanned_all = job["status"] == "done" or bool(cursor.get("scan_done"))
+        rescan = total > 0 and scanned_all
         with self.engine.begin() as c:
             n = c.execute(text("UPDATE creator_items SET download_state='pending', error=NULL,"
                                " store_error=NULL, updated_at=:n"

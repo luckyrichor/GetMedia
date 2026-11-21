@@ -610,8 +610,10 @@ export function CreatorsPage() {
                   </button>
                 )}
                 {/* 只有抖音需要「换地址」：直链是扫描时存下的签名地址，放久了会被 CDN 拒。
-                    B 站每次下载都会现解析，这个按钮对它没有意义，所以不显示。 */}
-                {j.status === 'done' && j.platform === 'douyin' && (
+                    B 站每次下载都会现解析，这个按钮对它没有意义，所以不显示。
+                    已取消（cancelled）的任务如果列表已扫完，地址同样会过期，也应能刷新地址；
+                    后端会按游标判断：没扫完的取消任务点了也只按原游标续扫，不会误重扫。 */}
+                {(j.status === 'done' || j.status === 'cancelled') && j.platform === 'douyin' && (
                   <button
                     type="button"
                     class="btn btn-ghost small"

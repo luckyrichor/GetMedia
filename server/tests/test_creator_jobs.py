@@ -283,6 +283,34 @@ def test_retry_on_finished_job_refreshes_links(tmp_path):
     assert lister.calls[-1][0] == 1
 
 
+def test_retry_on_cancelled_but_scanned_job_refreshes_links(tmp_path):
+    """已扫完但被取消的任务点重试：列表已扫完，应重扫换地址（不新增条目）。"""
+    lister = LinkLister()
+    env = build(tmp_path, lister=lister)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/jobs", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "latest_n", "n": 3})
+    jid = r.json()["id"]
+    before = links_of(env, jid)
+    assert len(before) == 3
+    assert all("cdn.test/1/" in (v or "") for v in before.values())
+
+    # 扫完后取消：状态变 cancelled，但列表已扫完（scan_done 仍在游标里）
+    env.client.post(f"/v2/creators/jobs/{jid}/cancel", headers=hdr(token)).json()
+
+    lister.version = 2
+    out = env.client.post(f"/v2/creators/jobs/{jid}/retry", headers=hdr(token)).json()
+    assert out["rescan"] is True, "扫完被取消的任务也应重扫换地址"
+
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()
+    assert job["status"] == "done", job
+    assert job["total"] == 3, "刷新不该新增条目"
+    after = links_of(env, jid)
+    assert set(after) == set(before)
+    assert all("cdn.test/2/" in (v or "") for v in after.values())
+
+
 def test_retry_on_unfinished_job_resumes_instead(tmp_path):
     """没扫完的任务点重试仍按游标续扫，不做地址刷新。"""
     env = build(tmp_path, creator_max_pages_per_run=1, creator_scan_batch=20)
