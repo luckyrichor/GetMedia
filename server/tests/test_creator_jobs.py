@@ -504,3 +504,15 @@ def test_archive_evicts_oldest_when_quota_is_full(tmp_path):
     assert len(files) == 2
     job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
     assert job["stored"] == 2 and job["store_bytes"] == 8
+
+
+def test_cache_pool_evicts_by_age_when_full(tmp_path):
+    """缓存池满了走 prune_cache（不是归档那条路），同样按时间淘汰。"""
+    env = env_with_files(tmp_path, cache_quota_bytes=8)
+    jid = create(env, mode="latest_n", n=3, storage="cache").json()["id"]
+    rows = env.client.get(f"/v2/creators/jobs/{jid}/items", headers=hdr(env.token)).json()["items"]
+    by_id = {r["video_id"]: r for r in rows}
+    assert by_id["BVpin000001"]["stored"] is False
+    assert by_id["BVv00000002"]["stored"] is True
+    files = [p for p in env.settings.cache_dir.glob("*") if p.is_file()]
+    assert len(files) == 2
