@@ -490,9 +490,13 @@ function JobItems({ jobId }: { jobId: number }) {
         {items.map((i, idx) => (
           <li class="item-row">
             <span class="item-no" aria-hidden="true">{idx + 1}</span>
-            <span class={`tag ${i.download_state === 'done' ? 'ok' : i.download_state === 'failed' ? 'bad' : ''}`}>
-              {ITEM[i.download_state] ?? i.download_state}
-            </span>
+            {/* 手机下载的任务里，服务器只记账、不下载，也没有代码回写条目状态，
+                pending 会一直是 pending——所以「待处理」不显示，只有真落了盘或失败才有标记。 */}
+            {i.download_state !== 'pending' && (
+              <span class={`tag ${i.download_state === 'done' ? 'ok' : i.download_state === 'failed' ? 'bad' : ''}`}>
+                {ITEM[i.download_state] ?? i.download_state}
+              </span>
+            )}
             <span class="grow ellipsis" title={i.title}>{i.title}</span>
             <span class="small muted nowrap">
               {fmtDuration(i.duration_sec)}

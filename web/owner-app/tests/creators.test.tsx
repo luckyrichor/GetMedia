@@ -156,6 +156,37 @@ describe('博主批量', () => {
     expect(text()).toContain('下载全部（2 条）');
     // 每条作品前有连续序号
     expect(Array.from(document.querySelectorAll('.item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
+    // done / failed 仍然有标记
+    expect(text()).toContain('已入库');
+  });
+
+  test('手机下载的任务条目一直 pending，不显示「待处理」三个字', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ storage: 'phone' })] } },
+      'GET /v2/creators/jobs/3/items?limit=100&offset=0': {
+        json: {
+          items: [
+            { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
+              published_at: null, is_pinned: false, cover_url: null, source_url: 'x',
+              download_state: 'pending', track_id: null, error: null },
+            { id: 2, video_id: 'BV2', platform: 'bilibili', page: 1, title: '第二条作品', duration_sec: 60,
+              published_at: null, is_pinned: false, cover_url: null, source_url: 'x',
+              download_state: 'pending', track_id: null, error: null },
+          ],
+          total: 2, limit: 100, offset: 0,
+        },
+      },
+    }));
+    mount('/creators');
+    await until(() => text().includes('看条目'));
+    await click(button('看条目'));
+    await until(() => text().includes('第一条作品'));
+
+    expect(text()).not.toContain('待处理');
+    expect(document.querySelectorAll('.item-row .tag')).toHaveLength(0);
+    // 序号与下载按钮不受影响
+    expect(Array.from(document.querySelectorAll('.item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
+    expect(document.querySelectorAll('.item-row a')).toHaveLength(2);
   });
 
   test('抖音被挡时显示服务端给的原因，不粉饰成网络问题', async () => {
