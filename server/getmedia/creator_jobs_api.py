@@ -43,6 +43,9 @@ class JobCreateBody(BaseModel):
     media_type: Literal["audio", "video"] = "video"
     # 要产出哪些格式（视频：source/mp4/mkv/webm；音频：m4a/mp3/flac/wav）。空 = 按媒体类型给默认值。
     formats: list[str] | None = Field(None, max_length=4)
+    # 用户当初填的原始内容（抖音号 / B 站号 / 主页链接）；任务卡上用来交代「抓的是谁」。
+    # 不传则退回用 url（老客户端没有这个字段）。
+    source_input: str | None = Field(None, max_length=500)
 
 
 class ItemStateBody(BaseModel):
@@ -116,7 +119,7 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
             )
             job = service.create(ctx.user_id, url=body.url, selection=selection, storage=body.storage,
                                  media_type=body.media_type, platform=body.platform,
-                                 formats=body.formats, source_input=body.url)
+                                 formats=body.formats, source_input=body.source_input or body.url)
         except JobError as exc:
             _job_error(exc)
         except LinkError as exc:

@@ -503,6 +503,8 @@ export const ownerApi = {
     url: string; platform?: string | null; mode: SelectionMode; n?: number | null;
     since?: string | null; until?: string | null; include_pinned?: boolean;
     storage: JobStorage; media_type: MediaType; formats?: FormatKey[];
+    /** 用户当初填的原始内容（抖音号 / B 站号 / 链接），任务卡上用来交代「抓的是谁」 */
+    source_input?: string;
   }) => api.request<CreatorJob>('POST', '/v2/creators/jobs', body),
   creatorJobs: async (): Promise<CreatorJob[]> =>
     (await api.request<{ jobs: CreatorJob[] }>('GET', '/v2/creators/jobs?limit=50')).jobs,

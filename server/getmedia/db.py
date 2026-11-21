@@ -474,6 +474,14 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "ALTER TABLE creator_items ADD COLUMN added_at INTEGER",
         "UPDATE creator_items SET added_at = updated_at WHERE added_at IS NULL",
     ]),
+    # v16 回填老任务的 source_input：早期创建任务时后端把 source_input 写死成了链接，
+    # 用户填的原始抖音号没留下来（库里只剩 sec_uid）。这里把已知的这批任务补上抖音号，
+    # 让任务卡能亮出「抖音号 xxx」而不是一串看不懂的 sec_uid。
+    (16, [
+        "UPDATE creator_jobs SET source_input = '67194609689'"
+        " WHERE source_input IS NULL AND platform = 'douyin'"
+        " AND creator_id = 'MS4wLjABAAAAAR1hYk5la2AbZ_a-00wgh6UnypbV35hOG_8bQvsBqDrNGZpxcHBu7ueuCbAarO5l'",
+    ]),
 ]
 
 

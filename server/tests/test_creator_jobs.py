@@ -642,6 +642,15 @@ def test_creator_name_is_saved_for_task_card(tmp_path):
     assert job["source_input"] == "https://space.bilibili.com/2/video"
 
 
+def test_source_input_keeps_user_typed_handle(tmp_path):
+    """前端按号抓时把原始号传进 source_input，后端要原样存，而不是写死成链接。"""
+    env = env_with_files(tmp_path)
+    jid = create(env, mode="latest_n", n=2, source_input="67194609689").json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    # 用户填的是数字号，source_input 就该是这个号，不能退化成 url
+    assert job["source_input"] == "67194609689"
+
+
 def test_download_converts_on_demand_when_not_stored(tmp_path, monkeypatch):
     """只记清单的任务：点某一种格式时现取现转，临时目录发完就删。"""
     from getmedia import creator_formats

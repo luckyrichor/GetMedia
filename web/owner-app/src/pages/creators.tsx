@@ -129,6 +129,19 @@ function inputBadge(j: CreatorJob): string {
   return label ? `${label} ${raw}` : '';
 }
 
+/** 任务抓的博主号：
+ *  用户填的是号码时，就显示用户填的那个（用户意图，最准）；
+ *  填的是链接时，回退用后端解析出的平台号（creator_id）。
+ *  这样按链接抓的任务也能亮出抖音号 / B 站号。 */
+function creatorIdBadge(j: CreatorJob): string {
+  const label = ID_LABEL[j.platform];
+  if (!label) return '';
+  const input = inputBadge(j);
+  if (input) return input;
+  const id = (j.creator_id || '').trim();
+  return NUMERIC_ID.test(id) ? `${label} ${id}` : '';
+}
+
 /** 这一批选了哪些作品：方式 + 条数/日期，拼成一句人能读的话。 */
 function selectionText(j: CreatorJob): string {
   // 「最近 N 条」直接带数字，说成「最近 20 条」，不再「最近 N 条（20 条）」那么绕
@@ -232,8 +245,9 @@ export function CreatorsPage() {
   }, [active]);
 
   function body() {
+    const value = normalizeCreatorInput(url, kind);
     return {
-      url: normalizeCreatorInput(url, kind),
+      url: value,
       // 链接走 resolve（由后端按域名判平台）；选「抖音号 / B 站号」时把平台显式带上，
       // 纯数字就不会被默认当成抖音号。
       platform: kind === 'url' ? null : kind,
@@ -243,6 +257,9 @@ export function CreatorsPage() {
       until: mode === 'date_range' ? until || null : null,
       include_pinned: pinned,
       formats,
+      // 把用户填的原始内容一并带上（数字号 / 链接），后端存进 source_input，
+      // 任务卡上才能亮出「抖音号 123」这种号；不传则后端退回用 url。
+      source_input: value,
     };
   }
 
@@ -514,8 +531,8 @@ export function CreatorsPage() {
                 <span class={`tag ${TONE[j.status] ?? ''}`}>{JOB[j.status] ?? j.status}</span>
                 <span class="tag">{platformName(j.platform)}</span>
                 <span class="job-who ellipsis" title={nickName(j)}>{nickName(j)}</span>
-                {/* 按号抓的任务把号码也亮出来；按链接抓的没有号可写，就不占位置 */}
-                {inputBadge(j) && <span class="tag job-id">{inputBadge(j)}</span>}
+                {/* 亮出博主号：按号抓的用填的号，按链接抓的用后端解析出的号 */}
+                {creatorIdBadge(j) && <span class="tag job-id">{creatorIdBadge(j)}</span>}
                 <span class="grow" />
                 <span class="small muted nowrap" title="发起时间">
                   {relTime(j.created_at)} · {fmtDateTime(j.created_at)}
