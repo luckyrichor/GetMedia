@@ -18,16 +18,16 @@ export const STORAGE_DESC: Record<string, string> = {
   archive: '文件长期留在服务器，但空间不足时同样会清理。',
 };
 
-/** 输出格式：视频四种、音频四种。名字短，说明放下拉提示里。 */
+/** 输出格式：视频四种、音频四种。展示用后缀名，说明放下拉提示里。 */
 export const FORMAT: Record<string, string> = {
-  source: '原样保存',
-  mp4: 'MP4',
-  mkv: 'MKV',
-  webm: 'WebM',
-  m4a: 'M4A',
-  mp3: 'MP3',
-  flac: 'FLAC',
-  wav: 'WAV',
+  source: '.源格式',
+  mp4: '.mp4',
+  mkv: '.mkv',
+  webm: '.webm',
+  m4a: '.m4a',
+  mp3: '.mp3',
+  flac: '.flac',
+  wav: '.wav',
 };
 
 export const FORMAT_TIP: Record<string, string> = {

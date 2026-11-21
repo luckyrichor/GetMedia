@@ -474,18 +474,18 @@ describe('批量提取：多格式与任务卡信息', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    // 视频默认「原样保存」
-    expect(document.querySelector('button[aria-label="输出格式"]')!.textContent).toContain('原样保存');
+    // 视频默认「.源格式」
+    expect(document.querySelector('button[aria-label="输出格式"]')!.textContent).toContain('.源格式');
 
     await choose('格式', '音频');
-    await until(() => document.querySelector('button[aria-label="输出格式"]')!.textContent!.includes('M4A'));
+    await until(() => document.querySelector('button[aria-label="输出格式"]')!.textContent!.includes('.m4a'));
 
-    // 多选：M4A 已选，再勾 MP3
+    // 多选：.m4a 已选，再勾 .mp3
     await click(document.querySelector('button[aria-label="输出格式"]')!);
     const opts = Array.from(document.querySelectorAll('[role="option"]'));
-    expect(opts.map((o) => o.textContent)).toEqual(['M4A', 'MP3', 'FLAC', 'WAV']);
+    expect(opts.map((o) => o.textContent)).toEqual(['.m4a', '.mp3', '.flac', '.wav']);
     await click(opts[1]!);
-    expect(document.querySelector('button[aria-label="输出格式"]')!.textContent).toContain('M4A、MP3');
+    expect(document.querySelector('button[aria-label="输出格式"]')!.textContent).toContain('.m4a、.mp3');
 
     await fillUrl('https://space.bilibili.com/12345');
     await click(button('开始提取'));
@@ -522,12 +522,12 @@ describe('批量提取：多格式与任务卡信息', () => {
     expect(document.querySelector('.job-url')!.textContent).toBe(url);
     expect(text()).toContain('2027-01-15 03:00:00');
 
-    // 裸值改成带标签的几项，免得看不出「只记清单」「原样保存」说的是什么
+    // 裸值改成带标签的几项，格式用后缀名展示
     const metas = Array.from(document.querySelectorAll('.job-meta .meta')).map((n) => n.textContent);
-    expect(metas).toEqual(['任务#3', '选取最近 N 条（20 条）', '存放只记清单', '输出视频原样保存']);
+    expect(metas).toEqual(['任务#3', '选取最近 N 条（20 条）', '存放只记清单', '输出视频.源格式']);
     // 媒体类型和格式拆成两个独立的块，各能单独定位
     expect(document.querySelector('.media-kind')!.textContent).toBe('视频');
-    expect(document.querySelector('.format-list')!.textContent).toBe('原样保存');
+    expect(document.querySelector('.format-list')!.textContent).toBe('.源格式');
 
     expect(() => button('复制链接')).not.toThrow();
     expect(() => button('显示条目')).not.toThrow();
@@ -583,7 +583,7 @@ describe('批量提取：多格式与任务卡信息', () => {
     expect(text()).toContain('2027-01-15 03:08');      // stored_at，不是 added_at
 
     const chips = Array.from(document.querySelectorAll('.fmt-chip')).map((b) => b.textContent);
-    expect(chips).toEqual(['原样保存', 'MP3']);
+    expect(chips).toEqual(['.源格式', '.mp3']);
     await click(document.querySelectorAll('.fmt-chip')[1]!);
     await until(() => calls.some((c) => (c.search ?? '').includes('fmt=mp3')));
     expect(saved).toHaveBeenCalled();
