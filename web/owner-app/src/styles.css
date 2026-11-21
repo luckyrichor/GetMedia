@@ -277,17 +277,19 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .jobs-head h2 { margin: 22px 0 8px; flex: 1 1 auto; }
 .jobs-head .btn { margin: 14px 0 8px; }
 
-/* 筛选栏：一横排、可换行；每项一个小块（标签 + 控件） */
+/* 筛选栏：三列网格，每格等宽、自动填满，不再右侧留白；发起时间占两列 */
 .filter-bar {
-  display: flex; gap: 10px 14px; flex-wrap: wrap; align-items: flex-end;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 14px; align-items: end;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 10px 12px; margin: 4px 0 14px;
+  padding: 12px 14px; margin: 4px 0 14px;
 }
-.filter { display: grid; gap: 4px; position: relative; }
+.filter { display: grid; gap: 4px; position: relative; min-width: 0; }
 .filter > span { font-size: 0.78rem; color: var(--muted); }
-.filter input { min-width: 9rem; }
-/* 下拉框给一个稳定的最小宽度，避免选「抖音」后触发框变窄、整行换行位置跳动 */
-.filter .select { min-width: 7.5rem; }
+.filter input, .filter .select { width: 100%; }
+.filter input { min-width: 0; }
+/* 发起时间：两个日期框并排，占两列 */
+.filter-wide { grid-column: span 2; }
 /* 文本框有内容时右上角浮一个 ×，点它清空这一项 */
 .filter-clear {
   position: absolute; right: 6px; top: 26px; width: 18px; height: 18px; padding: 0;
@@ -296,7 +298,18 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .filter-clear:hover { background: var(--accent); color: var(--accent-ink); }
 .filter-range { display: flex; gap: 6px; align-items: center; }
-.filter-range input { min-width: 8.4rem; }
+.filter-range input { min-width: 0; flex: 1 1 auto; }
+/* 发起时间的清除 × 跟着日期框排，不绝对定位到（跨两列的）整个格子右上角 */
+.filter-range .filter-clear { position: static; flex: none; }
+/* 窄屏：三列太挤，降为两列；再窄就一列 */
+@media (max-width: 720px) {
+  .filter-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filter-wide { grid-column: span 2; }
+}
+@media (max-width: 460px) {
+  .filter-bar { grid-template-columns: 1fr; }
+  .filter-wide { grid-column: span 1; }
+}
 
 .jobs { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
 .job { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px 13px; min-width: 0; }

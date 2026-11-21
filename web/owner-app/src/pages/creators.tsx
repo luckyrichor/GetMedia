@@ -638,7 +638,7 @@ export function CreatorsPage() {
             <button type="button" class="filter-clear" aria-label="清除昵称" onClick={() => setFNick('')}>×</button>
           )}
         </label>
-        <div class="filter">
+        <div class="filter filter-wide">
           <span>发起时间</span>
           <div class="filter-range">
             <input
