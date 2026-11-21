@@ -443,7 +443,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 
 /* 任务卡：抓的是谁、抓的哪个地址（长链接单行，可以左右拖） */
 .job-who { min-width: 0; max-width: 22rem; font-weight: 600; }
-/* 号码标签固定不收缩，昵称在后负责省略，号不会被长昵称挤没 */
+/* 号码前缀「抖音号」纯文字、无框，跟背景融合；后面的数字胶囊带框，两者分开 */
+.job-id-label { flex: none; font-size: 0.78rem; color: var(--muted); }
+/* 号码数字胶囊固定不收缩，昵称在后负责省略，号不会被长昵称挤没 */
 .job-id { flex: none; font-variant-numeric: tabular-nums; }
 .job-src { display: flex; gap: 8px; align-items: center; margin: 2px 0 6px; }
 .job-url {

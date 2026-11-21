@@ -5,10 +5,10 @@ export const platformName = (p: string | null | undefined) => (p ? PLATFORM[p] ?
 
 /** 存放方式：给用户看的说法，不是存储术语。 */
 export const STORAGE: Record<string, string> = {
-  metadata: '只记清单',
+  metadata: '只记不下载',
   cache: '服务器暂存',
   archive: '服务器保留',
-  phone: '只记清单',   // 旧数据里的「手机下载」，行为本来就等于只记清单
+  phone: '只记不下载',   // 旧数据里的「手机下载」，行为本来就等于只记不下载
 };
 
 /** 三种存放方式各自会做什么（下拉里悬停某一行时弹出这段说明）。 */

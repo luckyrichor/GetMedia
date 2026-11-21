@@ -116,7 +116,7 @@ function nickName(j: CreatorJob): string {
   return (j.creator_name || '').trim() || '昵称未知';
 }
 
-/** 平台号的前缀：抖音号 / B站号（连写）。后面跟「：数字」，见 creatorIdBadge。 */
+/** 平台号的前缀：抖音号 / B站号（连写）。后面跟带框的数字，见下方渲染。 */
 const ID_LABEL: Record<string, string> = { douyin: '抖音号', bilibili: 'B站号' };
 
 /** 用户当初填的是号码时，单独做个标签，一眼看出这批是「按号抓的」。
@@ -138,12 +138,10 @@ function creatorId(j: CreatorJob): string {
   return NUMERIC_ID.test(id) ? id : '';
 }
 
-/** 号码标签的整句：「抖音号：67194609689」/「B站号：12345」。没有号则空串。 */
-function creatorIdBadge(j: CreatorJob): string {
-  const label = ID_LABEL[j.platform];
-  const id = creatorId(j);
-  if (!label || !id) return '';
-  return `${label}：${id}`;
+/** 号码前缀文字（「抖音号」「B站号」），无框、纯文字；没有号则空串。
+ *  后面跟着一个带框的数字胶囊（见 job-head 渲染处），两者分开。 */
+function creatorIdLabel(j: CreatorJob): string {
+  return creatorId(j) ? (ID_LABEL[j.platform] ?? '') : '';
 }
 
 /** 这一批选了哪些作品：方式 + 条数/日期，拼成一句人能读的话。 */
@@ -533,9 +531,10 @@ export function CreatorsPage() {
               <div class="job-head">
                 <span class="job-no" aria-hidden="true">{idx + 1}</span>
                 <span class={`tag ${TONE[j.status] ?? ''}`}>{JOB[j.status] ?? j.status}</span>
-                <span class="tag">{platformName(j.platform)}</span>
-                {/* 号放昵称前面、固定不收缩：先亮「抖音号：xxx」，昵称在后可省略 */}
-                {creatorIdBadge(j) && <span class="tag job-id">{creatorIdBadge(j)}</span>}
+                {/* 号放昵称前面：先「抖音号」纯文字（无框），再带框的数字胶囊，两者分开；
+                    有「抖音号」就知道是抖音，不再单独放平台标签 */}
+                {creatorIdLabel(j) && <span class="job-id-label">{creatorIdLabel(j)}</span>}
+                {creatorId(j) && <span class="tag job-id">{creatorId(j)}</span>}
                 <span class="job-who ellipsis" title={nickName(j)}>{nickName(j)}</span>
                 <span class="grow" />
                 <span class="small muted nowrap" title="发起时间">

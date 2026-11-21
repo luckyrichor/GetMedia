@@ -344,7 +344,7 @@ describe('批量提取', () => {
     await click(document.querySelector('button[aria-label="存放方式"]')!);
     const opts = Array.from(document.querySelectorAll('[role="option"]'));
     expect(opts.map((o) => o.querySelector('.select-label')?.textContent))
-      .toEqual(['只记清单', '服务器暂存', '服务器保留']);
+      .toEqual(['只记不下载', '服务器暂存', '服务器保留']);
     // 刚展开不弹提示，悬停到某一项才弹
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
 
@@ -386,7 +386,7 @@ describe('批量提取', () => {
     await until(() => text().includes('存好的作品'));
     const tags = Array.from(document.querySelectorAll('.item-row .tag')).map((t) => t.textContent);
     expect(tags).toContain('已在服务器');
-    // 「只记清单」的任务条目没有这份标记
+    // 「只记不下载」的任务条目没有这份标记
     expect(tags.filter((t) => t === '已在服务器')).toHaveLength(1);
   });
 
@@ -507,14 +507,17 @@ describe('批量提取：多格式与任务卡信息', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('抖音号：67194609689'));
+    await until(() => text().includes('67194609689'));
 
-    // 头部依次是：状态 → 平台 → 号码 → 昵称；号在昵称前、固定不收缩，昵称没取到就说「昵称未知」
+    // 头部依次是：状态 → 「抖音号」纯文字（无框）→ 数字胶囊 → 昵称；
+    // 平台标签「抖音」已删（有「抖音号」就知道是抖音）
     const tags = Array.from(document.querySelectorAll('.job-head .tag')).map((n) => n.textContent);
-    expect(tags).toEqual(['进行中', '抖音', '抖音号：67194609689']);
+    expect(tags).toEqual(['进行中', '67194609689']);
+    // 「抖音号」是纯文字前缀，不在任何框里
+    expect(document.querySelector('.job-id-label')!.textContent).toBe('抖音号');
     expect(document.querySelector('.job-who')!.textContent).toBe('昵称未知');
     expect(document.querySelector('.job-head')!.textContent)
-      .toContain('抖音号：67194609689昵称未知');
+      .toContain('抖音号67194609689昵称未知');
 
     // 地址那一行只放地址本身，不再重复一个「抖音」标签
     const src = document.querySelector('.job-src')!;
@@ -524,7 +527,7 @@ describe('批量提取：多格式与任务卡信息', () => {
 
     // 裸值改成带标签的几项，格式用后缀名展示；「任务 #N」已删（数据库 id 与列表序号不一致，反而误导）
     const metas = Array.from(document.querySelectorAll('.job-meta .meta')).map((n) => n.textContent);
-    expect(metas).toEqual(['选取最近 20 条', '存放只记清单', '输出视频原始格式']);
+    expect(metas).toEqual(['选取最近 20 条', '存放只记不下载', '输出视频原始格式']);
     // 媒体类型和格式拆成两个独立的块，各能单独定位
     expect(document.querySelector('.media-kind')!.textContent).toBe('视频');
     expect(document.querySelector('.format-list')!.textContent).toBe('原始格式');
@@ -533,7 +536,7 @@ describe('批量提取：多格式与任务卡信息', () => {
     expect(() => button('显示条目')).not.toThrow();
   });
 
-  test('按号发起：B 站号写成「B站号：」；按链接发起也能显示后端解析出的号', async () => {
+  test('按号发起：B 站号拆成纯文字前缀 + 数字胶囊；按链接发起也显示解析出的号', async () => {
     const url = 'https://space.bilibili.com/12345';
     server(ownerRoutes({
       [JOBS]: {
@@ -551,11 +554,12 @@ describe('批量提取：多格式与任务卡信息', () => {
 
     const cards = Array.from(document.querySelectorAll('.job'));
     const tagsOf = (el: Element) => Array.from(el.querySelectorAll('.job-head .tag')).map((n) => n.textContent);
-    // 号在前、固定不收缩，昵称在后
-    expect(tagsOf(cards[0]!)).toEqual(['进行中', 'B 站', 'B站号：12345']);
+    // 平台标签「B 站」已删；号拆成「B站号」纯文字 + 数字胶囊，昵称在后
+    expect(tagsOf(cards[0]!)).toEqual(['进行中', '12345']);
+    expect(cards[0]!.querySelector('.job-id-label')!.textContent).toBe('B站号');
     expect(cards[0]!.querySelector('.job-who')!.textContent).toBe('某个 UP 主');
     // 链接发起的那条：有昵称，也显示后端解析出的号
-    expect(tagsOf(cards[1]!)).toEqual(['进行中', 'B 站', 'B站号：67890']);
+    expect(tagsOf(cards[1]!)).toEqual(['进行中', '67890']);
   });
 
   test('条目按表头对齐；提取时间用落盘时间；每种格式可单独下载', async () => {
