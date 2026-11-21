@@ -26,19 +26,18 @@ import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 /** Public-link extraction on the phone. No GetMedia server is involved. */
 class DirectExtractor(
     private val context: Context,
     private val report: suspend (String) -> Unit = {},
 ) {
-    private val cookies = MemoryCookies()
-    private val client = OkHttpClient.Builder()
-        .cookieJar(cookies)
-        .followRedirects(true)
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
+    // 批量下载共用同一套访客凭证与连接池：每条都新建实例 = 每条都重新注册 ttwid，
+    // 这是最容易被风控盯上的信号（"前 N 条成功、后面全 403" 就是这么来的）。
+    // 这里只存 ttwid/msToken/buvid 这类访客值，不涉及任何登录凭据。
+    private val cookies: MemoryCookies = sharedCookies
+    private val client: OkHttpClient = sharedClient
 
     suspend fun extract(text: String, kind: MediaKind = MediaKind.AUDIO): TrackEntity =
         extractTo(text, kind, null)
@@ -141,6 +140,64 @@ class DirectExtractor(
         } catch (e: Exception) {
             report("抖音首页：${failureKind(e)}（继续尝试）")
         }
+        refreshGuestTicket(ua)
+        val url = "https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383" +
+            "&channel=channel_pc_web&pc_client_type=1&version_code=170400&version_name=17.4.0" +
+            "&cookie_enabled=true&platform=PC&downlink=10&aweme_id=${link.videoId}"
+        var response: JSONObject? = null
+        var directError: Exception? = null
+        for (attempt in 0..1) {
+            try {
+                val json = get(url, ua = ua, referer = link.url, stage = "抖音作品详情")
+                report("作品详情直连：请求成功，响应 ${json.length} 字符")
+                response = JSONObject(json)
+                break
+            } catch (e: Exception) {
+                directError = e
+                report("作品详情直连：${failureKind(e)}")
+                val retryable = (e is PlatformHttpException && e.code == 403) || e is org.json.JSONException
+                if (!retryable) throw e
+                if (attempt == 0) {
+                    // 403 多是访客身份被渐进限流：先退避、换一张访客凭证再试一次，
+                    // 比立刻进 WebView 更有效（WebView 同样在被限流的出口上 403）。
+                    val wait = 1_500L + Random.nextLong(0, 1_200)
+                    report("作品详情直连：退避 ${wait}ms 后重试一次")
+                    delay(wait)
+                    refreshGuestTicket(ua, force = true)
+                    continue
+                }
+            }
+        }
+        val direct = response ?: run {
+            val e = directError ?: IllegalStateException("抖音作品详情请求失败")
+            val browserCookies = cookies.loadForRequest("https://www.douyin.com/".toHttpUrlOrNull()!!)
+            val credentialHint = if (browserCookies.none { it.name == "ttwid" }) "；未取得抖音访客凭证" else ""
+            report("浏览器重试：开始，ttwid ${if (browserCookies.any { it.name == "ttwid" }) "有" else "无"}")
+            val browser = runCatching {
+                DouyinBrowserDetail.fetch(context, link.videoId, url, ua, browserCookies, report)
+            }
+            if (browser.isSuccess) browser.getOrThrow() else {
+                report("浏览器重试：${failureKind(browser.exceptionOrNull()!!)}")
+                error("抖音作品详情请求失败（${e.message}$credentialHint），浏览器重试也失败：${browser.exceptionOrNull()?.message}")
+            }
+        }
+        report("作品详情内容：status_code=${direct.optInt("status_code", -1)}，作品数据${if (direct.optJSONObject("aweme_detail") == null) "缺失" else "存在"}")
+        val detail = direct.optJSONObject("aweme_detail")
+            ?: error("抖音没有返回作品信息；可能需要登录，或该作品不可见")
+        if (verifyIdentity) require(detail.optString("aweme_id") == link.videoId) { "抖音返回的作品编号不符" }
+        return douyinMedia(detail, link, "https://www.douyin.com/", kind)
+    }
+
+    /**
+     * 注册访客 ttwid，并顺手换一枚 msToken。
+     *
+     * 会写进**共享** Cookie 罐：批量下载时后续条目直接复用，不必每条都重新注册一次新访客——
+     * 高频注册新访客是抖音风控最先盯上的行为。失败不抛错，交给调用方继续尝试。
+     *
+     * @param force 仅在收到 403、需要换一张凭证时传 true；平时已有 ttwid 就直接复用。
+     */
+    private suspend fun refreshGuestTicket(ua: String, force: Boolean = false) {
+        if (!force && cookies.has("ttwid")) return
         val token = ByteArray(81).also(SecureRandom()::nextBytes)
         val msToken = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(token)
         cookies.put("www.douyin.com", "msToken", msToken)
@@ -156,33 +213,6 @@ class DirectExtractor(
         } catch (e: Exception) {
             report("访客凭证：${failureKind(e)}（继续尝试）")
         }
-        val url = "https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383" +
-            "&channel=channel_pc_web&pc_client_type=1&version_code=170400&version_name=17.4.0" +
-            "&cookie_enabled=true&platform=PC&downlink=10&aweme_id=${link.videoId}"
-        val response = try {
-            val json = get(url, ua = ua, referer = link.url, stage = "抖音作品详情")
-            report("作品详情直连：请求成功，响应 ${json.length} 字符")
-            JSONObject(json)
-        } catch (e: Exception) {
-            report("作品详情直连：${failureKind(e)}")
-            if (e is PlatformHttpException && e.code != 403) throw e
-            if (e !is PlatformHttpException && e !is org.json.JSONException) throw e
-            val browserCookies = cookies.loadForRequest("https://www.douyin.com/".toHttpUrlOrNull()!!)
-            val credentialHint = if (browserCookies.none { it.name == "ttwid" }) "；未取得抖音访客凭证" else ""
-            report("浏览器重试：开始，ttwid ${if (browserCookies.any { it.name == "ttwid" }) "有" else "无"}")
-            val browser = runCatching {
-                DouyinBrowserDetail.fetch(context, link.videoId, url, ua, browserCookies, report)
-            }
-            if (browser.isSuccess) browser.getOrThrow() else {
-                report("浏览器重试：${failureKind(browser.exceptionOrNull()!!)}")
-                error("抖音作品详情请求失败（${e.message}$credentialHint），浏览器重试也失败：${browser.exceptionOrNull()?.message}")
-            }
-        }
-        report("作品详情内容：status_code=${response.optInt("status_code", -1)}，作品数据${if (response.optJSONObject("aweme_detail") == null) "缺失" else "存在"}")
-        val detail = response.optJSONObject("aweme_detail")
-            ?: error("抖音没有返回作品信息；可能需要登录，或该作品不可见")
-        if (verifyIdentity) require(detail.optString("aweme_id") == link.videoId) { "抖音返回的作品编号不符" }
-        return douyinMedia(detail, link, "https://www.douyin.com/", kind)
     }
 
     private suspend fun fetchSharePageItem(link: DirectLink): JSONObject? {
@@ -542,6 +572,22 @@ class DirectExtractor(
     }
 
     companion object {
+        /**
+         * 进程内共用。抖音的风控按「访客身份 + 出口 IP + 请求频率」累计，批量下载若每条都新建
+         * 一套 Cookie 罐，等于连续注册几十个新访客；共用一套凭证能明显推后 403 出现的条数。
+         *
+         * 只放 ttwid / msToken / buvid3 / buvid4 这类访客值，从不写入登录凭据，跨账号共用安全。
+         */
+        private val sharedCookies = MemoryCookies()
+        private val sharedClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .cookieJar(sharedCookies)
+                .followRedirects(true)
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .build()
+        }
+
         private const val ACCEPT_LANGUAGE = "zh-CN,zh;q=0.9,en;q=0.8"
         private const val BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         private const val MOBILE_UA = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
