@@ -290,7 +290,7 @@ export function CreatorsPage() {
             </select>
           </label>
           <label class="field">
-            <span>{KIND_LABEL[kind]}</span>
+            <span>{kind === 'url' ? '主页链接 / 分享文案' : KIND_LABEL[kind]}</span>
             <input
               type="text"
               maxLength={kind === 'url' ? 2000 : 40}
@@ -299,9 +299,6 @@ export function CreatorsPage() {
               value={url}
               onInput={(e) => setUrl((e.target as HTMLInputElement).value)}
             />
-            <em class="field-hint">
-              {kind === 'url' ? 'B 站空间或抖音主页链接，粘贴整段分享文案也行' : '只填数字，不要带链接'}
-            </em>
           </label>
         </div>
 

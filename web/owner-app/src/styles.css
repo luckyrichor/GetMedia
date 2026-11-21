@@ -239,8 +239,6 @@ audio.player-media { background: none; }
 }
 .field { display: grid; gap: 4px; margin: 0 0 10px; }
 .field > span { font-size: 0.82rem; color: var(--muted); }
-/* 输入框下的一行说明：不是错误提示，别用红色也别斜体 */
-.field-hint { font-style: normal; font-size: 0.76rem; color: var(--muted); }
 /* 四种存放方式逐行解释，当前选中的那行做浅色高亮 */
 .storage-notes { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 2px; }
 .storage-notes li { padding: 3px 8px; border-left: 2px solid transparent; border-radius: 4px; }
