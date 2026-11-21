@@ -15,6 +15,7 @@ from conftest import hdr, make_owner
 from getmedia.alerts import RecordingAlertSink
 from getmedia.api import create_app
 from getmedia.config import testing_settings as make_settings
+from getmedia.creator_jobs import _StoreFailed
 from getmedia.creator_links import CreatorRef, Platform
 from getmedia.creators.base import CreatorProfile, CreatorVideo, CreatorWindow, VideoStats
 
@@ -516,3 +517,70 @@ def test_cache_pool_evicts_by_age_when_full(tmp_path):
     assert by_id["BVv00000002"]["stored"] is True
     files = [p for p in env.settings.cache_dir.glob("*") if p.is_file()]
     assert len(files) == 2
+
+
+# ---------- 抖音：落盘撞上直链过期，自动重扫一次 ----------
+def dy_videos(tag="old", n=2):
+    return [CreatorVideo(
+        platform=Platform.DOUYIN, video_id=f"dy{i:04d}", title=f"抖音作品 {i}",
+        source_url=f"https://www.douyin.com/video/{i}", position=i + 1, creator_id="9",
+        duration_sec=30.0, published_at=(BASE - timedelta(days=i)).isoformat(),
+        play_urls=(f"https://cdn.example.invalid/{tag}-{i}.mp4",)) for i in range(n)]
+
+
+class DouyinLister(Lister):
+    """第一轮给过期地址，之后（重扫）给新地址；``calls`` 用来数开了几次列表。"""
+
+    def __init__(self, first, later):
+        super().__init__(first)
+        self.first, self.later, self.round = first, later, 0
+
+    def __call__(self, ref, start, count, cookie_file=None):
+        self.round += 1
+        self.videos = self.later if self.round > 1 else self.first
+        return super().__call__(ref, start, count, cookie_file)
+
+
+def env_with_douyin(tmp_path, *, later=None):
+    lister = DouyinLister(dy_videos("old"), later if later is not None else dy_videos("fresh"))
+    env = build(tmp_path, lister=lister)
+    env.app.state.runtime.write(registration_open=True)
+    env.token = make_owner(env, name="boss")
+    jobs = env.app.state.creator_jobs
+    jobs.resolve_fn = lambda url, platform=None: CreatorRef(
+        Platform.DOUYIN, "9", "https://www.douyin.com/user/9")
+
+    def opener(url, _platform):
+        if "fresh" not in url:               # 扫描时签的地址已经过期（重扫才给新地址）
+            raise _StoreFailed("平台返回 HTTP 403")
+        yield [b"DATA"]
+
+    jobs.opener = contextmanager(opener)
+    return env
+
+
+def test_douyin_expired_link_rescans_and_retries(tmp_path):
+    """抖音存的直链全 403 → 重扫换地址 → 重试这一条成功。"""
+    env = env_with_douyin(tmp_path)
+    r = create(env, url="9", platform="douyin", mode="latest_n", n=2, storage="archive")
+    assert r.status_code == 202, r.text
+    jid = r.json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["platform"] == "douyin" and job["status"] == "done"
+    assert job["stored"] == 2 and job["failed"] == 0
+    rows = env.client.get(f"/v2/creators/jobs/{jid}/items", headers=hdr(env.token)).json()["items"]
+    assert all(r["stored"] and r["store_error"] is None for r in rows)
+    # 一次扫描 + 一次重扫，不再多开浏览器
+    assert len(env.lister.calls) == 2
+
+
+def test_douyin_rescan_is_only_tried_once_per_job(tmp_path):
+    """重扫后地址仍然取不到：按失败记账，不会每条都再开一次浏览器。"""
+    env = env_with_douyin(tmp_path, later=dy_videos("bad"))
+    jid = create(env, url="9", platform="douyin", mode="latest_n", n=2,
+                 storage="cache").json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["stored"] == 0 and job["failed"] == 2
+    assert len(env.lister.calls) == 2
+    rows = env.client.get(f"/v2/creators/jobs/{jid}/items", headers=hdr(env.token)).json()["items"]
+    assert all(r["stored"] is False and r["store_error"] for r in rows)

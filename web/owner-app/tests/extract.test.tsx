@@ -71,7 +71,7 @@ describe('服务器提取', () => {
     await until(() => text().includes('还没有提取任务'));
 
     await type(document.querySelector('textarea')!, '  BV1xx411c7mD  ');
-    await choose('存放方式', '服务器长期保存');
+    await choose('存放方式', '服务器保留');
     await click(button('提取并入库'));
     await until(() => text().includes('已入库'));
 

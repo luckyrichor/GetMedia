@@ -65,6 +65,10 @@ class _StoreFailed(Exception):
     """单条落盘失败（换下一个候选就好，不影响整个任务）。"""
 
 
+class _LinksExpired(_StoreFailed):
+    """存的播放地址一个都取不到（多半是签名过期），值得重扫一次换新地址。"""
+
+
 @dataclass(frozen=True)
 class Selection:
     mode: str = "latest_n"
@@ -720,12 +724,34 @@ class CreatorJobService:
         if storage not in DISK_STORAGES:
             return {"stored": 0, "failed": 0}
         ok = bad = 0
+        # 整个任务只自动重扫一次：抖音的直链是扫描那一刻签的，几百条要下几小时，
+        # 靠后那批往往已经过期；换一次地址能把剩下整批都刷新，不必每条都开浏览器。
+        rescanned = False
         while self._status(job_id) == "running":
             item = self._next_unstored(job_id)
             if item is None:
                 break
             try:
                 size = self._store_one(job, item)
+            except _LinksExpired as exc:
+                if rescanned or not self._rescan_links(job_id, user_id):
+                    bad += 1
+                    self._mark_store_failed(job_id, item["id"],
+                                            f"地址已过期，重扫后仍取不到（{exc}）"[:200])
+                    continue
+                rescanned = True
+                fresh = self._reload_item(job_id, item["id"]) or item
+                try:
+                    size = self._store_one(job, fresh)
+                except _StoreFailed as exc2:
+                    bad += 1
+                    self._mark_store_failed(job_id, item["id"], str(exc2)[:200])
+                    continue
+                except Exception as exc2:  # noqa: BLE001 - 一条失败不该拖垮整个任务
+                    bad += 1
+                    log.warning("批量落盘异常（条目 %s）：%s", item["id"], type(exc2).__name__)
+                    self._mark_store_failed(job_id, item["id"], "下载失败，稍后重试")
+                    continue
             except _StoreFailed as exc:
                 bad += 1
                 self._mark_store_failed(job_id, item["id"], str(exc)[:200])
@@ -761,7 +787,8 @@ class CreatorJobService:
             except _StoreFailed as exc:
                 last = str(exc)
                 continue
-        # 抖音没有「拿作品页现解析」的路子（要开浏览器，一条几十秒），只能报地址失效
+        # 抖音没有「拿作品页现解析」的路子（要开浏览器，一条几十秒），只能重扫列表换地址；
+        # 列表里本来就没地址（``urls`` 为空）另说，那种重扫也救不回来。
         if item["platform"] == "bilibili" and item.get("source_url") and self.media_resolver is not None:
             try:
                 media = self.media_resolver.resolve(item["source_url"], media_type=media_type)
@@ -774,7 +801,47 @@ class CreatorJobService:
             filename = f"c{item['id']}-{item['video_id']}.{ext}"
             size, name = self._stream_to(source, "bilibili", storage, filename)
             return self._attach(item["id"], job["id"], storage, size, name)
+        if urls:
+            raise _LinksExpired(last)
         raise _StoreFailed(last)
+
+    def _reload_item(self, job_id: int, item_id: int) -> dict | None:
+        """重扫之后重新读一条，拿到换过的 ``play_urls``。"""
+        with self.engine.begin() as c:
+            row = c.execute(text(
+                "SELECT id, video_id, platform, title, source_url, play_urls, duration_sec"
+                " FROM creator_items WHERE job_id=:j AND id=:i"), {"j": job_id, "i": item_id}).first()
+        return dict(row._mapping) if row is not None else None
+
+    def _rescan_links(self, job_id: int, user_id: str) -> bool:
+        """落盘时撞上地址失效 → 重扫一次列表，把条目的播放地址换成新签的。
+
+        只做「换地址」：不新增条目、不动计数与游标（与 ``run(refresh=True)`` 同一套写法）。
+        抖音的列表必须走浏览器桥接，一次调用就能拿到 ``creator_scan_batch`` 深度内的全部作品，
+        翻到列表末尾就停。返回是否真的换到了新地址。
+        """
+        job = self.get(user_id, job_id)
+        ref = CreatorRef(Platform(job["platform"]), job["creator_id"], job["source_url"])
+        cookie_file, _src = self.cookie_fn(ref.platform)
+        page_size = max(int(self.s.creator_page_size),
+                        int(getattr(self.s, "creator_scan_batch", 0) or 0))
+        start, pages, updated = 1, 0, 0
+        try:
+            while pages < self.s.creator_max_pages_per_run and self._status(job_id) == "running":
+                window = self.window_fn(ref, start, page_size, cookie_file)
+                if not window.items:
+                    break
+                updated += self._refresh_links(job_id, window.items)
+                start += len(window.items)
+                pages += 1
+                if not window.has_more:
+                    break
+        except Exception as exc:  # noqa: BLE001 - 重扫失败就按原错误报，不拖垮整个任务
+            log.warning("批量任务 %s 自动重扫失败：%s", job_id, type(exc).__name__)
+            return False
+        if updated:
+            log.info("批量任务 %s 自动重扫：更新 %s 条播放地址", job_id, updated)
+        return updated > 0
 
     def _stream_to(self, url: str, platform: str, storage: str, filename: str) -> tuple[int, str]:
         """下载到本地文件（临时名 → 原子改名），返回（字节数, 相对文件名）。"""

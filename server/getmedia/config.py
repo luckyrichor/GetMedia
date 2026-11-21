@@ -103,7 +103,7 @@ class Settings:
     # 服务端可选落盘的配额（0 = 禁用该模式）
     cache_ttl_seconds: int = 86400          # 单条提取的临时缓存保留 1 天
     cache_quota_bytes: int = 1 * 1024**3    # 服务器暂存（缓存）1 GiB
-    archive_quota_bytes: int = 5 * 1024**3  # 服务器长期保存（归档）5 GiB，满了按时间删最旧
+    archive_quota_bytes: int = 5 * 1024**3  # 服务器保留（归档）5 GiB，满了按时间删最旧
     # 批量提取“服务器暂存”的保留期：一次任务可能跑几小时，1 天太短，给 7 天
     creator_cache_ttl_seconds: int = 7 * 86400
     # 每账号曲库行数上限（只算未删除的元数据行）。手机端同步会往里写，防跑飞；0 = 不限制

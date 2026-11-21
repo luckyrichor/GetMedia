@@ -93,7 +93,7 @@ describe('批量提取', () => {
     await until(() => text().includes('还没有批量任务'));
 
     await fillUrl('12345');
-    await choose('存放方式', '服务器长期保存');
+    await choose('存放方式', '服务器保留');
     await click(button('开始提取'));
     await until(() => text().includes('某个 UP 主'));
 
@@ -340,7 +340,7 @@ describe('批量提取', () => {
     const rows = Array.from(document.querySelectorAll('.storage-notes li'));
     expect(rows).toHaveLength(3);
     expect(rows.map((r) => r.querySelector('strong')?.textContent)).toEqual([
-      '只记清单', '服务器暂存', '服务器长期保存',
+      '只记清单', '服务器暂存', '服务器保留',
     ]);
     expect(rows[0]!.textContent).toContain('不下载文件');
     expect(rows[0]!.classList.contains('on')).toBe(true);

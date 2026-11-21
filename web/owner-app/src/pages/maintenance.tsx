@@ -9,7 +9,7 @@ import { ownerApi, type DiagReport, type StorageReport } from '../api';
 import { platformName } from '../labels';
 import { Empty, ErrorBox, Field, fmtBytes, fmtTime, Loading } from '../ui';
 
-const STORAGE_LABEL: Record<string, string> = { metadata: '只记清单', archive: '长期保存', cache: '暂存' };
+const STORAGE_LABEL: Record<string, string> = { metadata: '只记清单', archive: '保留', cache: '暂存' };
 
 export function MaintenancePage() {
   const [st, setSt] = useState<StorageReport | null>(null);

@@ -7,7 +7,7 @@ export const platformName = (p: string | null | undefined) => (p ? PLATFORM[p] ?
 export const STORAGE: Record<string, string> = {
   metadata: '只记清单',
   cache: '服务器暂存',
-  archive: '服务器长期保存',
+  archive: '服务器保留',
   phone: '只记清单',   // 旧数据里的「手机下载」，行为本来就等于只记清单
 };
 
