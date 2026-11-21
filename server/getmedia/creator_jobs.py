@@ -221,8 +221,16 @@ class CreatorJobService:
         return self.get(user_id, job_id)
 
     def retry(self, user_id: str, job_id: int) -> dict:
-        """把失败条目重置为 pending，并让任务重新可跑。"""
-        self._owned(user_id, job_id)
+        """把失败条目重置为 pending，并让任务重新可跑。
+
+        已经扫到列表末尾的任务，游标越过最后一条，再跑一次什么也碰不到——这种时候改成
+        「从第一条重扫、只刷新播放地址」：平台在列表里给的直链会失效，只有重扫能换新的。
+        还在中途（暂停 / 失败）的任务仍然按原游标续扫，不去动已入库的地址。
+        """
+        job = self._owned(user_id, job_id)
+        total = int(job["total"] or 0)
+        start = int((job["cursor"] or {}).get("start") or 1)
+        rescan = job["status"] == "done" and total > 0 and start - 1 >= total
         with self.engine.begin() as c:
             n = c.execute(text("UPDATE creator_items SET download_state='pending', error=NULL,"
                                " updated_at=:n WHERE job_id=:j AND download_state='failed'"),
@@ -230,7 +238,7 @@ class CreatorJobService:
             c.execute(text("UPDATE creator_jobs SET status='pending', pause_reason=NULL, failed=0,"
                            " finished_at=NULL, updated_at=:n WHERE id=:j"),
                       {"n": self.now(), "j": job_id})
-        return {"requeued": int(n), "job": self.get(user_id, job_id)}
+        return {"requeued": int(n), "rescan": rescan, "job": self.get(user_id, job_id)}
 
     # ---------- 条目 ----------
     def items(self, user_id: str, job_id: int, *, state: str | None = None, limit: int = 100,
@@ -407,8 +415,12 @@ class CreatorJobService:
                 "play_urls": list(v.play_urls)}
 
     # ---------- 执行 ----------
-    def run(self, job_id: int, *, max_pages: int | None = None) -> dict:
-        """扫描循环；可由 BackgroundTasks 调用。幂等：完成的、取消的、暂停的直接返回。"""
+    def run(self, job_id: int, *, max_pages: int | None = None, refresh: bool = False) -> dict:
+        """扫描循环；可由 BackgroundTasks 调用。幂等：完成的、取消的、暂停的直接返回。
+
+        ``refresh=True`` 是维护模式（由已跑完任务的重试触发）：从第一条重新扫列表，
+        只把 ``play_urls`` 换成最新地址，不新增条目、不动游标、不改变已有计数。
+        """
         with self.engine.begin() as c:
             row = c.execute(text(f"SELECT {self._JOB_COLS}, user_id FROM creator_jobs WHERE id=:i"),
                             {"i": job_id}).first()
@@ -423,14 +435,16 @@ class CreatorJobService:
         cookie_file, _src = self.cookie_fn(ref.platform)
         sel = Selection(mode=job["mode"], since=job["since_ts"], until=job["until_ts"],
                         n=job["limit_n"], include_pinned=job["include_pinned"])
-        start = int((job["cursor"] or {}).get("start") or 1)
+        start = 1 if refresh else int((job["cursor"] or {}).get("start") or 1)
         limit_pages = max_pages if max_pages is not None else self.s.creator_max_pages_per_run
         # 「全部作品」一次抓够：抖音的作品列表只能靠浏览器桥接，每次窗口都要从头
         # 重新滚到 need 深度，按 20 条一页翻 300 条会做十几轮重复抓取（几分钟）。
         # 其余模式仍按 creator_page_size 小步走，latest_n/date_range 要尽早停。
         page_size = int(self.s.creator_page_size)
-        if job["mode"] == "all":
+        if refresh or job["mode"] == "all":
             page_size = max(page_size, int(getattr(self.s, "creator_scan_batch", 0) or 0))
+        # 还没刷到地址的条目；扫到全部命中就收工，不必翻到列表末尾
+        left = self._item_ids(job_id) if refresh else set()
 
         with self.engine.begin() as c:
             c.execute(text("UPDATE creator_jobs SET status='running', started_at=COALESCE(started_at,:n),"
@@ -439,21 +453,31 @@ class CreatorJobService:
         paused_reason = None
         pages = 0
         try:
-            pinned = self.pinned_fn(ref, cookie_file)
+            if refresh and not left:
+                self._finish(job_id, "done")
+                return self.get(user_id, job_id)
+            pinned = set() if refresh else self.pinned_fn(ref, cookie_file)
             while pages < limit_pages:
                 window = self.window_fn(ref, start, page_size, cookie_file)
                 if not window.items:
                     break
-                stop = self._absorb(job_id, window.items, sel, pinned, job["media_type"])
+                if refresh:
+                    self._refresh_links(job_id, window.items)
+                    left.difference_update(v.video_id for v in window.items)
+                    stop = not left
+                else:
+                    stop = self._absorb(job_id, window.items, sel, pinned, job["media_type"])
                 start += len(window.items)
                 pages += 1
-                self._save_cursor(job_id, start, window.items)
+                if not refresh:
+                    self._save_cursor(job_id, start, window.items)
                 if stop:
                     break
                 if not window.has_more:
                     break
             else:
-                paused_reason = "segment_limit"
+                # 刷新地址是一次性维护动作：扫到上限就收工，别把任务挂成「分段暂停」
+                paused_reason = None if refresh else "segment_limit"
         except CreatorError as exc:
             self._finish(job_id, "failed", reason=str(exc)[:200])
             return self.get(user_id, job_id)
@@ -469,6 +493,30 @@ class CreatorJobService:
         else:
             self._finish(job_id, "done")
         return self.get(user_id, job_id)
+
+    def _item_ids(self, job_id: int) -> set[str]:
+        """该任务已入库的作品 id，用于刷新模式判断「还要扫多少」。"""
+        with self.engine.begin() as c:
+            return {r[0] for r in c.execute(
+                text("SELECT video_id FROM creator_items WHERE job_id=:j"), {"j": job_id}).all()}
+
+    def _refresh_links(self, job_id: int, videos: list[CreatorVideo]) -> int:
+        """只更新已有条目的播放地址；不插入、不改标题/时长/计数。返回真正变了的条数。"""
+        now = self.now()
+        updated = 0
+        with self.engine.begin() as c:
+            for v in videos:
+                urls = list(v.play_urls or ())
+                if not urls:
+                    continue
+                r = c.execute(text(
+                    "UPDATE creator_items SET play_urls=:pu, play_urls_at=:n, updated_at=:n"
+                    " WHERE job_id=:j AND platform=:p AND video_id=:v AND page=1"
+                    " AND (play_urls IS NULL OR play_urls<>:pu)"),
+                    {"pu": json.dumps(urls, ensure_ascii=False), "n": now, "j": job_id,
+                     "p": v.platform.value, "v": v.video_id})
+                updated += r.rowcount
+        return updated
 
     def _absorb(self, job_id: int, videos: list[CreatorVideo], sel: Selection,
                 pinned: set[str], media_type: str) -> bool:

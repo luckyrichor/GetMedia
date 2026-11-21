@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from conftest import hdr, make_owner
 from getmedia.alerts import RecordingAlertSink
@@ -229,6 +231,71 @@ def test_import_items_dedupes(jenv):
     assert out["added"] == 1
     again = jenv.client.post(f"/v2/creators/jobs/{jid}/items:import", headers=hdr(jenv.token), json=body).json()
     assert again["added"] == 0
+
+
+def links_of(env, jid):
+    svc = env.app.state.creator_jobs
+    with svc.engine.begin() as c:
+        return {vid: pu for vid, pu in c.execute(
+            text("SELECT video_id, play_urls FROM creator_items WHERE job_id=:j"), {"j": jid}).all()}
+
+
+class LinkLister(Lister):
+    """每次扫描返回带版本号的播放地址，用来验证「重试会刷新地址」。"""
+
+    def __init__(self, videos=None):
+        super().__init__(videos)
+        self.version = 1
+
+    def __call__(self, ref, start, count, cookie_file=None):
+        win = super().__call__(ref, start, count, cookie_file)
+        items = [replace(v, play_urls=(f"https://cdn.test/{self.version}/{v.video_id}",))
+                 for v in win.items]
+        return CreatorWindow(profile=win.profile, items=items, total=win.total, has_more=win.has_more)
+
+
+def test_retry_on_finished_job_refreshes_links(tmp_path):
+    """已扫完的任务点重试：从第一条重扫，只换播放地址，不新增条目。"""
+    lister = LinkLister()
+    env = build(tmp_path, lister=lister)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/jobs", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "latest_n", "n": 3})
+    jid = r.json()["id"]
+    before = links_of(env, jid)
+    assert len(before) == 3
+    assert all("cdn.test/1/" in (v or "") for v in before.values())
+
+    lister.version = 2
+    out = env.client.post(f"/v2/creators/jobs/{jid}/retry", headers=hdr(token)).json()
+    assert out["rescan"] is True
+
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()
+    assert job["status"] == "done", job
+    assert job["total"] == 3, "刷新不该新增条目"
+    after = links_of(env, jid)
+    assert set(after) == set(before)
+    assert all("cdn.test/2/" in (v or "") for v in after.values())
+    # 从第一条重扫，而不是从已越过末尾的游标开始
+    assert lister.calls[-1][0] == 1
+
+
+def test_retry_on_unfinished_job_resumes_instead(tmp_path):
+    """没扫完的任务点重试仍按游标续扫，不做地址刷新。"""
+    env = build(tmp_path, creator_max_pages_per_run=1, creator_scan_batch=20)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/jobs", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "all"})
+    jid = r.json()["id"]
+    paused = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()
+    assert paused["status"] == "paused" and paused["cursor"]["start"] == 21
+
+    out = env.client.post(f"/v2/creators/jobs/{jid}/retry", headers=hdr(token)).json()
+    assert out["rescan"] is False
+    again = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()
+    assert again["cursor"]["start"] > 21, again
 
 
 def test_pause_cancel_and_retry(tmp_path):
