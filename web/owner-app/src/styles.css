@@ -271,11 +271,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   font-size: 0.78rem; font-variant-numeric: tabular-nums; color: var(--muted);
 }
 .job-hide {
-  flex: none; background: none; border: 0; padding: 2px 2px; margin-left: 2px;
-  font: inherit; font-size: 0.78rem; color: var(--muted); cursor: pointer;
-  border-bottom: 1px dashed transparent;
+  flex: none; margin-left: 2px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
+  padding: 3px 8px; font: inherit; font-size: 0.78rem; line-height: 1.25;
+  color: var(--muted); cursor: pointer;
 }
-.job-hide:hover { color: var(--text); border-bottom-color: var(--line); }
+.job-hide:hover { color: var(--text); border-color: var(--muted); background: var(--bg); }
 .job-hide:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .job .small + .small { margin-top: 2px; }
 .grow { flex: 1; min-width: 0; }
@@ -285,6 +286,11 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .items { border-top: 1px dashed var(--line); margin-top: 10px; padding-top: 10px; }
 .item-row { display: flex; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px dashed var(--line); }
 .item-row:last-child { border-bottom: 0; }
+/* 作品序号：右对齐等宽，几百条时也能一眼对齐 */
+.item-no {
+  flex: none; min-width: 2.2rem; text-align: right;
+  font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums;
+}
 .plain.tight li { padding: 4px 0; }
 
 .split { display: grid; grid-template-columns: minmax(14rem, 20rem) minmax(0, 1fr); gap: 16px; margin-top: 10px; }

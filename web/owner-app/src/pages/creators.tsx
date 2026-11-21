@@ -487,8 +487,9 @@ function JobItems({ jobId }: { jobId: number }) {
         </div>
       )}
       <ul class="plain tight">
-        {items.map((i) => (
+        {items.map((i, idx) => (
           <li class="item-row">
+            <span class="item-no" aria-hidden="true">{idx + 1}</span>
             <span class={`tag ${i.download_state === 'done' ? 'ok' : i.download_state === 'failed' ? 'bad' : ''}`}>
               {ITEM[i.download_state] ?? i.download_state}
             </span>

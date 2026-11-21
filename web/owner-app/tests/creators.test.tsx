@@ -154,6 +154,8 @@ describe('博主批量', () => {
     ]);
     expect(links.every((a) => a.hasAttribute('download'))).toBe(true);
     expect(text()).toContain('下载全部（2 条）');
+    // 每条作品前有连续序号
+    expect(Array.from(document.querySelectorAll('.item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
   });
 
   test('抖音被挡时显示服务端给的原因，不粉饰成网络问题', async () => {
