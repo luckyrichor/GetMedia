@@ -488,7 +488,9 @@ export function CreatorsPage() {
                     重试失败条目
                   </button>
                 )}
-                {j.status === 'done' && (
+                {/* 只有抖音需要「换地址」：直链是扫描时存下的签名地址，放久了会被 CDN 拒。
+                    B 站每次下载都会现解析，这个按钮对它没有意义，所以不显示。 */}
+                {j.status === 'done' && j.platform === 'douyin' && (
                   <button
                     type="button"
                     class="btn btn-ghost small"
@@ -515,6 +517,11 @@ function JobItems({ jobId }: { jobId: number }) {
   const [total, setTotal] = useState(0);
   const [phase, setPhase] = useState<'loading' | 'ok' | 'error'>('loading');
   const [err, setErr] = useState('');
+  const [note, setNote] = useState('');
+  const [busyId, setBusyId] = useState('');
+  /** 批量下载的进度；null 表示没在跑。stop 是给循环看的「立即停」标志。 */
+  const [run, setRun] = useState<{ done: number; total: number } | null>(null);
+  const stopRef = useRef(false);
 
   async function page(offset: number) {
     try {
@@ -535,22 +542,105 @@ function JobItems({ jobId }: { jobId: number }) {
   if (phase === 'error') return <ErrorBox message={err} retry={() => void page(0)} />;
   if (phase === 'loading') return <Loading what="任务条目" />;
 
-  /** 逐条触发浏览器下载：每条一次请求，服务端转发完就关，不在服务器落盘。 */
-  function downloadAll() {
-    const todo = items.filter((i) => i.video_id);
-    if (!todo.length) return;
-    if (!confirm(`要把这 ${todo.length} 条逐个下载到本机吗？\n\n浏览器第一次会询问"是否允许下载多个文件"，请选允许。`)) return;
-    todo.forEach((i, idx) => {
-      // 拉开间隔，否则浏览器会把连续点击当成弹窗滥用直接拦掉
-      setTimeout(() => {
-        const a = document.createElement('a');
-        a.href = creatorItemUrl(jobId, i.video_id);
-        a.download = '';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }, idx * 1200);
-    });
+  const sleep = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms));
+
+  /** 把任务的全部条目取回来（接口一页 100 条）。「下载全部」必须覆盖全部，
+   *  不能只用当前已经展开显示的那 100 条。 */
+  async function fetchAll(): Promise<CreatorItem[]> {
+    const acc: CreatorItem[] = [];
+    let guard = 0;
+    for (;;) {
+      const out = await ownerApi.creatorItems(jobId, acc.length);
+      acc.push(...out.items);
+      setTotal(out.total);
+      setItems([...acc]);
+      guard += 1;
+      if (out.items.length === 0 || acc.length >= out.total || guard > 100) break;
+    }
+    return acc;
+  }
+
+  /** 先探 2 个字节：能出流才真正下载。
+   *  这样直链过期时不会把一段 JSON 错误存成 .mp4，也能区分「该换地址」和「真没了」。 */
+  async function probe(url: string): Promise<{ ok: boolean; status: number; detail: string }> {
+    try {
+      const r = await fetch(url, { headers: { Range: 'bytes=0-1' }, credentials: 'same-origin' });
+      if (r.ok) {
+        // 只读了 2 个字节，别把整条流留在内存里
+        void r.body?.cancel().catch(() => undefined);
+        return { ok: true, status: r.status, detail: '' };
+      }
+      // 错误响应本身就是 JSON，json() 读完即结束，不要再 cancel（已消费的流会抛 TypeError）
+      const body = (await r.json().catch(() => null)) as { detail?: string } | null;
+      return { ok: false, status: r.status, detail: body?.detail || `HTTP ${r.status}` };
+    } catch (e) {
+      return { ok: false, status: 0, detail: messageFor(e) };
+    }
+  }
+
+  function save(url: string) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  /** 下一条。返回 false 表示这条没成（403/409/网络），由调用方决定是跳过还是停。 */
+  async function one(item: CreatorItem): Promise<boolean> {
+    const url = creatorItemUrl(jobId, item.video_id);
+    setBusyId(item.video_id);
+    try {
+      const r = await probe(url);
+      if (r.ok) {
+        save(url);
+        return true;
+      }
+      setNote(r.status === 409
+        // 服务端在后台重扫了，换完地址再点一次就行；不自动等 60 秒，免得批量下载卡在这里
+        ? `「${item.title}」的直链已过期${r.detail.includes('已在后台') ? '，服务器正在换新地址（约 1 分钟）' : ''}，稍后重试即可。`
+        : `「${item.title}」下载失败：${r.detail}`);
+      return false;
+    } finally {
+      setBusyId('');
+    }
+  }
+
+  async function downloadAll() {
+    setNote('');
+    let all = items;
+    if (items.length < total) {
+      setNote('正在取回全部条目…');
+      try {
+        all = await fetchAll();
+      } catch (e) {
+        setNote(`取回条目失败：${messageFor(e)}`);
+        return;
+      }
+      setNote('');
+    }
+    if (!all.length) return;
+    if (!confirm(`要把这 ${all.length} 条逐个下载到本机吗？\n\n浏览器第一次会询问"是否允许下载多个文件"，请选允许。\n下载过程中可以随时点「停止下载」。`)) return;
+
+    stopRef.current = false;
+    setRun({ done: 0, total: all.length });
+    let failed = 0;
+    let started = 0;
+    for (let i = 0; i < all.length; i++) {
+      if (stopRef.current) break;
+      const ok = await one(all[i] as CreatorItem);
+      if (ok) started += 1;
+      else failed += 1;
+      setRun({ done: i + 1, total: all.length });
+      if (stopRef.current) break;
+      // 拉开间隔：连续触发下载会被浏览器当成弹窗滥用，直接拦掉
+      if (i < all.length - 1) await sleep(1200);
+    }
+    const stopped = stopRef.current;
+    setRun(null);
+    setNote(`${stopped ? '已停止' : '已跑完'}：${started} 条开始下载，共 ${all.length} 条`
+      + `${failed ? `，${failed} 条取不到流` : ''}。`);
   }
 
   return (
@@ -562,14 +652,21 @@ function JobItems({ jobId }: { jobId: number }) {
       </div>
       {items.length > 0 && (
         <div class="row-actions" style="margin-bottom:6px">
-          <button type="button" class="btn btn-ghost small" onClick={downloadAll}>
-            下载全部（{items.length} 条）
-          </button>
-          {items.length < total && (
-            <span class="small muted">只含已加载的 {items.length} 条，可先「加载更多」</span>
+          {run ? (
+            <>
+              <button type="button" class="btn btn-ghost small" onClick={() => { stopRef.current = true; }}>
+                停止下载
+              </button>
+              <span class="small muted">正在下载 {run.done} / {run.total}（点「停止下载」立即收手，已开始的这条会下完）</span>
+            </>
+          ) : (
+            <button type="button" class="btn btn-ghost small" disabled={busyId !== ''} onClick={() => void downloadAll()}>
+              下载全部（{total || items.length} 条）
+            </button>
           )}
         </div>
       )}
+      {note && <p class="small muted">{note}</p>}
       <ul class="plain tight">
         {items.map((i, idx) => (
           <li class="item-row">
@@ -587,9 +684,14 @@ function JobItems({ jobId }: { jobId: number }) {
               {i.published_at ? ` · ${fmtTime(i.published_at)}` : ''}
               {i.track_id ? ` · 媒体库 #${i.track_id}` : ''}
             </span>
-            <a class="btn btn-ghost small nowrap" href={creatorItemUrl(jobId, i.video_id)} download>
-              下载
-            </a>
+            <button
+              type="button"
+              class="btn btn-ghost small nowrap"
+              disabled={busyId === i.video_id || run !== null}
+              onClick={() => void one(i)}
+            >
+              {busyId === i.video_id ? '检查中…' : '下载'}
+            </button>
           </li>
         ))}
       </ul>

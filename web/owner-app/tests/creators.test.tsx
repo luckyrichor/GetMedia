@@ -19,6 +19,14 @@ function job(over: Record<string, unknown> = {}) {
   };
 }
 
+function row(over: Record<string, unknown> = {}) {
+  return {
+    id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品',
+    duration_sec: 204, published_at: null, is_pinned: false, cover_url: null, source_url: 'x',
+    download_state: 'pending', track_id: null, error: null, ...over,
+  };
+}
+
 const PREVIEW = {
   profile: { platform: 'bilibili', creator_id: '12345', name: '某个 UP 主', avatar_url: null,
     url: 'https://space.bilibili.com/12345', total_videos: 88, follower_count: 1000, signature: null },
@@ -121,7 +129,7 @@ describe('批量提取', () => {
 
   test('已完成的任务给「刷新地址」，点了就调 retry', async () => {
     server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job({ status: 'done' })] } },
+      [JOBS]: { json: { jobs: [job({ status: 'done', platform: 'douyin', source_url: 'https://www.douyin.com/user/1' })] } },
       'POST /v2/creators/jobs/3/retry': {
         json: { requeued: 0, rescan: true, job: job({ status: 'done' }) },
       },
@@ -133,6 +141,17 @@ describe('批量提取', () => {
     expect(() => button('重试失败条目')).toThrow();
     await click(button('刷新地址'));
     await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/retry'));
+  });
+
+  test('B 站任务不给「刷新地址」——它每次下载都现解析，换地址没有意义', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ status: 'done' })] } },
+    }));
+    mount('/creators');
+    await until(() => text().includes('进度：7 / 20'));
+
+    expect(() => button('刷新地址')).toThrow();
+    expect(() => button('重试失败条目')).toThrow();
   });
 
   test('展开条目：取分页条目并显示每个条目的状态', async () => {
@@ -162,13 +181,9 @@ describe('批量提取', () => {
     expect(text()).toContain('平台拒绝');
     expect(text()).toContain('媒体库 #9');
 
-    // 每条都能直接下到本机：链接指向任务的条目文件接口
-    const links = Array.from(document.querySelectorAll('.item-row a')) as HTMLAnchorElement[];
-    expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      expect.stringMatching(/\/api\/v2\/creators\/jobs\/3\/items\/BV1\/file$/),
-      expect.stringMatching(/\/api\/v2\/creators\/jobs\/3\/items\/BV2\/file$/),
-    ]);
-    expect(links.every((a) => a.hasAttribute('download'))).toBe(true);
+    // 每条都能直接下到本机：按钮点下去才发请求（先探 2 字节，能出流才真正下载）
+    const rows = Array.from(document.querySelectorAll('.item-row button')) as HTMLButtonElement[];
+    expect(rows.map((b) => b.textContent)).toEqual(['下载', '下载']);
     expect(text()).toContain('下载全部（2 条）');
     // 每条作品前有连续序号
     expect(Array.from(document.querySelectorAll('.item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
@@ -176,8 +191,7 @@ describe('批量提取', () => {
     expect(text()).toContain('已入库');
   });
 
-  test('手机下载的任务条目一直 pending，不显示「待处理」三个字', async () => {
-    server(ownerRoutes({
+  test('手机下载的任务条目一直 pending，不显示「待处理」三个字', async () => {    server(ownerRoutes({
       [JOBS]: { json: { jobs: [job({ storage: 'phone' })] } },
       'GET /v2/creators/jobs/3/items?limit=100&offset=0': {
         json: {
@@ -202,7 +216,7 @@ describe('批量提取', () => {
     expect(document.querySelectorAll('.item-row .tag')).toHaveLength(0);
     // 序号与下载按钮不受影响
     expect(Array.from(document.querySelectorAll('.item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
-    expect(document.querySelectorAll('.item-row a')).toHaveLength(2);
+    expect(document.querySelectorAll('.item-row button')).toHaveLength(2);
   });
 
   test('抖音被挡时显示服务端给的原因，不粉饰成网络问题', async () => {
@@ -352,5 +366,76 @@ describe('批量提取', () => {
     expect(rows[0]!.textContent).toContain('文件由手机逐条下载');
     expect(rows[0]!.classList.contains('on')).toBe(true);
     expect(rows[1]!.classList.contains('on')).toBe(false);
+  });
+
+  test('单条下载：先探 2 字节确认能出流，再交给浏览器存盘', async () => {
+    const saved = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job()] } },
+      'GET /v2/creators/jobs/3/items?limit=100&offset=0': {
+        json: { items: [row()], total: 1, limit: 100, offset: 0 },
+      },
+      'GET /v2/creators/jobs/3/items/BV1/file': { json: {} },
+    }));
+    mount('/creators');
+    await until(() => text().includes('看条目'));
+    await click(button('看条目'));
+    await until(() => text().includes('第一条作品'));
+
+    await click(button('下载'));
+    await until(() => calls.some((c) => c.path.endsWith('/items/BV1/file')));
+    await until(() => saved.mock.calls.length > 0);
+  });
+
+  test('直链过期时提示「服务器正在换新地址」，不把错误当文件存下来', async () => {
+    const saved = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job()] } },
+      'GET /v2/creators/jobs/3/items?limit=100&offset=0': {
+        json: { items: [row()], total: 1, limit: 100, offset: 0 },
+      },
+      'GET /v2/creators/jobs/3/items/BV1/file': {
+        status: 409,
+        json: { detail: '这条的直链已失效（多半是地址过期，作品本身可能还在）。'
+          + '已在后台重新扫描换新地址，约 1 分钟后重试即可' },
+      },
+    }));
+    mount('/creators');
+    await until(() => text().includes('看条目'));
+    await click(button('看条目'));
+    await until(() => text().includes('第一条作品'));
+
+    await click(button('下载'));
+    await until(() => text().includes('服务器正在换新地址'));
+    // 409 不落盘：否则浏览器会把一段 JSON 报错存成 .mp4
+    expect(saved).not.toHaveBeenCalled();
+  });
+
+  test('下载全部：先把没加载的条目取回来，运行中可以停', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job()] } },
+      'GET /v2/creators/jobs/3/items?limit=100&offset=0': {
+        json: { items: [row(), row({ id: 2, video_id: 'BV2', title: '第二条作品' })], total: 3, limit: 100, offset: 0 },
+      },
+      'GET /v2/creators/jobs/3/items?limit=100&offset=2': {
+        json: { items: [row({ id: 3, video_id: 'BV3', title: '第三条作品' })], total: 3, limit: 100, offset: 2 },
+      },
+      'GET /v2/creators/jobs/3/items/BV1/file': { json: {} },
+      'GET /v2/creators/jobs/3/items/BV2/file': { json: {} },
+      'GET /v2/creators/jobs/3/items/BV3/file': { json: {} },
+    }));
+    mount('/creators');
+    await until(() => text().includes('看条目'));
+    await click(button('看条目'));
+    await until(() => text().includes('下载全部（3 条）'));
+
+    await click(button('下载全部（3 条）'));
+    // 「全部」不等于「已加载的那 100 条」：第二页也要取回来
+    await until(() => calls.some((c) => c.path.endsWith('/items') && c.search.includes('offset=2')));
+    await until(() => text().includes('正在下载'));
+    await click(button('停止下载'));
+    await until(() => text().includes('已停止'));
   });
 });

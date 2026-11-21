@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from typing import Literal
 
 import httpx
@@ -59,6 +60,22 @@ class ImportItem(BaseModel):
 class ImportBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     items: list[ImportItem] = Field(min_length=1, max_length=2000)
+
+
+def _spawn(fn, /, *args, **kwargs) -> None:
+    """把长任务丢到后台线程。
+
+    这里不能用 BackgroundTasks：我们在同一个请求里要 ``raise ApiError``，而异常响应
+    是异常处理器新造的，注册在正常响应上的 background 任务会被丢掉——重扫就永远不会发生。
+    """
+
+    def runner():
+        try:
+            fn(*args, **kwargs)
+        except Exception:  # noqa: BLE001 - 后台线程里没人接，只能记日志
+            log.exception("后台重扫任务失败")
+
+    threading.Thread(target=runner, name="gm-creator-refresh", daemon=True).start()
 
 
 def register(app, guard, engine, clock, *, service: CreatorJobService | None = None,
@@ -255,9 +272,20 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
 
                 return StreamingResponse(body(), status_code=resp.status_code, headers=headers)
 
+        # 走到这里说明候选直链全取不到流。抖音没有「拿作品页现解析」的路子（要开浏览器，
+        # 一条几十秒），所以顺手给任务排一次重扫换地址，前端等一分钟重试即可——省掉
+        # 「让用户自己去找刷新按钮」这一步。
+        state = service.request_refresh(ctx.user_id, jid)
+        if state == "started":
+            _spawn(service.run, jid, refresh=True)
+            raise ApiError(409, "media_link_expired",
+                           "这条的直链已失效（多半是地址过期，作品本身可能还在）。"
+                           "已在后台重新扫描换新地址，约 1 分钟后重试即可")
+        if state == "busy":
+            raise ApiError(409, "media_link_expired",
+                           "这条的直链已失效。后台正在重新扫描换地址，请稍后再试")
         raise ApiError(409, "media_link_expired",
-                       "这条的播放地址已失效（作品可能已删除或设为私密），"
-                       "需要重新扫描任务换一批地址后再下载")
+                       "这条的直链已失效，作品可能已被删除或设为私密，取不到文件")
 
     @app.post("/v2/creators/jobs/{job_id}/items/{video_id}/state")
     def item_state(job_id: str, video_id: str, body: ItemStateBody, ctx: AuthCtx = Depends(guard)):

@@ -298,6 +298,45 @@ def test_retry_on_unfinished_job_resumes_instead(tmp_path):
     assert again["cursor"]["start"] > 21, again
 
 
+def test_request_refresh_queues_once_and_skips_unfinished(tmp_path):
+    """下载撞上「直链全失效」时请求重扫：同一任务只排一次，没跑完的任务不排。"""
+    lister = LinkLister()
+    env = build(tmp_path, lister=lister)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/jobs", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "latest_n", "n": 3})
+    jid = r.json()["id"]
+    svc = env.app.state.creator_jobs
+    with svc.engine.begin() as c:
+        uid = c.execute(text("SELECT user_id FROM creator_jobs WHERE id=:j"), {"j": jid}).scalar_one()
+
+    assert svc.request_refresh(uid, jid) == "started"
+    # 第二次不再排：一个人点了下载，几个人同时点不该开好几个浏览器
+    assert svc.request_refresh(uid, jid) == "busy"
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()
+    assert job["status"] == "pending", "排上重扫后任务应回到待跑，交给后台执行"
+    assert job["total"] == 3
+
+
+def test_request_refresh_noop_for_unfinished_job(tmp_path):
+    """没扫完的任务缺的是后面的作品，不是地址：不该拿重扫把游标冲掉。"""
+    env = build(tmp_path, creator_max_pages_per_run=1, creator_scan_batch=20)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/jobs", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "all"})
+    jid = r.json()["id"]
+    svc = env.app.state.creator_jobs
+    with svc.engine.begin() as c:
+        uid = c.execute(text("SELECT user_id FROM creator_jobs WHERE id=:j"), {"j": jid}).scalar_one()
+
+    before = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()["cursor"]["start"]
+    assert svc.request_refresh(uid, jid) == "noop"
+    after = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()["cursor"]["start"]
+    assert after == before, "noop 不该动游标"
+
+
 def test_pause_cancel_and_retry(tmp_path):
     env = build(tmp_path, creator_max_pages_per_run=1, creator_scan_batch=20)
     env.app.state.runtime.write(registration_open=True)

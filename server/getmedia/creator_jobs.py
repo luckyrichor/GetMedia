@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -119,6 +120,10 @@ class CreatorJobService:
         self.window_fn = window_fn or _default_window
         self.pinned_fn = pinned_fn or _default_pinned
         self.cookie_fn = cookie_fn or creator_service.cookie_file_for
+        # 「下载时发现直链全失效 → 自动重扫换地址」的冷却表：同一任务在窗口期内只排一次，
+        # 免得几个人同时点下载就反复开浏览器（一次要滚到几百条，几十秒，还吃风控配额）。
+        self._refresh_lock = threading.Lock()
+        self._refresh_at: dict[int, float] = {}
 
     def now(self) -> int:
         return int(self.clock())
@@ -239,6 +244,34 @@ class CreatorJobService:
                            " finished_at=NULL, updated_at=:n WHERE id=:j"),
                       {"n": self.now(), "j": job_id})
         return {"requeued": int(n), "rescan": rescan, "job": self.get(user_id, job_id)}
+
+    def request_refresh(self, user_id: str, job_id: int, *, cooldown: float = 90.0) -> str:
+        """下载撞上「直链全失效」时，给这个任务排一次重扫换地址。
+
+        返回 ``started`` / ``busy`` / ``noop``：
+
+        - ``started``：这次真的排上了，调用方应把 ``run(refresh=True)`` 丢到后台；
+        - ``busy``：冷却期内已经排过（或任务正在跑），别重复开浏览器；
+        - ``noop``：任务没跑完 / 没条目，重扫没有意义（这时缺的是后续作品，不是地址）。
+
+        只有已经扫到列表末尾的 ``done`` 任务才需要换地址；中途暂停或失败的任务应当
+        按游标续扫，不能拿重扫把游标冲掉。
+        """
+        job = self._owned(user_id, job_id)
+        total = int(job["total"] or 0)
+        start = int((job["cursor"] or {}).get("start") or 1)
+        # 正在跑（或刚被别的请求排上、已回到 pending）：已经在换地址了，别重复开浏览器
+        if job["status"] in ("running", "pending"):
+            return "busy"
+        if job["status"] != "done" or total <= 0 or start - 1 < total:
+            return "noop"
+        now = time.time()
+        with self._refresh_lock:
+            if now - self._refresh_at.get(job_id, 0.0) < cooldown:
+                return "busy"
+            self._refresh_at[job_id] = now
+        out = self.retry(user_id, job_id)
+        return "started" if out["rescan"] else "noop"
 
     # ---------- 条目 ----------
     def items(self, user_id: str, job_id: int, *, state: str | None = None, limit: int = 100,
