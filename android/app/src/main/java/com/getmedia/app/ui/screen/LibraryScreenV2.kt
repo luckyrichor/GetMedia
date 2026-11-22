@@ -206,18 +206,15 @@ private fun SortChip(
             SortField.entries.forEach { f ->
                 DropdownMenuItem(
                     modifier = Modifier.testTag(LibraryToolbarTags.option(f)),
-                    // 当前项只靠右边的勾表示，不加「（当前）」文字：勾已经说清楚了，
+                    // 当前项只靠勾表示，不加「（当前）」文字：勾已经说清楚了，
                     // 再加四个字只是重复，还会把菜单项文字撑长。
-                    text = { Text(f.label) },
-                    onClick = { onPickField(f); menu = false },
-                    trailingIcon = {
-                        if (f == field) {
-                            Icon(
-                                Icons.Default.Check, null, Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
+                    text = {
+                        MenuLabel(
+                            f.label, f == field,
+                            LibraryToolbarTags.optionLabel(f), LibraryToolbarTags.check(f),
+                        )
                     },
+                    onClick = { onPickField(f); menu = false },
                 )
             }
         }
@@ -258,21 +255,18 @@ private fun KindPicker(kind: MediaKind, onPickKind: (MediaKind) -> Unit) {
             MediaKind.entries.forEach { k ->
                 DropdownMenuItem(
                     modifier = Modifier.testTag(LibraryToolbarTags.kind(k)),
-                    // 同排序菜单：当前类型只用勾表示，不写「（当前）」。
-                    text = { Text(kindLabel(k)) },
+                    // 同排序菜单：当前类型只用勾表示，不写「（当前）」，勾也紧跟文字。
+                    text = {
+                        MenuLabel(
+                            kindLabel(k), k == kind,
+                            LibraryToolbarTags.kindOptionLabel(k), LibraryToolbarTags.kindCheck(k),
+                        )
+                    },
                     leadingIcon = {
                         Icon(
                             if (k == MediaKind.AUDIO) Icons.Default.Audiotrack else Icons.Default.Movie,
                             null, Modifier.size(18.dp),
                         )
-                    },
-                    trailingIcon = {
-                        if (k == kind) {
-                            Icon(
-                                Icons.Default.Check, null, Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                        }
                     },
                     onClick = {
                         menu = false
@@ -285,6 +279,39 @@ private fun KindPicker(kind: MediaKind, onPickKind: (MediaKind) -> Unit) {
 }
 
 private fun kindLabel(kind: MediaKind) = if (kind == MediaKind.AUDIO) "音频" else "视频"
+
+/** 菜单项文字与勾之间的间距：只够表示「这两个是一起的」，不多占。 */
+private val MENU_CHECK_GAP = 6.dp
+
+/**
+ * 菜单项的「文字 + 勾」。
+ *
+ * 勾原来放在 [DropdownMenuItem] 的 trailingIcon 里，那一列会被推到菜单最右边；
+ * 菜单宽度按「最长一项 + 勾」算，于是「手动」这种两个字的选项后面空出将近 40dp，
+ * 勾跟文字看着像两件不相干的东西（用户反馈「空白留得太多」）。
+ * 现在勾紧跟文字、固定隔 6dp；菜单整体宽度仍按最长一项算，右侧余量不再影响勾的位置。
+ */
+@Composable
+private fun MenuLabel(
+    label: String,
+    selected: Boolean,
+    labelTag: String? = null,
+    checkTag: String? = null,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(label, Modifier.then(if (labelTag != null) Modifier.testTag(labelTag) else Modifier))
+        if (selected) {
+            Spacer(Modifier.width(MENU_CHECK_GAP))
+            Icon(
+                Icons.Default.Check, null,
+                Modifier.size(16.dp).then(
+                    if (checkTag != null) Modifier.testTag(checkTag) else Modifier,
+                ),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
 
 /**
  * 媒体库顶部的操作条：定时状态 + 「音频/视频」下拉 + 排序 + 导入（视频模式再加「显示画面」）。
@@ -447,6 +474,11 @@ internal object LibraryToolbarTags {
     /** 类型下拉里的选项（音频 / 视频）。 */
     fun kind(kind: MediaKind): String = "library-kind-option-${kind.name}"
     fun option(field: SortField): String = "sort-option-${field.name}"
+    /** 菜单项里紧跟文字的勾，以及文字本身；用来量「勾和文字之间」的间距，别再被推回最右边。 */
+    fun optionLabel(field: SortField): String = "sort-option-${field.name}-label"
+    fun check(field: SortField): String = "sort-option-${field.name}-check"
+    fun kindOptionLabel(kind: MediaKind): String = "library-kind-option-${kind.name}-label"
+    fun kindCheck(kind: MediaKind): String = "library-kind-option-${kind.name}-check"
 }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)

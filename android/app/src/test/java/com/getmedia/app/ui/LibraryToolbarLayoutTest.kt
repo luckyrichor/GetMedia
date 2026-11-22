@@ -301,6 +301,90 @@ class LibraryToolbarLayoutTest {
     }
 
     /**
+     * 勾要紧跟文字：量渲染后的真实 bounds，勾左边 − 文字右边 ≤ 10dp。
+     *
+     * 设计值 6dp，余量留给字体度量与 1px 抗锯齿。上一版把勾放在 trailingIcon 里，
+     * 那一列会被推到菜单最右边，这个差值等于「菜单宽度 − 文字宽度 − 内边距」，
+     * 实测接近 40dp（用户反馈的「空白留得太多」）。所以这条能挡住回退。
+     */
+    @Test
+    @Config(sdk = [33], qualifiers = "w384dp-h854dp-xhdpi")
+    fun sortCheckHugsItsLabel() {
+        rule.setContent {
+            MaterialTheme {
+                LibraryToolbar(
+                    timer = null,
+                    sortField = SortField.MANUAL,
+                    sortAsc = false,
+                    importing = false,
+                    kind = MediaKind.AUDIO,
+                    onPickKind = {},
+                    onToggleDirection = {},
+                    onPickField = {},
+                    onImport = {},
+                    onCancelTimer = {},
+                )
+            }
+        }
+        rule.onNodeWithTag(LibraryToolbarTags.SORT_MENU).performClick()
+        assertCheckHugsLabel(
+            "手动",
+            LibraryToolbarTags.optionLabel(SortField.MANUAL),
+            LibraryToolbarTags.check(SortField.MANUAL),
+        )
+        // 只有当前项有勾。
+        for (f in SortField.entries.filter { it != SortField.MANUAL }) {
+            rule.onNodeWithTag(LibraryToolbarTags.check(f), useUnmergedTree = true).assertDoesNotExist()
+        }
+    }
+
+    /** 类型下拉同理：勾贴着「音频 / 视频」，不贴着菜单右边。 */
+    @Test
+    @Config(sdk = [33], qualifiers = "w384dp-h854dp-xhdpi")
+    fun kindCheckHugsItsLabel() {
+        rule.setContent {
+            MaterialTheme {
+                LibraryToolbar(
+                    timer = null,
+                    sortField = SortField.MANUAL,
+                    sortAsc = false,
+                    importing = false,
+                    kind = MediaKind.AUDIO,
+                    onPickKind = {},
+                    onToggleDirection = {},
+                    onPickField = {},
+                    onImport = {},
+                    onCancelTimer = {},
+                )
+            }
+        }
+        rule.onNodeWithTag(LibraryToolbarTags.KIND).performClick()
+        assertCheckHugsLabel(
+            "音频",
+            LibraryToolbarTags.kindOptionLabel(MediaKind.AUDIO),
+            LibraryToolbarTags.kindCheck(MediaKind.AUDIO),
+        )
+        rule.onNodeWithTag(LibraryToolbarTags.kindCheck(MediaKind.VIDEO), useUnmergedTree = true)
+            .assertDoesNotExist()
+    }
+
+    /** 勾左边 − 文字右边（px）放在 0..10dp 之间，且两者纵向中心对齐。 */
+    private fun assertCheckHugsLabel(label: String, labelTag: String, checkTag: String) {
+        val density = rule.density.density
+        val text = rule.onNodeWithTag(labelTag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val check = rule.onNodeWithTag(checkTag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val gap = check.left - text.right
+        val maxGap = 10.dp.value * density
+        assert(gap in 0f..maxGap) {
+            "「$label」的勾离文字太远：${gap}px，上限 ${maxGap}px（文字 $text，勾 $check）"
+        }
+        val dy = (check.top + check.bottom) / 2 - (text.top + text.bottom) / 2
+        assert(kotlin.math.abs(dy) <= 2.dp.value * density) {
+            "「$label」的勾没和文字对齐：纵向差 ${dy}px"
+        }
+    }
+
+    /**
      * 切音频/视频时「排序」和「导入」的横向位置必须一模一样（用户提的"同一个位置"），
      * 且都在同一行、「导入」贴最右；多出来的「显示画面」插在排序左边。
      *
