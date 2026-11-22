@@ -474,6 +474,18 @@ def test_batch_preview_supports_modes(jenv):
     assert body["profile"]["name"] == "测试博主"
 
 
+def test_batch_preview_estimates_by_media_type(jenv):
+    """预计占用按所选类别的码率算：音频远小于视频（以前一律按视频码率估）。"""
+    base = {"url": "https://space.bilibili.com/2/video", "mode": "latest_n", "n": 4}
+    video = jenv.client.post("/v2/creators/preview", headers=hdr(jenv.token), json=base)
+    audio = jenv.client.post("/v2/creators/preview", headers=hdr(jenv.token),
+                             json={**base, "media_type": "audio"})
+    assert video.status_code == 200 and audio.status_code == 200, audio.text
+    assert audio.json()["estimated_bytes"] > 0
+    # 默认 30 MB/分 vs 1 MB/分，差一个量级以上
+    assert audio.json()["estimated_bytes"] < video.json()["estimated_bytes"] / 10
+
+
 class ShallowLister:
     """模拟抖音桥接：单次最多抓到 ``depth`` 条，起点超过它就报「抓不够」。
 

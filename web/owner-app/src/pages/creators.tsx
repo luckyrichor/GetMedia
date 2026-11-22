@@ -303,10 +303,10 @@ export function CreatorsPage() {
     };
   }, [active]);
 
-  function body() {
-    const value = normalizeCreatorInput(url, kind);
+  /** 选取条件：预览与建任务共用。 */
+  function selectBody() {
     return {
-      url: value,
+      url: normalizeCreatorInput(url, kind),
       // 链接走 resolve（由后端按域名判平台）；选「抖音号 / B 站号」时把平台显式带上，
       // 纯数字就不会被默认当成抖音号。
       platform: kind === 'url' ? null : kind,
@@ -317,10 +317,31 @@ export function CreatorsPage() {
       start_n: mode === 'from_start' ? Number(startNo) || null : null,
       direction: mode === 'from_start' ? direction : null,
       include_pinned: pinned,
+    };
+  }
+
+  /** 预览请求体。
+   *
+   * 预览接口（``CreatorPreviewBody``）是 ``extra="forbid"``：只认选取参数，
+   * 多一个字段就整单 422（页面上的「提交的内容格式不正确」）。
+   * 所以这里绝不能带 ``formats`` / ``source_input`` / ``storage`` 这些
+   * 只有建任务才用的字段——它们是以前混用同一个 body 时撞出来的 bug。
+   */
+  function previewBody() {
+    return { ...selectBody(), media_type: mediaType };
+  }
+
+  /** 建任务请求体：选取条件 + 存放方式 + 输出格式 + 原始输入。 */
+  function jobBody() {
+    const b = selectBody();
+    return {
+      ...b,
+      storage,
+      media_type: mediaType,
       formats,
       // 把用户填的原始内容一并带上（数字号 / 链接），后端存进 source_input，
       // 任务卡上才能亮出「抖音号 123」这种号；不传则后端退回用 url。
-      source_input: value,
+      source_input: b.url,
     };
   }
 
@@ -361,7 +382,7 @@ export function CreatorsPage() {
     setErr('');
     setPreview(null);
     try {
-      setPreview(await ownerApi.creatorPreview(body()));
+      setPreview(await ownerApi.creatorPreview(previewBody()));
     } catch (e) {
       setErr(messageFor(e));
     } finally {
@@ -374,7 +395,7 @@ export function CreatorsPage() {
     setBusy('create');
     setErr('');
     try {
-      await ownerApi.createCreatorJob({ ...body(), storage, media_type: mediaType });
+      await ownerApi.createCreatorJob(jobBody());
       setPreview(null);
       await loadJobs(true);
     } catch (e) {

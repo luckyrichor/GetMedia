@@ -83,6 +83,47 @@ describe('批量提取', () => {
     expect(body.include_pinned).toBe(true);
   });
 
+  test('预览只发选取参数，不混入建任务专用的输出格式（否则服务端 422）', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await choose('输入类型', '抖音号');
+    await fillUrl('67194609689');
+    await click(button('预览'));
+    await until(() => text().includes('会选中 2 条'));
+
+    // 预览接口是 extra="forbid"：多一个字段整单 422，页面就显示「提交的内容格式不正确」。
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body).not.toHaveProperty('formats');
+    expect(body).not.toHaveProperty('source_input');
+    expect(body).not.toHaveProperty('storage');
+    expect(body).toMatchObject({ url: '67194609689', platform: 'douyin', mode: 'latest_n', n: 20 });
+  });
+
+  test('切到音频后预览体仍然干净，只多一个用于估算的 media_type', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await choose('输入类型', '抖音号');
+    await fillUrl('67194609689');
+    await choose('格式', '音频');
+    await click(button('预览'));
+    await until(() => text().includes('会选中 2 条'));
+
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body).not.toHaveProperty('formats');
+    expect(body).not.toHaveProperty('source_input');
+    expect(body.media_type).toBe('audio');
+  });
+
   test('建任务：把存放方式与选取条件一起提交，随后列表刷新', async () => {
     let round = 0;
     server(ownerRoutes({

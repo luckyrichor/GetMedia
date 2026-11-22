@@ -131,6 +131,23 @@ def test_preview_rejects_unknown_field(creator):
 
 
 @pytest.mark.parametrize(
+    "extra",
+    [{"formats": ["m4a"]}, {"source_input": "67194609689"}, {"storage": "archive"}],
+    ids=["formats", "source_input", "storage"],
+)
+def test_preview_rejects_job_only_fields(creator, extra):
+    """预览只认选取参数：输出格式、存放方式、原始输入是建任务才有的字段。
+
+    以前前端预览与建任务共用一个 body，预览把 ``formats`` 一起发过来，
+    撞上 ``extra="forbid"`` 就是整单 422（页面显示「提交的内容格式不正确」）。
+    这条测试守住「预览契约里没有这些字段」，前端要拆开请求体。
+    """
+    r = creator.client.post("/v2/creators/preview", json={"url": SPACE, **extra},
+                            headers=hdr(_token(creator)))
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize(
     "error,status,code",
     [
         (CreatorNotFound("该 UP 主不存在或主页不可见"), 404, "creator_not_found"),

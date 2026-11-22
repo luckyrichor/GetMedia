@@ -526,6 +526,8 @@ export const ownerApi = {
     url: string; platform?: string | null; mode: SelectionMode;
     n?: number | null; since?: string | null; until?: string | null; include_pinned?: boolean;
     start_n?: number | null; direction?: 'newer' | 'older' | null;
+    /** 只影响「预计占用」按音频还是视频码率算，不影响选哪些作品 */
+    media_type?: MediaType;
   }) => api.request<CreatorPreview>('POST', '/v2/creators/preview', body),
   createCreatorJob: (body: {
     url: string; platform?: string | null; mode: SelectionMode; n?: number | null;

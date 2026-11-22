@@ -51,6 +51,9 @@ class CreatorPreviewBody(BaseModel):
     start_n: int | None = Field(None, ge=1, le=500, description="from_start 的起点（普通作品序号，1=最新）")
     direction: Literal["newer", "older"] | None = Field(None, description="from_start 的方向")
     include_pinned: bool = Field(True, description="是否包含置顶作品（只影响筛选，不影响排序）")
+    # 只用于「预计占用」的码率选择：音频按音频码率估，视频按视频码率估。
+    # 预览不产出文件，所以它不影响选哪些作品；缺省按视频算（老前端不带这个字段）。
+    media_type: Literal["audio", "video"] = Field("video", description="预计占用按音频还是视频码率估算")
 
 
 class CreatorStatsOut(BaseModel):
@@ -218,7 +221,7 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
                 start=body.start_n,
                 direction=body.direction,
             )
-            out = jobs.preview(ref, selection, user_id=user_id)
+            out = jobs.preview(ref, selection, user_id=user_id, media_type=body.media_type)
         except (JobError, LinkError) as exc:
             raise ApiError(400, "creator_input", str(exc)) from exc
         except Exception as exc:  # noqa: BLE001

@@ -578,7 +578,7 @@ class CreatorJobService:
                 if stop or not window.has_more:
                     break
         for p in picked:
-            p["estimated_bytes"] = estimate_bytes(p["duration_sec"], "video", self.s)
+            p["estimated_bytes"] = estimate_bytes(p["duration_sec"], media_type, self.s)
         # 置顶作品独立成组：置顶在前（按平台顺序），普通作品按发布时间倒序。
         picked.sort(key=lambda p: (
             0 if p.get("is_pinned") else 1,          # 置顶在前
