@@ -382,6 +382,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .pager .btn:disabled { opacity: 0.45; }
 .pager .pager-on { cursor: default; }
 .pager .pager-gap { color: var(--muted); }
+/* 「下一页」固定在最右端：页码提示用 margin-left:auto 右推，下一页作为末尾元素位置恒定，
+   不随中间页码按钮数量变化而左右漂移。 */
+.pager .pager-total { margin-left: auto; padding-left: 6px; }
 
 /* 窄屏放不下六列：收起「发布 / 提取」，只留序号、标题、时长和下载 */
 @media (max-width: 760px) {

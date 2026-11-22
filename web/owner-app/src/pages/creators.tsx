@@ -492,7 +492,7 @@ export function CreatorsPage() {
               <div class="field">
                 <span>方向</span>
                 <Select
-                  ariaLabel="回溯方向"
+                  ariaLabel="提取方向"
                   value={direction}
                   options={[
                     { value: 'older', label: '往更久' },
@@ -1152,6 +1152,7 @@ function JobItems({ jobId }: { jobId: number }) {
                 </button>
               )
           ))}
+          <span class="small muted pager-total">第 {page} / {pages} 页</span>
           <button
             type="button"
             class="btn btn-ghost small"
@@ -1160,7 +1161,6 @@ function JobItems({ jobId }: { jobId: number }) {
           >
             下一页
           </button>
-          <span class="small muted">第 {page} / {pages} 页</span>
         </nav>
       )}
     </div>
