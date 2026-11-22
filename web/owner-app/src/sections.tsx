@@ -4,7 +4,6 @@
  * `app.tsx` 的 `PAGES` 里注册页面时，会落到占位页并把**后端接口**与**还差什么**写清楚，
  * 而不是渲染一片空白。`endpoints` / `missing` 也只被占位页消费，真实页面上不显示。
  */
-import type { Me } from '@shared/api';
 import type { OwnerConfig } from './api';
 import { Link } from './router';
 
@@ -166,26 +165,22 @@ const GB = 1024 ** 3;
 const fmtGB = (b: number) => `${(b / GB).toFixed(b % GB === 0 ? 0 : 1)} GB`;
 const fmtTTL = (s: number) => (s % 86400 === 0 ? `${s / 86400} 天` : `${Math.round(s / 3600)} 小时`);
 
-export function Overview({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
+export function Overview({ cfg }: { cfg: OwnerConfig }) {
   return (
     <>
       <h1>概览</h1>
-      <p class="lead">
-        当前账号 <strong>{me.login_name}</strong>（{me.tier}）。这一页读到的是
-        <code>/v2/config/owner</code> 的真实返回值，说明 owner 通道、会话 Cookie 与应用侧 tier 校验都通了。
-      </p>
 
       <div class="cards">
         <div class="metric">
-          <div class="metric-k">媒体缓存保留</div>
+          <div class="metric-k">媒体缓存保留时间</div>
           <div class="metric-v">{fmtTTL(cfg.cache_ttl_seconds)}</div>
         </div>
         <div class="metric">
-          <div class="metric-k">每账号缓存配额</div>
+          <div class="metric-k">缓存空间上限</div>
           <div class="metric-v">{fmtGB(cfg.cache_quota_bytes)}</div>
         </div>
         <div class="metric">
-          <div class="metric-k">归档配额</div>
+          <div class="metric-k">媒体文件存储上限</div>
           <div class="metric-v">{fmtGB(cfg.archive_quota_bytes)}</div>
         </div>
         <div class="metric">
@@ -210,16 +205,10 @@ export function Overview({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
       )}
 
       <h2>栏目</h2>
-      <p class="muted small">
-        管理台按 5c–5f 分批接入，九栏现在都是接了真实接口的页面。每栏都有明确的边界：
-        网页不做的事（例如代领手机端的动作、显示 Cookie 明文）在各页里直说，不会留下"看起来做完了"的空白。
-      </p>
       <ul class="plain">
         {SECTIONS.map((s) => (
           <li>
             <Link to={s.path}>{s.label}</Link>
-            <span class="tag">{s.phase}</span>
-            {s.done ? <span class="tag ok">可用</span> : null}
             <span class="muted small">　{s.blurb}</span>
           </li>
         ))}

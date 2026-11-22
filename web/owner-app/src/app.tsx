@@ -175,13 +175,12 @@ function Header({ me }: { me: Me }) {
 }
 
 function Nav({ path }: { path: string }) {
-  const items = [{ path: '/', label: '概览', phase: '' }, ...SECTIONS.map((s) => ({ path: s.path, label: s.label, phase: s.phase }))];
+  const items = [{ path: '/', label: '概览' }, ...SECTIONS.map((s) => ({ path: s.path, label: s.label }))];
   return (
     <nav class="side" aria-label="管理台导航">
       {items.map((it) => (
         <Link to={it.path} aria-current={path === it.path ? 'page' : undefined}>
           <span>{it.label}</span>
-          {it.phase ? <span class="tag">{it.phase}</span> : null}
         </Link>
       ))}
     </nav>
@@ -193,7 +192,7 @@ function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
   const section = sectionFor(path);
   const Page = PAGES[path];
   const body =
-    path === '/' ? <Overview cfg={cfg} me={me} /> : Page ? <Page /> : section ? <Placeholder section={section} /> : <Missing />;
+    path === '/' ? <Overview cfg={cfg} /> : Page ? <Page /> : section ? <Placeholder section={section} /> : <Missing />;
   return (
     <>
       <Header me={me} />
