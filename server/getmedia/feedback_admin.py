@@ -69,6 +69,9 @@ class FeedbackAdmin:
         return counts
 
     def list(self, *, status: str | None = None, category: str | None = None,
+             mail_state: str | None = None, has_image: bool | None = None,
+             has_contact: bool | None = None, date_from: int | None = None,
+             date_to: int | None = None, user_prefix: str | None = None,
              limit: int = 30, offset: int = 0) -> dict:
         where, params = [], {"l": limit, "o": offset}
         # `all` 与不传等价：前端不必为"全部"再写一条不带筛选的调用
@@ -80,6 +83,30 @@ class FeedbackAdmin:
         if category:
             where.append("category=:cat")
             params["cat"] = category[:32]
+        if mail_state:
+            where.append("mail_state=:ms")
+            params["ms"] = mail_state[:16]
+        if has_image is True:
+            where.append("image_paths!=:img")
+            params["img"] = "[]"
+        elif has_image is False:
+            where.append("(image_paths IS NULL OR image_paths=:img)")
+            params["img"] = "[]"
+        if has_contact is True:
+            where.append("contact!=:ct")
+            params["ct"] = ""
+        elif has_contact is False:
+            where.append("contact=:ct")
+            params["ct"] = ""
+        if date_from is not None:
+            where.append("created_at>=:df")
+            params["df"] = date_from
+        if date_to is not None:
+            where.append("created_at<=:dt")
+            params["dt"] = date_to
+        if user_prefix:
+            where.append("user_id LIKE :up")
+            params["up"] = f"{user_prefix[:64]}%"
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         with self.engine.begin() as c:
             total = int(c.execute(text(f"SELECT COUNT(*) FROM feedback {clause}"), params).scalar_one())
@@ -202,9 +229,18 @@ def register(app, guard, engine, clock=time.time, *, audit) -> FeedbackAdmin:
     @app.get("/v2/feedback")
     def feedback_list(request: Request, status: str | None = Query(None, max_length=16),
                       category: str | None = Query(None, max_length=32),
+                      mail_state: str | None = Query(None, max_length=16),
+                      has_image: bool | None = Query(None),
+                      has_contact: bool | None = Query(None),
+                      date_from: int | None = Query(None, ge=0, le=4102444800),
+                      date_to: int | None = Query(None, ge=0, le=4102444800),
+                      user_prefix: str | None = Query(None, max_length=64),
                       limit: int = Query(30, ge=1, le=100), offset: int = Query(0, ge=0, le=100000),
                       _ctx: AuthCtx = Depends(guard)):
-        return admin.list(status=status, category=category, limit=limit, offset=offset)
+        return admin.list(status=status, category=category, mail_state=mail_state,
+                          has_image=has_image, has_contact=has_contact,
+                          date_from=date_from, date_to=date_to, user_prefix=user_prefix,
+                          limit=limit, offset=offset)
 
     @app.get("/v2/feedback/{fid}")
     def feedback_get(fid: str, _ctx: AuthCtx = Depends(guard)):

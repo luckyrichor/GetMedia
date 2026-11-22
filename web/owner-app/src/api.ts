@@ -89,6 +89,19 @@ export interface FeedbackPage {
 export interface FeedbackQuery {
   /** `all` 与不传等价，服务端只按 new/handled/ignored 过滤 */
   status?: FeedbackStatus | 'all';
+  /** 类别：bug / suggestion / account / other */
+  category?: string;
+  /** 邮件状态：pending / sent / failed / skipped */
+  mail_state?: string;
+  /** 是否带图片 */
+  has_image?: boolean;
+  /** 是否留了联系方式 */
+  has_contact?: boolean;
+  /** 提交时间范围（Unix 秒，闭区间） */
+  date_from?: number;
+  date_to?: number;
+  /** 账号编号前缀（列表不返回登录名，只能按编号前 8 位筛） */
+  user_prefix?: string;
   limit?: number;
   offset?: number;
 }
@@ -461,7 +474,15 @@ export const ownerApi = {
     const status = q.status ?? 'all';
     const limit = q.limit ?? 30;
     const offset = q.offset ?? 0;
-    return api.request<FeedbackPage>('GET', `/v2/feedback?status=${status}&limit=${limit}&offset=${offset}`);
+    const p = new URLSearchParams({ status, limit: String(limit), offset: String(offset) });
+    if (q.category) p.set('category', q.category);
+    if (q.mail_state) p.set('mail_state', q.mail_state);
+    if (q.has_image != null) p.set('has_image', q.has_image ? 'true' : 'false');
+    if (q.has_contact != null) p.set('has_contact', q.has_contact ? 'true' : 'false');
+    if (q.date_from != null) p.set('date_from', String(q.date_from));
+    if (q.date_to != null) p.set('date_to', String(q.date_to));
+    if (q.user_prefix) p.set('user_prefix', q.user_prefix);
+    return api.request<FeedbackPage>('GET', `/v2/feedback?${p.toString()}`);
   },
   feedbackDetail: (id: string) => api.request<FeedbackDetail>('GET', `/v2/feedback/${encodeURIComponent(id)}`),
   feedbackStatus: (id: string, status: FeedbackStatus) =>

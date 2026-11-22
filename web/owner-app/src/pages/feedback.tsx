@@ -16,6 +16,7 @@ import {
   type FeedbackStatus,
 } from '../api';
 import { Chips, ErrorBox, Field, fmtBytes, fmtTime, Loading, Empty, relTime } from '../ui';
+import { Select } from '../select';
 
 type Filter = FeedbackStatus | 'all';
 
@@ -31,8 +32,25 @@ const CATEGORY_LABEL: Record<string, string> = { bug: '故障', suggestion: '建
 const MAIL_LABEL: Record<string, string> = { pending: '邮件待发', sent: '邮件已发', failed: '邮件失败', skipped: '未发邮件' };
 const PAGE = 20;
 
+/** 日期筛选的三个值：空串表示不限。 */
+type DateRange = { from: string; to: string };
+
+/** 把 `YYYY-MM-DD` 转成本地时区的 Unix 秒（起/止含当天）。 */
+function dayToUnix(d: string, end: boolean): number | null {
+  if (!d) return null;
+  const dt = new Date(`${d}T00:00:00`);
+  if (Number.isNaN(dt.getTime())) return null;
+  return Math.floor(dt.getTime() / 1000) + (end ? 86399 : 0);
+}
+
 export function FeedbackPage() {
   const [filter, setFilter] = useState<Filter>('all');
+  const [category, setCategory] = useState('');
+  const [mailState, setMailState] = useState('');
+  const [hasImage, setHasImage] = useState('');
+  const [hasContact, setHasContact] = useState('');
+  const [dates, setDates] = useState<DateRange>({ from: '', to: '' });
+  const [userPrefix, setUserPrefix] = useState('');
   const [items, setItems] = useState<FeedbackItem[]>([]);
   const [counts, setCounts] = useState<FeedbackCounts | null>(null);
   const [total, setTotal] = useState(0);
@@ -43,7 +61,18 @@ export function FeedbackPage() {
   const [busy, setBusy] = useState(false);
 
   async function fetchPage(offset: number, replace: boolean) {
-    const out = await ownerApi.feedbackPage({ status: filter, limit: PAGE, offset });
+    const out = await ownerApi.feedbackPage({
+      status: filter,
+      category: category || undefined,
+      mail_state: mailState || undefined,
+      has_image: hasImage === '' ? undefined : hasImage === 'yes',
+      has_contact: hasContact === '' ? undefined : hasContact === 'yes',
+      date_from: dayToUnix(dates.from, false) ?? undefined,
+      date_to: dayToUnix(dates.to, true) ?? undefined,
+      user_prefix: userPrefix.trim() || undefined,
+      limit: PAGE,
+      offset,
+    });
     setItems((prev) => (replace ? out.items : [...prev, ...out.items]));
     setCounts(out.counts);
     setTotal(out.total);
@@ -66,7 +95,7 @@ export function FeedbackPage() {
     void reload();
     // 只在筛选变化时重取；reload 内部不依赖其他外部状态
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter]);
+  }, [filter, category, mailState, hasImage, hasContact, dates.from, dates.to, userPrefix]);
 
   async function more() {
     if (busy) return;
@@ -105,12 +134,100 @@ export function FeedbackPage() {
   return (
     <>
       <h1>反馈收件箱</h1>
-      <p class="lead">
-        用户从手机应用或公开网页提交的问题。列表只显示账号编号前 8 位——反馈邮件里也只有编号，
-        这里保持一致；需要回信时看详情里的联系方式（用户自填，未经核对）。
-      </p>
 
       <Chips items={chips} value={filter} onChange={(k) => setFilter(k as Filter)} ariaLabel="按状态筛选" />
+
+      {/* 筛选栏：每项空 = 不筛，多项之间是「且」 */}
+      <div class="filter-bar">
+        <div class="filter">
+          <span>类别</span>
+          <Select
+            ariaLabel="筛选：类别"
+            value={category}
+            options={[
+              { value: '', label: '全部类别' },
+              ...Object.entries(CATEGORY_LABEL).map(([v, l]) => ({ value: v, label: l })),
+            ]}
+            onChange={setCategory}
+          />
+        </div>
+        <div class="filter">
+          <span>邮件状态</span>
+          <Select
+            ariaLabel="筛选：邮件状态"
+            value={mailState}
+            options={[
+              { value: '', label: '全部' },
+              ...Object.entries(MAIL_LABEL).map(([v, l]) => ({ value: v, label: l })),
+            ]}
+            onChange={setMailState}
+          />
+        </div>
+        <div class="filter">
+          <span>图片</span>
+          <Select
+            ariaLabel="筛选：是否带图片"
+            value={hasImage}
+            options={[
+              { value: '', label: '不限' },
+              { value: 'yes', label: '有图片' },
+              { value: 'no', label: '无图片' },
+            ]}
+            onChange={setHasImage}
+          />
+        </div>
+        <div class="filter">
+          <span>联系方式</span>
+          <Select
+            ariaLabel="筛选：是否留联系方式"
+            value={hasContact}
+            options={[
+              { value: '', label: '不限' },
+              { value: 'yes', label: '留了联系方式' },
+              { value: 'no', label: '未留' },
+            ]}
+            onChange={setHasContact}
+          />
+        </div>
+        <label class="filter">
+          <span>账号编号</span>
+          <input
+            type="text"
+            placeholder="前几位，可留空"
+            value={userPrefix}
+            onInput={(e) => setUserPrefix((e.target as HTMLInputElement).value)}
+          />
+          {userPrefix && (
+            <button type="button" class="filter-clear" aria-label="清除账号编号" onClick={() => setUserPrefix('')}>×</button>
+          )}
+        </label>
+        <div class="filter filter-wide">
+          <span>提交时间</span>
+          <div class="filter-range">
+            <input
+              type="date"
+              aria-label="提交时间开始"
+              value={dates.from}
+              onInput={(e) => setDates((d) => ({ ...d, from: (e.target as HTMLInputElement).value }))}
+            />
+            <span class="muted">至</span>
+            <input
+              type="date"
+              aria-label="提交时间截止"
+              value={dates.to}
+              onInput={(e) => setDates((d) => ({ ...d, to: (e.target as HTMLInputElement).value }))}
+            />
+            {(dates.from || dates.to) && (
+              <button
+                type="button"
+                class="filter-clear"
+                aria-label="清除提交时间"
+                onClick={() => setDates({ from: '', to: '' })}
+              >×</button>
+            )}
+          </div>
+        </div>
+      </div>
 
       {phase === 'loading' && <Loading what="反馈列表" />}
       {phase === 'error' && <ErrorBox message={err} retry={() => void reload()} />}

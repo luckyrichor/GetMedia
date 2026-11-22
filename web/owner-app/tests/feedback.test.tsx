@@ -144,4 +144,24 @@ describe('反馈收件箱', () => {
     expect(callKeys()).toContain('GET /v2/feedback?status=all&limit=20&offset=1');
     expect(text()).toContain('已显示全部 30 条');
   });
+
+  test('筛选：类别与邮件状态等条件拼进请求参数', async () => {
+    const filtered = 'GET /v2/feedback?status=all&limit=20&offset=0&category=suggestion&mail_state=pending';
+    server(ownerRoutes({
+      [LIST]: page([item(1)]),
+      [filtered]: page([item(2, { category: 'suggestion', mail_state: 'pending' })]),
+    }));
+    mount('/feedback');
+    await until(() => text().includes('第 1 条反馈'));
+
+    // 选「建议」类别 + 「邮件待发」状态，触发带参数的重新请求
+    await click(document.querySelector('[aria-label="筛选：类别"]')!);
+    await click(Array.from(document.querySelectorAll('.select-opt')).find((o) => o.textContent?.includes('建议'))!);
+    await until(() => callKeys().includes('GET /v2/feedback?status=all&limit=20&offset=0&category=suggestion'));
+
+    await click(document.querySelector('[aria-label="筛选：邮件状态"]')!);
+    await click(Array.from(document.querySelectorAll('.select-opt')).find((o) => o.textContent?.includes('邮件待发'))!);
+    await until(() => callKeys().includes(filtered));
+    expect(text()).toContain('第 2 条反馈');
+  });
 });

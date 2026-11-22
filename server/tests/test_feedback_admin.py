@@ -118,6 +118,55 @@ def test_filters_and_paging(open_reg):
     assert open_reg.client.get("/v2/feedback?limit=500", headers=hdr(owner)).status_code == 422
 
 
+def test_filters_by_category_mail_contact_image_and_user(open_reg):
+    """类别/邮件状态/是否留联系方式/是否带图/账号前缀，逐项都能筛。"""
+    owner = make_owner(open_reg)
+    fid_bug, tok_a = submit(open_reg, "alpha", key="key-0000000a", text="故障", contact="x@y.z")
+    open_reg.clock.advance(60)
+    fid_sug, tok_b = submit(open_reg, "beta", key="key-0000000b", text="建议",
+                            images=[jpeg()], category="suggestion")
+    open_reg.clock.advance(60)
+    # user_id 是服务端生成的编号，不等于登录名；从 /account/me 拿真实值做前缀匹配
+    uid_a = open_reg.client.get("/account/me", headers=hdr(tok_a)).json()["id"]
+
+    def q(**params):
+        return open_reg.client.get("/v2/feedback", params=params, headers=hdr(owner)).json()["items"]
+
+    # 类别
+    assert [i["id"] for i in q(category="suggestion")] == [fid_sug]
+    # 是否留联系方式
+    assert [i["id"] for i in q(has_contact="true")] == [fid_bug]
+    assert [i["id"] for i in q(has_contact="false")] == [fid_sug]
+    # 是否带图
+    assert [i["id"] for i in q(has_image="true")] == [fid_sug]
+    assert [i["id"] for i in q(has_image="false")] == [fid_bug]
+    # 账号前缀（用真实 user_id 的前 8 位，正好也是列表返回的 user_ref）
+    assert [i["id"] for i in q(user_prefix=uid_a[:8])] == [fid_bug]
+    assert q(user_prefix="zzz") == []
+    # 邮件状态（提交后默认 pending）
+    assert [i["id"] for i in q(mail_state="pending")] == [fid_sug, fid_bug]
+
+
+def test_filters_by_date_range(open_reg):
+    owner = make_owner(open_reg)
+    fid0, _ = submit(open_reg, "user0", key="key-0000000d", text="早")
+    open_reg.clock.advance(86400)  # 隔一天
+    fid1, _ = submit(open_reg, "user1", key="key-0000000e", text="晚")
+
+    items = open_reg.client.get("/v2/feedback", headers=hdr(owner)).json()["items"]
+    t_early, t_late = sorted(i["created_at"] for i in items)
+
+    def q(**params):
+        return [i["id"] for i in open_reg.client.get("/v2/feedback", params=params, headers=hdr(owner)).json()["items"]]
+
+    # 只取晚的那条：date_from = 晚的时间点
+    assert q(date_from=t_late) == [fid1]
+    # 只取早的那条：date_to = 早的时间点
+    assert q(date_to=t_early) == [fid0]
+    # 闭区间
+    assert q(date_from=t_early, date_to=t_late) == [fid1, fid0]
+
+
 def test_images_are_served_by_index_only(open_reg):
     fid, _ = submit(open_reg, "user1", images=[jpeg(), jpeg((20, 20))])
     owner = make_owner(open_reg)
