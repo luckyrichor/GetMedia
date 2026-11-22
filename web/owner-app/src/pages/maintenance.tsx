@@ -1,6 +1,6 @@
 /** 5e：库维护。
  *
- * 三件事：看占用（归档/缓存 对配额）、清理（过期缓存 / 没有记录指向的孤儿文件）、看提取失败上报。
+ * 三件事：看占用（存储/缓存 对配额）、清理（过期缓存 / 没有记录指向的孤儿文件）、看提取失败上报。
  * 清理接口是**全库**操作（不按账号过滤）——服务器上只有 owner 会用服务端库，页面上写明这一点。
  */
 import { useEffect, useState } from 'preact/hooks';
@@ -9,7 +9,7 @@ import { ownerApi, type DiagReport, type StorageReport } from '../api';
 import { platformName } from '../labels';
 import { Empty, ErrorBox, Field, fmtBytes, fmtTime, Loading } from '../ui';
 
-const STORAGE_LABEL: Record<string, string> = { metadata: '只记清单', archive: '保留', cache: '暂存' };
+const STORAGE_LABEL: Record<string, string> = { metadata: '只记清单', archive: '存储', cache: '缓存' };
 
 export function MaintenancePage() {
   const [st, setSt] = useState<StorageReport | null>(null);
@@ -53,7 +53,7 @@ export function MaintenancePage() {
   }
 
   async function orphans() {
-    if (!confirm('清理孤儿文件？会删除归档/缓存目录里没有记录指向的文件（迁移或异常退出的残留）。')) return;
+    if (!confirm('清理孤儿文件？会删除存储/缓存目录里没有记录指向的文件（迁移或异常退出的残留）。')) return;
     setBusy(true);
     setErr('');
     try {
@@ -109,7 +109,7 @@ export function MaintenancePage() {
               const pct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
               return (
                 <div class="metric">
-                  <div class="metric-k">{k === 'archive' ? '归档' : '缓存'}</div>
+                  <div class="metric-k">{k === 'archive' ? '存储' : '缓存'}</div>
                   <div class="metric-v">{fmtBytes(used)} <span class="small muted">/ {fmtBytes(quota)}</span></div>
                   <div class="bar" role="img" aria-label={`${pct}%`}><i style={`width:${pct}%`} /></div>
                   <div class="small muted">
@@ -142,7 +142,7 @@ export function MaintenancePage() {
               ))}
               {ai.files > 0 && (
                 <tr>
-                  <td>AI 素材与产物（计入归档）</td>
+                  <td>AI 素材与产物（计入存储）</td>
                   <td>{ai.files}</td>
                   <td>{fmtBytes(ai.bytes)}</td>
                 </tr>

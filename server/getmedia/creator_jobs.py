@@ -763,7 +763,7 @@ class CreatorJobService:
             c.execute(text("UPDATE creator_jobs SET cursor_json=:c, updated_at=:n WHERE id=:i"),
                       {"c": json.dumps(cur), "n": self.now(), "i": job_id})
 
-    # ---------- 落盘（服务器暂存 / 长期保存） ----------
+    # ---------- 落盘（服务器缓存 / 服务器存储） ----------
     def _status(self, job_id: int) -> str:
         with self.engine.begin() as c:
             return str(c.execute(text("SELECT status FROM creator_jobs WHERE id=:i"),

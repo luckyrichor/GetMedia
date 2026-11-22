@@ -6,16 +6,16 @@ export const platformName = (p: string | null | undefined) => (p ? PLATFORM[p] ?
 /** 存放方式：给用户看的说法，不是存储术语。 */
 export const STORAGE: Record<string, string> = {
   metadata: '只记不下载',
-  cache: '服务器暂存',
-  archive: '服务器保留',
+  cache: '服务器缓存',
+  archive: '服务器存储',
   phone: '只记不下载',   // 旧数据里的「手机下载」，行为本来就等于只记不下载
 };
 
 /** 三种存放方式各自会做什么（下拉里悬停某一行时弹出这段说明）。 */
 export const STORAGE_DESC: Record<string, string> = {
   metadata: '只记录标题、时长和作品地址，不下载文件。',
-  cache: '文件下载到服务器，一天后失效，7 天后自动清理。',
-  archive: '文件长期留在服务器，但空间不足时同样会清理。',
+  cache: '文件下载到服务器缓存，一天后失效，7 天后自动清理。',
+  archive: '文件长期存储在服务器，但空间不足时同样会清理。',
 };
 
 /** 输出格式：视频四种、音频四种。展示用后缀名，说明放下拉提示里。

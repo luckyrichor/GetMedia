@@ -155,7 +155,7 @@ class ModelBrain:
         mem = context.get("memories") or {}
         lines = ["", "当前事实（以此为准，不要推算）：",
                  f"- 媒体条数：{stats.get('tracks', 0)}",
-                 f"- 归档占用：{stats.get('archive_bytes', 0)} 字节；缓存占用：{stats.get('cache_bytes', 0)} 字节"]
+                 f"- 存储占用：{stats.get('archive_bytes', 0)} 字节；缓存占用：{stats.get('cache_bytes', 0)} 字节"]
         if mem:
             lines.append("- 用户偏好记忆：" + "；".join(f"{k}={v}" for k, v in list(mem.items())[:10]))
         return "\n".join(lines)

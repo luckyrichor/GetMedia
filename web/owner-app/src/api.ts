@@ -215,7 +215,7 @@ export interface CreatorJob {
   done: number;
   failed: number;
   estimated_bytes: number;
-  /** 已经在服务器上的条目数与占用（暂存 / 长期保存才有） */
+  /** 已经在服务器上的条目数与占用（缓存 / 存储才有） */
   stored: number;
   store_bytes: number;
   created_at: number;

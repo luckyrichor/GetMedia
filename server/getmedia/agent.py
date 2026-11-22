@@ -44,7 +44,7 @@ def _rules_brain(user_id: str, message: str, context: dict) -> tuple[str, dict]:
                 "下载进度仍由任务本身记录。可用 /v2/schedules/{id}/run-once 立即跑一次。"), {"engine": "rules"}
     if any(k in message for k in ("多少", "统计", "库", "空间")):
         return (f"当前库里：{stats.get('tracks', 0)} 条媒体，"
-                f"其中归档 {stats.get('archive_bytes', 0)} 字节、缓存 {stats.get('cache_bytes', 0)} 字节。"
+                f"其中存储 {stats.get('archive_bytes', 0)} 字节、缓存 {stats.get('cache_bytes', 0)} 字节。"
                 "详细配额见 /v2/maintenance/storage。"), {"engine": "rules"}
     if any(k in message for k in ("授权", "cookie", "登录")):
         return ("平台授权在 /account/platform-auth/start 发起，支持网页登录取 Cookie 与导入 Cookie 两种方式；"

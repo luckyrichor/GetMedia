@@ -14,7 +14,7 @@ import { Chips, Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading } from 
 type Filter = 'all' | MediaType;
 
 const STORAGE_LABEL: Record<Track['storage'], string> = {
-  archive: '归档',
+  archive: '存储',
   cache: '缓存',
   metadata: '只记清单',
 };

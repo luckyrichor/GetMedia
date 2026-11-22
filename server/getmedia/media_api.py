@@ -246,7 +246,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
                              track_id=track["id"], finished_at=store.now())
             return
         if track["storage"] == "archive":
-            raise MediaError("stored_file_missing", "服务器归档文件缺失", 409)
+            raise MediaError("stored_file_missing", "服务器存储文件缺失", 409)
         if track["storage"] not in ("metadata", "cache") or body.storage != "cache":
             raise MediaError("target_storage_invalid", "补取原条目只支持缓存模式", 409)
         resolved = resolver.resolve_target(body.input, media_type=body.media_type, page=expected[2],

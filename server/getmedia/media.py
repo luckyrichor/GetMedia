@@ -191,7 +191,7 @@ class MediaStore:
                 self.evict_archive(over)
             used = self.storage_used(storage)
         if used + need > quota:
-            label = "服务器保留" if storage == "archive" else "服务器暂存"
+            label = "服务器存储" if storage == "archive" else "服务器缓存"
             raise MediaError("quota_exceeded", f"{label}空间不足：单个文件比配额还大，换个存储方式试试", 409)
 
     # ---------- 淘汰 ----------
@@ -406,7 +406,7 @@ class MediaStore:
 
         与旧 :meth:`delete` 的差别：
         - 需要 ``If-Match`` 版本，条件写在同一句 SQL 里，检查和更新之间没有空档；
-        - ``archive`` 行直接 409 ``archive_protected``：归档文件是服务器保留的资产，
+        - ``archive`` 行直接 409 ``archive_protected``：存储文件是服务器长期保留的资产，
           手机上的一次删除不能把它从网页正常列表里抹掉；
         - 已经是墓碑时返回当前行（200），重复重放幂等；
         - 旧网页接口的 ``delete`` 行为完全不变。
@@ -692,7 +692,7 @@ class MediaStore:
         """删掉库里没有记录指向的媒体文件（迁移/异常退出后的清理）。
 
         批量任务的文件也在同一批目录里，必须一起算「有记录」，否则一次清理就会把
-        「服务器保留」的全删了。
+        「服务器存储」的全删了。
         """
         with self.engine.begin() as c:
             known = {r[0] for r in c.execute(text("SELECT media_path FROM tracks WHERE media_path IS NOT NULL"))}

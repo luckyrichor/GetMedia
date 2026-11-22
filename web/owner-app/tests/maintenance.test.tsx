@@ -44,7 +44,7 @@ describe('库维护', () => {
 
     expect(text()).toContain('/ 20 GB');
     expect(text()).toContain('1.0 GB');
-    expect(text()).toContain('归档');
+    expect(text()).toContain('存储');
     expect(text()).toContain('缓存');
     expect(text()).toContain('只记清单');
     // 百分比是本地算的
@@ -137,7 +137,7 @@ describe('库维护', () => {
       'POST /v2/recreations/gc': { json: { projects: 2, freed_bytes: 200 * 1024 * 1024, days: 14, dry_run: false } },
     }));
     mount('/maintenance');
-    await until(() => text().includes('AI 素材与产物（计入归档）'));
+    await until(() => text().includes('AI 素材与产物（计入存储）'));
 
     expect(text()).toContain('含 AI 200 MB');
     expect(text()).toContain('默认 14 天');

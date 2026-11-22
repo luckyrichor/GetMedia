@@ -93,7 +93,7 @@ describe('批量提取', () => {
     await until(() => text().includes('还没有批量任务'));
 
     await fillUrl('12345');
-    await choose('存放方式', '服务器保留');
+    await choose('存放方式', '服务器存储');
     await click(button('开始提取'));
     await until(() => text().includes('某个 UP 主'));
 
@@ -358,7 +358,7 @@ describe('批量提取', () => {
     await click(document.querySelector('button[aria-label="存放方式"]')!);
     const opts = Array.from(document.querySelectorAll('[role="option"]'));
     expect(opts.map((o) => o.querySelector('.select-label')?.textContent))
-      .toEqual(['只记不下载', '服务器暂存', '服务器保留']);
+      .toEqual(['只记不下载', '服务器缓存', '服务器存储']);
     // 刚展开不弹提示，悬停到某一项才弹
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
 
@@ -393,7 +393,7 @@ describe('批量提取', () => {
     }));
     mount('/creators');
     await until(() => text().includes('已存服务器 12 / 20'));
-    expect(text()).toContain('服务器暂存');
+    expect(text()).toContain('服务器缓存');
     expect(text()).toContain('240 MB');
 
     await click(button('显示条目'));

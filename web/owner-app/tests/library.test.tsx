@@ -57,7 +57,7 @@ describe('媒体库与播放', () => {
     await until(() => text().includes('曲目 2'));
 
     expect(text()).toContain('共 2 条（音频 1、视频 1）');
-    expect(text()).toContain('归档');
+    expect(text()).toContain('存储');
     expect(text()).toContain('缓存');
     expect(text()).toContain('有文件 1.0 MB');
     // 新的在前：第 2 条（created_at 更大）排在前面
