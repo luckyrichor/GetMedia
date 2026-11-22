@@ -184,11 +184,7 @@ export function Overview({ cfg }: { cfg: OwnerConfig }) {
           <div class="metric-v">{fmtGB(cfg.archive_quota_bytes)}</div>
         </div>
         <div class="metric">
-          <div class="metric-k">凭据保险箱</div>
-          <div class="metric-v">{cfg.credential_vault ? '可用' : '不可用'}</div>
-        </div>
-        <div class="metric">
-          <div class="metric-k">批量单次上限</div>
+          <div class="metric-k">最近 N 条上限</div>
           <div class="metric-v">{cfg.creator.max_items} 条</div>
         </div>
         <div class="metric">
