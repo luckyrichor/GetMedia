@@ -69,6 +69,15 @@ interface CloudSyncHook {
     /** App 回到前台：实现里自己判断闸门、节流与单飞，调用方不用关心。 */
     fun onForeground(context: Context)
 
+    /**
+     * 本机做了一次会影响云端的改动（改名、删除、收藏、整理）。
+     * 调用方只管喊一声，防抖、闸门、单飞都在实现里；免费版是空实现。
+     */
+    fun onLocalChange(context: Context)
+
+    /** App 退到后台：停止前台轮询（不中断正在跑的一轮）。 */
+    fun onBackground()
+
     /** 登录/切换账号/退出登录后调一次。 */
     fun onAccountChanged(context: Context)
 

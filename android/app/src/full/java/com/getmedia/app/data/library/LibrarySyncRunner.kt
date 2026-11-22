@@ -12,7 +12,10 @@ import com.getmedia.app.data.repo.TrackRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +42,12 @@ object LibrarySyncRunner {
     /** 进前台触发的节流：设计 §18.3.2 的"距上次 > 5 分钟"。 */
     private const val FOREGROUND_INTERVAL_MS = 5 * 60 * 1000L
 
+    /** 本机改动后的防抖：连续改名/拖动只推一轮。 */
+    private const val LOCAL_CHANGE_DELAY_MS = 1_500L
+
+    /** 前台轮询间隔：让"另一台设备改了"在这台上最多一分钟就能看到。 */
+    private const val POLL_INTERVAL_MS = 60_000L
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
     private val prompt = LibraryUploadPrompt()
@@ -64,6 +73,12 @@ object LibrarySyncRunner {
     private var lastForegroundAt = 0L
     private var signature: SessionKey? = null
 
+    /** 本机改动的防抖任务；再次改动会取消上一个。 */
+    private var localChangeJob: Job? = null
+
+    /** 前台轮询任务；退到后台就取消。 */
+    private var pollJob: Job? = null
+
     /** 会话里影响"要不要同步"的四个字段；任一变化就重跑一轮（同意从过期变有效也算）。 */
     private data class SessionKey(
         val token: String,
@@ -75,10 +90,76 @@ object LibrarySyncRunner {
 
     fun onForeground(context: Context) {
         val app = prime(context)
+        startPolling(app)
         val now = System.currentTimeMillis()
         if (now - lastForegroundAt < FOREGROUND_INTERVAL_MS) return
         lastForegroundAt = now
         scope.launch { run(app) }
+    }
+
+    /**
+     * 本机改动后立刻推一轮（1.5 秒防抖）。
+     *
+     * 不绕过任何闸门与开关：没同意 v3、非 owner、用户关掉同步，这里都直接返回。
+     * 与前台那一轮共用同一把 [mutex]，撞上时这一轮直接放弃——改动已经在库里，
+     * 下一轮（最多一分钟）会把它带上，不需要排队。
+     */
+    fun onLocalChange(context: Context) {
+        val app = prime(context)
+        val session = SessionStore.current.value ?: return
+        if (!LibrarySyncGate.maySync(session)) return
+        if (!LibrarySyncPrefs(app).enabled(session.loginName)) return
+        localChangeJob?.cancel()
+        localChangeJob = scope.launch {
+            delay(LOCAL_CHANGE_DELAY_MS)
+            run(app)
+        }
+    }
+
+    /** App 退到后台：停轮询。正在跑的一轮不受影响。 */
+    fun onBackground() {
+        pollJob?.cancel()
+        pollJob = null
+    }
+
+    /**
+     * 前台轮询：只拉，不推、不问上传。
+     *
+     * 目的是"另一台设备改了，这一台不动手也能看到"。拉取会收墓碑、更新服务器权威字段，
+     * 但不弹任何确认——批量墓碑确认留给完整的一轮（进前台 / 本机改动 / 登录），
+     * 否则每分钟弹一次同一个窗。
+     */
+    private fun startPolling(app: Context) {
+        if (pollJob?.isActive == true) return
+        pollJob = scope.launch {
+            while (isActive) {
+                delay(POLL_INTERVAL_MS)
+                pullOnly(app)
+            }
+        }
+    }
+
+    private suspend fun pullOnly(context: Context) {
+        val session = SessionStore.current.value ?: return
+        if (!LibrarySyncGate.maySync(session)) return
+        val prefs = LibrarySyncPrefs(context)
+        if (!prefs.enabled(session.loginName)) return
+        if (!mutex.tryLock()) return
+        try {
+            val token = syncToken(session, prefs)
+            if (token() == null) return
+            val db = AppDatabase.get(context)
+            val pulled = LibrarySyncEngine(db, LibrarySyncApi(token = token)).pull(session.loginName)
+            if (pulled.bound > 0) {
+                note(db, session.loginName, "${pulled.bound} 项本机条目已与云端对应条目关联")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 静默：下一分钟再试
+        } finally {
+            mutex.unlock()
+        }
     }
 
     fun onAccountChanged(context: Context) {

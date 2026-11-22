@@ -119,6 +119,8 @@ class TrackRepository(
             com.getmedia.app.player.PlayerHolder.rename(context, id, clean)
         }
         BackupManager.noteWrite()
+        // 已绑定云端的行：改完立刻推一轮，不等下一次进前台（内部有 1.5 秒防抖与闸门）。
+        if (handled) cloudSync.onLocalChange(context)
     }
 
     suspend fun remove(id: Long, cloud: Boolean = false) =
@@ -153,6 +155,8 @@ class TrackRepository(
             }
             withContext(Dispatchers.Main) { PlayerHolder.removeTracks(context, removed.map { it.id }.toSet()) }
             BackupManager.noteWrite()
+            // 有云端删除要重放：立刻推一轮，别等下一次进前台。
+            if (cloudIds.isNotEmpty()) cloudSync.onLocalChange(context)
             removed.size
         }
     }

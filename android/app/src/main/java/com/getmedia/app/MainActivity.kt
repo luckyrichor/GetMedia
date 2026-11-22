@@ -1,6 +1,7 @@
 package com.getmedia.app
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.getmedia.app.ui.components.BackgroundLayer
@@ -216,6 +218,22 @@ class MainActivity : ComponentActivity() {
                                 onDismiss = { com.getmedia.app.data.cloud.cloudSync.dismissRemoteRemoved(ask) },
                             )
                         }
+                        // 新版本提示：服务端 config 里的 latest / min_version（免费版也能查）。
+                        val update by com.getmedia.app.update.UpdateChecker.prompt.collectAsState()
+                        update?.let { info ->
+                            val ctx = LocalContext.current
+                            com.getmedia.app.ui.screen.UpdateDialog(
+                                prompt = info,
+                                onDownload = {
+                                    runCatching {
+                                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.apkUrl)))
+                                    }
+                                    com.getmedia.app.update.UpdateChecker.snooze()
+                                },
+                                onLater = { com.getmedia.app.update.UpdateChecker.snooze() },
+                                onIgnore = { com.getmedia.app.update.UpdateChecker.ignoreCurrent(ctx) },
+                            )
+                        }
                         com.getmedia.app.ui.screen.AccountGates()
                     }
                 }
@@ -229,6 +247,8 @@ class MainActivity : ComponentActivity() {
         com.getmedia.app.data.backup.BackupManager.onForeground()
         // 曲库同步：进前台触发一轮（内部 5 分钟节流，闸门在实现里判）。
         com.getmedia.app.data.cloud.cloudSync.onForeground(this)
+        // 新版本检查：6 小时最多查一次，失败静默。
+        com.getmedia.app.update.UpdateChecker.onForeground(this)
         lifecycleScope.launch {
             // 联网失败一律静默：账号状态对一次、每天一次心跳，都不影响本地功能。
             try {
@@ -249,6 +269,8 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         // 用户改完就退出时也补一次检查；失败只落状态，不打扰。
         com.getmedia.app.data.backup.BackupManager.onBackground()
+        // 退到后台就停掉前台轮询；正在跑的一轮不受影响。
+        com.getmedia.app.data.cloud.cloudSync.onBackground()
         PlayerHolder.savePlayback(applicationContext, synchronous = true)
         super.onStop()
     }

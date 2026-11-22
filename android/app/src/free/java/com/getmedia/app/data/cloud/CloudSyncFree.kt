@@ -41,6 +41,10 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
 
     override fun onForeground(context: Context) = Unit
 
+    override fun onLocalChange(context: Context) = Unit
+
+    override fun onBackground() = Unit
+
     override fun onAccountChanged(context: Context) = Unit
 
     override val supportsManagedRestores = false

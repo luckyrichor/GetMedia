@@ -122,6 +122,10 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
 
     override fun onForeground(context: Context) = LibrarySyncRunner.onForeground(context)
 
+    override fun onLocalChange(context: Context) = LibrarySyncRunner.onLocalChange(context)
+
+    override fun onBackground() = LibrarySyncRunner.onBackground()
+
     override fun onAccountChanged(context: Context) = LibrarySyncRunner.onAccountChanged(context)
 
     override fun dismissUpload(ask: CloudUploadAsk) = LibrarySyncRunner.dismiss(ask)
