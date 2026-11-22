@@ -50,7 +50,7 @@ describe('反馈收件箱', () => {
     await until(() => text().includes('第 1 条反馈'));
 
     expect(text()).toContain('第 2 条反馈');
-    expect(text()).toContain('留了联系方式');       // 只是"有没有"的信号
+    expect(text()).toContain('已留');       // 只是"有没有"的信号
     expect(text()).not.toContain('@example');        // 明文只在详情里
     expect(text()).toContain('图片 2 张');
     expect(text()).toContain('邮件待发');

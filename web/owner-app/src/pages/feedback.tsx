@@ -183,7 +183,7 @@ export function FeedbackPage() {
             value={hasContact}
             options={[
               { value: '', label: '不限' },
-              { value: 'yes', label: '留了联系方式' },
+              { value: 'yes', label: '已留' },
               { value: 'no', label: '未留' },
             ]}
             onChange={setHasContact}
@@ -257,7 +257,7 @@ export function FeedbackPage() {
                   <span class="feed-meta small muted">
                     {relTime(it.created_at)} · {fmtTime(it.created_at)} · {CATEGORY_LABEL[it.category] ?? it.category}
                     {it.image_count > 0 ? ` · 图片 ${it.image_count} 张` : ''}
-                    {it.contact ? ' · 留了联系方式' : ''}
+                    {it.contact ? ' · 已留' : ''}
                     {it.diag.app_version ? ` · v${it.diag.app_version}` : ''}
                     {it.diag.channel ? ` · ${it.diag.channel}` : ''}
                   </span>
