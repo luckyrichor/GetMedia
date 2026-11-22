@@ -26,11 +26,13 @@ class RepairRulesTest {
         serverId: Long? = null,
         syncState: String = SyncState.LOCAL_ONLY.name,
         page: Int = 1,
+        serverStorage: String? = null,
     ) = TrackEntity(
         id = id, platform = platform, videoId = videoId, title = "第 $id 条",
         uploader = null, durationSec = 10.0, audioBytes = null, audioFormat = "m4a",
         sourceUrl = sourceUrl, localPath = localPath, serverId = serverId,
         syncState = syncState, serverPage = page, mediaType = MediaKind.AUDIO.name,
+        serverStorage = serverStorage,
     )
 
     @Test fun localFilePresentGivesNoRepairAction() {
@@ -54,6 +56,32 @@ class RepairRulesTest {
         val track = row(platform = "douyin", videoId = "7", serverId = 9, syncState = LibraryMark.CLOUD_ONLY)
         assertEquals(DownloadRoute.SERVER_LOCAL, RepairRules.route(track, hasFile = false))
         assertTrue(RepairRules.options(track, hasFile = false).canDownload)
+    }
+
+    /**
+     * 服务器已归档、平台不是 B 站（本机导入的作品）：直接取服务器文件。
+     *
+     * 这类条目没有来源链接，按"本机提取"那条路走必然报"缺少原始链接"，所以在 0.1.25
+     * 单独开一档。回归点是：归档 → SERVER_ARCHIVE；只有元数据 → 仍然本机提取。
+     */
+    @Test fun archivedLocalRowTakesServerFile() {
+        val track = row(platform = "local", videoId = "望", sourceUrl = "",
+            serverId = 40, syncState = LibraryMark.CLOUD_ONLY, serverStorage = "archive")
+        assertEquals(DownloadRoute.SERVER_ARCHIVE, RepairRules.route(track, hasFile = false))
+        assertTrue(RepairRules.options(track, hasFile = false).canDownload)
+    }
+
+    @Test fun localRowWithoutArchiveStillExtractsOnDevice() {
+        val track = row(platform = "local", videoId = "望",
+            sourceUrl = "https://www.douyin.com/video/7", serverId = 40,
+            syncState = LibraryMark.CLOUD_ONLY, serverStorage = "metadata")
+        assertEquals(DownloadRoute.SERVER_LOCAL, RepairRules.route(track, hasFile = false))
+    }
+
+    /** B 站归档行的路不能变：仍然是 SERVER_TARGET（服务器直取 + 必要时按 target 重取）。 */
+    @Test fun archivedBilibiliRowKeepsServerTarget() {
+        val track = row(serverId = 6, syncState = LibraryMark.CLOUD_ONLY, serverStorage = "archive")
+        assertEquals(DownloadRoute.SERVER_TARGET, RepairRules.route(track, hasFile = false))
     }
 
     @Test fun restoredShellWithLinkCanBeFetchedOrRemoved() {

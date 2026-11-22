@@ -20,6 +20,15 @@ internal enum class DownloadRoute {
     /** 服务器有身份、非 B 站（抖音等）：**本机提取**，核对身份后按原 id 回填。 */
     SERVER_LOCAL,
 
+    /**
+     * 服务器已归档（`archive`，长期保存）、平台不是 B 站：**直接取服务器文件**。
+     *
+     * 这一档是本机导入的作品（`platform=local`）走的路：它们在服务器上只有文件、没有链接，
+     * 按 [SERVER_LOCAL] 去本机提取必然因为"缺少原始链接"失败。归档文件本身就是服务器资产，
+     * 直取还省一次重新提取。
+     */
+    SERVER_ARCHIVE,
+
     /** 清单恢复出来的空壳（没有服务器身份、没有文件）：本机提取 + 身份核对 + 按原 id 回填。 */
     SHELL_LOCAL,
 }
@@ -32,7 +41,11 @@ internal object RepairRules {
     fun route(track: TrackEntity, hasFile: Boolean): DownloadRoute {
         if (hasFile) return DownloadRoute.NONE
         if (track.serverId != null) {
-            return if (prefersServer(track.platform)) DownloadRoute.SERVER_TARGET else DownloadRoute.SERVER_LOCAL
+            if (prefersServer(track.platform)) return DownloadRoute.SERVER_TARGET
+            // 非 B 站但服务器已归档：直接取服务器上的文件。本机导入/本机提取的作品没有
+            // 原始链接（`sourceUrl` 为空），让手机再去提取一遍只会得到"缺少原始链接"。
+            if (track.serverStorage == "archive") return DownloadRoute.SERVER_ARCHIVE
+            return DownloadRoute.SERVER_LOCAL
         }
         // 回填到空壳要求 `localPath` 本来就是空的（`fillRestoredFile` 会核对这一点）；
         // `localPath` 指向的文件被系统清掉的行只给"移除"。

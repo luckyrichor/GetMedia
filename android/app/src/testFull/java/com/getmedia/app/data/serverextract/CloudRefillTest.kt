@@ -74,6 +74,49 @@ class CloudRefillTest {
         assertEquals(listOf(6L), api.requests)
     }
 
+    // ---------- 归档行（本机导入的作品，没有来源链接） ----------
+
+    private val localOriginal = TrackEntity(
+        id = -7, platform = "local", videoId = "望", title = "望", uploader = null,
+        durationSec = 254.0, audioBytes = null, audioFormat = "m4a", sourceUrl = "",
+        serverId = 40, accountKey = "owner", serverPage = 1, mediaType = MediaKind.AUDIO.name,
+    )
+    private val localArchived = ServerTrack(
+        id = 40, platform = "local", videoId = "望", mediaType = "audio", title = "望",
+        storage = "archive", bytes = payload.size.toLong(), sha256 = hash, hasFile = true,
+    )
+
+    /** 没有 sourceUrl 也要能取：这条路根本不看链接，只认 id 与四列身份。 */
+    @Test fun archivedLocalRowDownloadsWithoutSource() = runBlocking {
+        val api = Gateway(localArchived)
+        val result = client(api).refillArchived(localOriginal) { row, detail, file ->
+            assertEquals(40L, detail.id)
+            assertEquals(hash, file.sha256)
+            row.copy(localPath = file.file.path)
+        }
+        assertEquals(localOriginal.id, result.id)
+        assertEquals(0, api.starts)
+        assertEquals(listOf(40L), api.requests)
+    }
+
+    /** 平台/作品/分集/类型/id 任何一处不一致，都不写盘。 */
+    @Test fun archivedLocalRowRejectsMismatch() {
+        for (wrong in listOf(
+            localArchived.copy(platform = "douyin"),
+            localArchived.copy(videoId = "可能"),
+            localArchived.copy(mediaType = "video"),
+            localArchived.copy(storage = "metadata", hasFile = false),
+            localArchived.copy(id = 41),
+        )) {
+            val api = Gateway(wrong)
+            val error = assertThrows(ServerMediaException::class.java) {
+                runBlocking { client(api).refillArchived(localOriginal) { _, _, _ -> error("unexpected write") } }
+            }
+            assertEquals("target_mismatch", error.code)
+            assertEquals(emptyList<Long>(), api.requests)
+        }
+    }
+
     @Test fun cacheEvictedAfterLookupRechecksThenTargetsOriginal() = runBlocking {
         val cache = archived.copy(storage = "cache")
         val metadata = cache.copy(storage = "metadata", hasFile = false, bytes = null, sha256 = null)

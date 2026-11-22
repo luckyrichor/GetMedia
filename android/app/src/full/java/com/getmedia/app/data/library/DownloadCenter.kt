@@ -49,6 +49,7 @@ internal class DownloadCenter(
                 RepairRules.options(row, hasFile = false).note ?: "这条没有可下载的内容",
             )
             DownloadRoute.SERVER_TARGET -> refillFromServer(row)
+            DownloadRoute.SERVER_ARCHIVE -> refillArchived(row)
             DownloadRoute.SERVER_LOCAL -> extractInto(row, asShell = false)
             DownloadRoute.SHELL_LOCAL -> extractInto(row, asShell = true)
         }
@@ -72,6 +73,17 @@ internal class DownloadCenter(
     /** B 站云端行：服务器已存文件直取；缓存被清掉了才让服务器带 target 重新提取。 */
     private suspend fun refillFromServer(row: TrackEntity): File {
         val saved = serverExtractClient(repo, api, app.cacheDir).refillOriginal(row) { original, detail, file ->
+            repo.fillExistingFile(
+                original, file.file, file.bytes, file.sha256, detail.updatedSeq,
+                detail.updatedAtSec?.times(1000), sameSession,
+            )
+        }
+        return saved.localPath?.let(::File) ?: throw IllegalStateException("下载完成但没有落成本地文件")
+    }
+
+    /** 服务器已归档的非 B 站行（本机导入/本机提取的作品）：直取服务器文件，不再本机提取。 */
+    private suspend fun refillArchived(row: TrackEntity): File {
+        val saved = serverExtractClient(repo, api, app.cacheDir).refillArchived(row) { original, detail, file ->
             repo.fillExistingFile(
                 original, file.file, file.bytes, file.sha256, detail.updatedSeq,
                 detail.updatedAtSec?.times(1000), sameSession,

@@ -132,6 +132,31 @@ class ServerExtractClient(
         return save(original, result, fetchStored(result))
     }
 
+    /**
+     * 取服务器**已归档**（`archive`）的文件补到本机，不重新提取。
+     *
+     * 与 [refillOriginal] 的区别：不解析平台身份里的 URL，只核对 id 与
+     * 「平台 / 作品 / 分集 / 媒体类型」四列。本机导入的作品（`platform=local`、
+     * `sourceUrl` 为空）在 [restoredIdentity] 里没有对应规则，走 [refillOriginal]
+     * 必然 `target_mismatch`；这一类恰恰是只存在于归档里的条目。
+     *
+     * 归档缺失不静默重建：服务器说没有文件就报不可用，别把一次下载变成一次提取。
+     */
+    suspend fun refillArchived(
+        original: TrackEntity,
+        save: suspend (TrackEntity, ServerTrack, DownloadedFile) -> TrackEntity,
+    ): TrackEntity {
+        val id = original.serverId ?: mismatch()
+        val detail = api.track(id)
+        val same = !detail.deleted && detail.id == id && detail.storage == "archive" &&
+            detail.platform.equals(original.platform, ignoreCase = true) &&
+            detail.videoId == original.videoId &&
+            detail.page == original.serverPage &&
+            detail.mediaType.equals(original.mediaType, ignoreCase = true)
+        if (!same) mismatch()
+        return save(original, detail, fetchStored(detail))
+    }
+
     private suspend fun fetchStored(track: ServerTrack): DownloadedFile = withContext(Dispatchers.IO) {
         val bytes = track.bytes?.takeIf { it > 0 }
         // 即便缓存详情尚未更新，也让只读接口判断文件是否已清理；成功响应仍须有条目长度。
