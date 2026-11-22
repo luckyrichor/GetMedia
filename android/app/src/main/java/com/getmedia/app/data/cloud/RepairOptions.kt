@@ -4,7 +4,7 @@ package com.getmedia.app.data.cloud
  * 「这一条缺文件时能做哪些补救」——条目菜单、恢复条目页、导出确认页共用一份判断。
  *
  * 为什么放在 `main`：三个入口都在 `main` 的界面里，而"哪些行算云端行、哪些算恢复空壳"
- * 只有 full 源码集知道（判定要读 `LibraryMark` / `RESTORED` 这些只在 full 出现的状态值）。
+ * 只有 full 源码集知道（判定要读 full 侧的库标记与 `RESTORED` 这些只在 full 出现的状态值）。
  * 所以 `main` 只认这份中性结构，`free` 的实现恒返回 [NONE]。
  *
  * 这里的两个动作都**只影响这一条本机行，永远不会新增行**：

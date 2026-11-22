@@ -154,7 +154,7 @@ object PlayerHolder {
         val lists = PlaylistRepository(context)
         val sourceId = lists.resolve(sourcePlaylistIdState.value)
         if (queueState.value.isEmpty()) {
-            // 列表里可能混着"本机没有文件"的行（恢复出来的空壳、"云端未下载"）。以前这里
+            // 列表里可能混着缺文件的行（恢复出来的空壳、"云端未下载"）。以前这里
             // 是 `getOrThrow()`：只要列表里有一条这样的行，点**任意**一首播放都会失败，
             // 提示还是"本机音频文件已丢失"——点的那一首文件其实是好的（0.1.13 修）。
             val members = lists.tracks(sourceId)

@@ -301,11 +301,11 @@ class LibraryToolbarLayoutTest {
     }
 
     /**
-     * 勾要紧跟文字：量渲染后的真实 bounds，勾左边 − 文字右边 ≤ 10dp。
+     * 勾要同时贴近两边：左边距文字 ≤ 10dp，右边距菜单边缘 ≤ 14dp。
      *
-     * 设计值 6dp，余量留给字体度量与 1px 抗锯齿。上一版把勾放在 trailingIcon 里，
-     * 那一列会被推到菜单最右边，这个差值等于「菜单宽度 − 文字宽度 − 内边距」，
-     * 实测接近 40dp（用户反馈的「空白留得太多」）。所以这条能挡住回退。
+     * 设计值分别是 6dp / 12dp，余量留给字体度量与 1px 抗锯齿。两次回退都会被挡住：
+     * 勾放 trailingIcon 时左边距接近 40dp；用 Material 的 DropdownMenuItem 时，
+     * 它写死的 112dp 最小宽度会让右边距空出三十多像素（用户第二次反馈的「右边又空一大块」）。
      */
     @Test
     @Config(sdk = [33], qualifiers = "w384dp-h854dp-xhdpi")
@@ -329,6 +329,7 @@ class LibraryToolbarLayoutTest {
         rule.onNodeWithTag(LibraryToolbarTags.SORT_MENU).performClick()
         assertCheckHugsLabel(
             "手动",
+            LibraryToolbarTags.option(SortField.MANUAL),
             LibraryToolbarTags.optionLabel(SortField.MANUAL),
             LibraryToolbarTags.check(SortField.MANUAL),
         )
@@ -361,6 +362,7 @@ class LibraryToolbarLayoutTest {
         rule.onNodeWithTag(LibraryToolbarTags.KIND).performClick()
         assertCheckHugsLabel(
             "音频",
+            LibraryToolbarTags.kind(MediaKind.AUDIO),
             LibraryToolbarTags.kindOptionLabel(MediaKind.AUDIO),
             LibraryToolbarTags.kindCheck(MediaKind.AUDIO),
         )
@@ -368,9 +370,18 @@ class LibraryToolbarLayoutTest {
             .assertDoesNotExist()
     }
 
-    /** 勾左边 − 文字右边（px）放在 0..10dp 之间，且两者纵向中心对齐。 */
-    private fun assertCheckHugsLabel(label: String, labelTag: String, checkTag: String) {
+    /**
+     * 勾的左右两个间距：
+     * 左边 − 文字右边 ∈ 0..10dp；菜单项右边 − 勾右边 ≤ 14dp；勾与文字纵向居中对齐。
+     */
+    private fun assertCheckHugsLabel(
+        label: String,
+        itemTag: String,
+        labelTag: String,
+        checkTag: String,
+    ) {
         val density = rule.density.density
+        val item = rule.onNodeWithTag(itemTag).fetchSemanticsNode().boundsInRoot
         val text = rule.onNodeWithTag(labelTag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val check = rule.onNodeWithTag(checkTag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val gap = check.left - text.right
@@ -378,10 +389,21 @@ class LibraryToolbarLayoutTest {
         assert(gap in 0f..maxGap) {
             "「$label」的勾离文字太远：${gap}px，上限 ${maxGap}px（文字 $text，勾 $check）"
         }
+        // 菜单右边缘与勾之间只剩内边距，不能再空出一大块。
+        val trailing = item.right - check.right
+        val maxTrailing = 14.dp.value * density
+        assert(trailing in 0f..maxTrailing) {
+            "「$label」右侧空白太多：${trailing}px，上限 ${maxTrailing}px（菜单项 $item，勾 $check）"
+        }
         val dy = (check.top + check.bottom) / 2 - (text.top + text.bottom) / 2
         assert(kotlin.math.abs(dy) <= 2.dp.value * density) {
             "「$label」的勾没和文字对齐：纵向差 ${dy}px"
         }
+        // 实测值写进测试输出，便于对比前后两版（菜单宽度、两个间距）。
+        println(
+            "[menu] $label：文字→勾 ${gap / density}dp，勾→菜单右边缘 ${trailing / density}dp，" +
+                "菜单项宽 ${item.width / density}dp",
+        )
     }
 
     /**

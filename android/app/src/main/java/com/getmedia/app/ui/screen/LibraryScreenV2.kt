@@ -204,17 +204,13 @@ private fun SortChip(
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             SortField.entries.forEach { f ->
-                DropdownMenuItem(
-                    modifier = Modifier.testTag(LibraryToolbarTags.option(f)),
-                    // 当前项只靠勾表示，不加「（当前）」文字：勾已经说清楚了，
-                    // 再加四个字只是重复，还会把菜单项文字撑长。
-                    text = {
-                        MenuLabel(
-                            f.label, f == field,
-                            LibraryToolbarTags.optionLabel(f), LibraryToolbarTags.check(f),
-                        )
-                    },
+                MenuItemRow(
+                    label = f.label,
+                    selected = f == field,
                     onClick = { onPickField(f); menu = false },
+                    modifier = Modifier.testTag(LibraryToolbarTags.option(f)),
+                    labelTag = LibraryToolbarTags.optionLabel(f),
+                    checkTag = LibraryToolbarTags.check(f),
                 )
             }
         }
@@ -253,25 +249,22 @@ private fun KindPicker(kind: MediaKind, onPickKind: (MediaKind) -> Unit) {
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             MediaKind.entries.forEach { k ->
-                DropdownMenuItem(
-                    modifier = Modifier.testTag(LibraryToolbarTags.kind(k)),
-                    // 同排序菜单：当前类型只用勾表示，不写「（当前）」，勾也紧跟文字。
-                    text = {
-                        MenuLabel(
-                            kindLabel(k), k == kind,
-                            LibraryToolbarTags.kindOptionLabel(k), LibraryToolbarTags.kindCheck(k),
-                        )
+                MenuItemRow(
+                    label = kindLabel(k),
+                    selected = k == kind,
+                    onClick = {
+                        menu = false
+                        if (k != kind) onPickKind(k)
                     },
-                    leadingIcon = {
+                    modifier = Modifier.testTag(LibraryToolbarTags.kind(k)),
+                    leading = {
                         Icon(
                             if (k == MediaKind.AUDIO) Icons.Default.Audiotrack else Icons.Default.Movie,
                             null, Modifier.size(18.dp),
                         )
                     },
-                    onClick = {
-                        menu = false
-                        if (k != kind) onPickKind(k)
-                    },
+                    labelTag = LibraryToolbarTags.kindOptionLabel(k),
+                    checkTag = LibraryToolbarTags.kindCheck(k),
                 )
             }
         }
@@ -283,23 +276,48 @@ private fun kindLabel(kind: MediaKind) = if (kind == MediaKind.AUDIO) "音频" e
 /** 菜单项文字与勾之间的间距：只够表示「这两个是一起的」，不多占。 */
 private val MENU_CHECK_GAP = 6.dp
 
+/** 菜单项左右内边距：右侧只剩这 12dp，勾就贴着菜单边缘。 */
+private val MENU_ITEM_PADDING = 12.dp
+
 /**
- * 菜单项的「文字 + 勾」。
+ * 下拉菜单的一行：文字 +（可选）左侧图标 +（选中时）勾。
  *
- * 勾原来放在 [DropdownMenuItem] 的 trailingIcon 里，那一列会被推到菜单最右边；
- * 菜单宽度按「最长一项 + 勾」算，于是「手动」这种两个字的选项后面空出将近 40dp，
- * 勾跟文字看着像两件不相干的东西（用户反馈「空白留得太多」）。
- * 现在勾紧跟文字、固定隔 6dp；菜单整体宽度仍按最长一项算，右侧余量不再影响勾的位置。
+ * 不用 [DropdownMenuItem]：它内部写死 `minWidth = 112dp`，而菜单宽度由下拉容器按
+ * 「最宽一项」撑开。两项加起来，两个字的选项（「手动」）在勾后面还要空三十多像素，
+ * 勾和菜单右边缘离得很远（用户两次反馈的「右边空白太多」）。
+ * 这一版自己画行：整行可点、最小高 48dp、左右各 12dp，宽度完全由内容决定，
+ * 所以菜单右边缘与勾之间就只剩这 12dp。样式（字色、字号）照 Material 菜单项取值。
  */
 @Composable
-private fun MenuLabel(
+private fun MenuItemRow(
     label: String,
     selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leading: (@Composable () -> Unit)? = null,
     labelTag: String? = null,
     checkTag: String? = null,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.then(if (labelTag != null) Modifier.testTag(labelTag) else Modifier))
+    Row(
+        modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            // 先 clickable 再 padding：水波纹铺满整行，文字再有内边距。
+            .clickable(onClick = onClick)
+            .padding(horizontal = MENU_ITEM_PADDING, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (leading != null) {
+            leading()
+            Spacer(Modifier.width(12.dp))
+        }
+        Text(
+            label,
+            Modifier.then(if (labelTag != null) Modifier.testTag(labelTag) else Modifier),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+        )
         if (selected) {
             Spacer(Modifier.width(MENU_CHECK_GAP))
             Icon(
