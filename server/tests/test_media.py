@@ -428,7 +428,7 @@ def test_stored_only_after_cache_prune_and_targeted_refill(menv):
     assert reply.status_code == 409 and reply.json()["code"] == "stored_file_missing"
     assert menv.resolver.calls == calls
 
-    def resolve_target(text, *, media_type, page):
+    def resolve_target(text, *, media_type, page, user_id=None):
         assert text == P3_URL and page == 3 and media_type == "audio"
         return replace(menv.resolver.resolve(text, media_type=media_type),
                        video_id=P3_BV, page=3, media_type=media_type)
@@ -491,7 +491,7 @@ def test_legacy_owner_submit_with_p3_query_still_uses_default_cid(tmp_path, monk
         return httpx.Response(200, json={"code": 0, "data": {"durl": [{"url": "https://example.invalid/media"}]}})
 
     resolver = MediaResolver(client_factory=lambda **kw: httpx.Client(transport=httpx.MockTransport(upstream), **kw))
-    monkeypatch.setattr(resolver, "cookie_file", lambda _: None)
+    monkeypatch.setattr(resolver, "cookie_file", lambda _platform, user_id=None: None)
     monkeypatch.setattr("getmedia.extractor._get_mixin_key", lambda _: None)
     env = build(tmp_path, resolver=resolver)
     env.app.state.runtime.write(registration_open=True)

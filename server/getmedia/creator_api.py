@@ -200,12 +200,12 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
             raise ApiError(429, "rate_limited", "查询太频繁，请稍后再试", headers={"Retry-After": str(retry)})
 
 
-    def _batch_preview(body: CreatorPreviewBody) -> CreatorPreviewOut:
+    def _batch_preview(body: CreatorPreviewBody, user_id: str) -> CreatorPreviewOut:
         """三种选取方式的有界扫描：不落库，只给预览与空间预估。"""
         if jobs is None:
             raise ApiError(503, "creator_jobs_unavailable", "批量任务服务未启用")
         try:
-            ref = creator_service.resolve_ref(body.url, platform=body.platform)
+            ref = creator_service.resolve_ref(body.url, platform=body.platform, user_id=user_id)
             selection = Selection(
                 mode=body.mode,
                 since=parse_day(body.since) if body.since else None,
@@ -213,7 +213,7 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
                 n=body.n,
                 include_pinned=body.include_pinned,
             )
-            out = jobs.preview(ref, selection)
+            out = jobs.preview(ref, selection, user_id=user_id)
         except (JobError, LinkError) as exc:
             raise ApiError(400, "creator_input", str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
@@ -254,7 +254,7 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
         except LinkError as exc:
             raise ApiError(400, "creator_input", str(exc)) from exc
         if body.mode != "window":
-            return _batch_preview(body)
+            return _batch_preview(body, ctx.user_id)
         try:
             result = creator_service.preview(
                 body.url,
@@ -264,6 +264,7 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
                 include_comments=body.include_comments,
                 comment_limit=body.comment_limit,
                 platform=body.platform,
+                user_id=ctx.user_id,
             )
         except ApiError:
             raise

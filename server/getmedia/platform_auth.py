@@ -159,7 +159,7 @@ class PlatformAuthService:
                 " source=excluded.source, status='active'"),
                 {"u": user_id, "p": platform, "n": now, "src": s["method"]})
             c.execute(text("UPDATE platform_auth_sessions SET status='done' WHERE id=:i"), {"i": sid})
-        self._write_cookie_file(platform, jar)
+        self._write_cookie_file(platform, jar, user_id)
         return {"session_id": sid, "status": "done", "platform": platform, "bound": True,
                 "cookie_count": len(jar)}
 
@@ -173,7 +173,8 @@ class PlatformAuthService:
                       {"u": user_id, "p": platform})
         if not n:
             raise AuthError("not_bound", "该平台尚未绑定", 404)
-        path = Path(self.s.creator_cookie_dir) / f"{platform}.txt"
+        # 只删这个用户自己的 cookie 文件，不动运维放的全局 <platform>.txt
+        path = Path(self.s.creator_cookie_dir) / f"{platform}.{user_id}.txt"
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -181,12 +182,16 @@ class PlatformAuthService:
         return {"platform": platform, "unbound": True}
 
     # ---------- 凭据文件 ----------
-    def _write_cookie_file(self, platform: str, jar: dict[str, str]) -> None:
-        """给 ``creators/`` 用的 Netscape 文件：目录 700、文件 600，先写临时文件再原子改名。"""
+    def _write_cookie_file(self, platform: str, jar: dict[str, str], user_id: str) -> None:
+        """给 ``creators/`` 用的 Netscape 文件：目录 700、文件 600，先写临时文件再原子改名。
+
+        按 user_id 落名（``<platform>.<user_id>.txt``），这样每个账号各用各的 Cookie，
+        不会互相覆盖；抓取侧优先读自己的文件，没有才回退到运维放的全局 ``<platform>.txt``。
+        """
         d = Path(self.s.creator_cookie_dir)
         d.mkdir(parents=True, exist_ok=True)
         d.chmod(0o700)
-        final = d / f"{platform}.txt"
+        final = d / f"{platform}.{user_id}.txt"
         part = final.with_name(final.name + ".part")
         fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:

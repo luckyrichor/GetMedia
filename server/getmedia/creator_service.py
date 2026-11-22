@@ -40,14 +40,27 @@ def validate_range(start: int, count: int) -> tuple[int, int]:
     return start, count
 
 
-def cookie_file_for(platform: Platform) -> tuple[Path | None, str]:
+def cookie_file_for(platform: Platform, user_id: str | None = None) -> tuple[Path | None, str]:
     """返回（cookie 文件, 来源）。
 
-    优先用运维放在 ``creator-cookie-dir`` 里的 ``<platform>.txt``（登录凭证），
-    没有就现取一份访客 cookie。两者都拿不到时返回 None —— 平台适配器会带着
-    空 jar 继续尝试，由它决定是否需要提示用户授权。
+    优先级：
+    1. 该用户自己上传的 ``<platform>.<user_id>.txt``（平台授权页导入的登录凭证）；
+    2. 运维放在 ``creator-cookie-dir`` 里的 ``<platform>.txt``（默认/共享凭证）；
+    3. 现取一份访客 cookie。
+    都拿不到时返回 None —— 平台适配器会带着空 jar 继续尝试，由它决定是否提示授权。
+
+    按用户隔离是为了「谁上传用谁的、账号之间不互相覆盖」；没传 user_id 时退回到
+    原来的全局文件行为（兼容单条解析等拿不到身份的旧调用点）。
     """
-    configured = Path(settings.creator_cookie_dir) / f"{platform.value}.txt"
+    d = Path(settings.creator_cookie_dir)
+    if user_id:
+        own = d / f"{platform.value}.{user_id}.txt"
+        try:
+            if own.exists() and own.stat().st_size > 0:
+                return own, "configured"
+        except OSError:
+            pass
+    configured = d / f"{platform.value}.txt"
     try:
         if configured.exists() and configured.stat().st_size > 0:
             return configured, "configured"
@@ -70,8 +83,11 @@ def _platform_hint(value: str | None) -> Platform | None:
         raise LinkError(f"不支持的平台：{value}") from exc
 
 
-def resolve_ref(text: str, *, platform: str | None = None) -> CreatorRef:
-    """URL / 分享文案 / 抖音号 / B 站 UID / 昵称 → CreatorRef。"""
+def resolve_ref(text: str, *, platform: str | None = None, user_id: str | None = None) -> CreatorRef:
+    """URL / 分享文案 / 抖音号 / B 站 UID / 昵称 → CreatorRef。
+
+    ``user_id`` 用于按用户隔离 Cookie（谁上传用谁的），不传则回退全局/访客。
+    """
     hint = _platform_hint(platform)
 
     try:
@@ -93,7 +109,7 @@ def resolve_ref(text: str, *, platform: str | None = None) -> CreatorRef:
         errors: list[str] = []
         for candidate in platforms:
             provider = get_provider(candidate)
-            cookie_file, _ = cookie_file_for(candidate)
+            cookie_file, _ = cookie_file_for(candidate, user_id)
             try:
                 return provider.resolve(query.value, cookie_file=cookie_file)
             except CreatorAuthError:
@@ -123,11 +139,12 @@ def preview(
     include_comments: bool = False,
     comment_limit: int = 5,
     platform: str | None = None,
+    user_id: str | None = None,
 ) -> PreviewResult:
     start, count = validate_range(start, count)
-    ref = resolve_ref(text, platform=platform)
+    ref = resolve_ref(text, platform=platform, user_id=user_id)
     provider = get_provider(ref.platform)
-    cookie_file, cookie_source = cookie_file_for(ref.platform)
+    cookie_file, cookie_source = cookie_file_for(ref.platform, user_id)
 
     window = provider.fetch_window(ref, start=start, count=count, cookie_file=cookie_file)
 

@@ -141,8 +141,8 @@ def estimate_bytes(duration_sec: float | None, media_type: str, s: Settings) -> 
     return int(duration_sec / 60 * rate * 1024**2)
 
 
-def _default_resolve(url: str, platform: str | None = None) -> CreatorRef:
-    return creator_service.resolve_ref(url, platform=platform)
+def _default_resolve(url: str, platform: str | None = None, user_id: str | None = None) -> CreatorRef:
+    return creator_service.resolve_ref(url, platform=platform, user_id=user_id)
 
 
 def _default_window(ref: CreatorRef, start: int, count: int, cookie_file) -> object:
@@ -234,7 +234,7 @@ class CreatorJobService:
         except ValueError as exc:
             raise JobError("bad_formats", str(exc)) from exc
         try:
-            ref = self.resolve_fn(url, platform)
+            ref = self.resolve_fn(url, platform, user_id)
         except CreatorError as exc:
             raise JobError("creator_not_found", str(exc), 404) from exc
         except Exception as exc:  # noqa: BLE001
@@ -474,7 +474,7 @@ class CreatorJobService:
 
     # ---------- 列表扫描 ----------
     def preview(self, ref: CreatorRef, selection: Selection, *, max_items: int = 100,
-                media_type: str = "video") -> dict:
+                media_type: str = "video", user_id: str | None = None) -> dict:
         """预览：只扫到 ``max_items`` 条（或自然停止），不落库。
 
         「全部作品」不再逐页跳扫：平台列表接口只有游标顺序翻页，按「绝对起点」跳页时
@@ -482,7 +482,7 @@ class CreatorJobService:
         所以 ``all`` 只扫**一批**（一次 ``fetch_window``），抓多少算多少、如实回 ``has_more``；
         真正翻到底交给建任务后的 ``run()`` 循环（它每页落库游标，可续扫）。
         """
-        cookie_file, _src = self.cookie_fn(ref.platform)
+        cookie_file, _src = self.cookie_fn(ref.platform, user_id)
         pinned = self.pinned_fn(ref, cookie_file)
         picked: list[dict] = []
         total = None
@@ -581,7 +581,7 @@ class CreatorJobService:
             return job
 
         ref = CreatorRef(Platform(job["platform"]), job["creator_id"], job["source_url"])
-        cookie_file, _src = self.cookie_fn(ref.platform)
+        cookie_file, _src = self.cookie_fn(ref.platform, user_id)
         sel = Selection(mode=job["mode"], since=job["since_ts"], until=job["until_ts"],
                         n=job["limit_n"], include_pinned=job["include_pinned"])
         start = 1 if refresh else int((job["cursor"] or {}).get("start") or 1)
@@ -797,7 +797,7 @@ class CreatorJobService:
             if item is None:
                 break
             try:
-                size = self._store_one(job, item)
+                size = self._store_one(job, item, user_id)
             except _LinksExpired as exc:
                 if rescanned or not self._rescan_links(job_id, user_id):
                     bad += 1
@@ -807,7 +807,7 @@ class CreatorJobService:
                 rescanned = True
                 fresh = self._reload_item(job_id, item["id"]) or item
                 try:
-                    size = self._store_one(job, fresh)
+                    size = self._store_one(job, fresh, user_id)
                 except _StoreFailed as exc2:
                     bad += 1
                     self._mark_store_failed(job_id, item["id"], str(exc2)[:200])
@@ -831,14 +831,14 @@ class CreatorJobService:
             log.info("批量任务 %s 落盘结束：成功 %s 条，失败 %s 条", job_id, ok, bad)
         return {"stored": ok, "failed": bad}
 
-    def _store_one(self, job: dict, item: dict) -> int:
+    def _store_one(self, job: dict, item: dict, user_id: str) -> int:
         """下一条：先把原始文件取回来，再按选中的每个格式各产出一份。返回总字节数。"""
         storage = job["storage"]
         media_type = job["media_type"] or "video"
         formts = job.get("formats") or creator_formats.defaults_for(media_type)
         base = self.store.dir_for(storage)
         stem = f"c{item['id']}-{item['video_id']}"
-        src, src_ext = self._fetch_source(item, base, stem, media_type)
+        src, src_ext = self._fetch_source(item, base, stem, media_type, user_id)
         try:
             files, total = self._produce(src, base, stem, src_ext, formts, storage)
         finally:
@@ -853,7 +853,7 @@ class CreatorJobService:
             return []
         return [u for u in raw if isinstance(u, str) and u.startswith("http")]
 
-    def _fetch_source(self, item: dict, base, stem: str, media_type: str) -> tuple:
+    def _fetch_source(self, item: dict, base, stem: str, media_type: str, user_id: str) -> tuple:
         """把原始文件下到 ``<stem>.src``；返回（路径, 扩展名）。全失败时区分「地址过期」与「本来没地址」。"""
         urls = self._play_urls(item)
         last = "没有可用的播放地址"
@@ -866,7 +866,8 @@ class CreatorJobService:
         # B 站有「拿作品页现解析」的路子：每次都能换出新地址，不依赖扫描时存的那份
         if item["platform"] == "bilibili" and item.get("source_url") and self.media_resolver is not None:
             try:
-                media = self.media_resolver.resolve(item["source_url"], media_type=media_type)
+                media = self.media_resolver.resolve(item["source_url"], media_type=media_type,
+                                                    user_id=user_id)
                 source = media.sources[0]
             except Exception as exc:  # noqa: BLE001
                 raise _StoreFailed(f"解析失败：{type(exc).__name__}") from exc
@@ -936,7 +937,7 @@ class CreatorJobService:
         base = Path(workdir)
         base.mkdir(parents=True, exist_ok=True)
         stem = f"c{item['id']}-{video_id}"
-        src, src_ext = self._fetch_source(item, base, stem, media_type)
+        src, src_ext = self._fetch_source(item, base, stem, media_type, user_id)
         try:
             if fmt == "source":
                 out = base / f"{stem}.{src_ext}"
@@ -965,7 +966,7 @@ class CreatorJobService:
         """
         job = self.get(user_id, job_id)
         ref = CreatorRef(Platform(job["platform"]), job["creator_id"], job["source_url"])
-        cookie_file, _src = self.cookie_fn(ref.platform)
+        cookie_file, _src = self.cookie_fn(ref.platform, user_id)
         page_size = max(int(self.s.creator_page_size),
                         int(getattr(self.s, "creator_scan_batch", 0) or 0))
         start, pages, updated = 1, 0, 0

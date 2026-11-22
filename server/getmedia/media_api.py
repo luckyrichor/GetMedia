@@ -226,9 +226,9 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
 
     # ---------- 解析 / 提取 ----------
     @app.post("/v2/resolve", response_model=ResolveOut)
-    def resolve(body: ResolveBody, _ctx: AuthCtx = Depends(guard)):
+    def resolve(body: ResolveBody, ctx: AuthCtx = Depends(guard)):
         try:
-            m = resolver.resolve(body.text, media_type=body.media_type)
+            m = resolver.resolve(body.text, media_type=body.media_type, user_id=ctx.user_id)
         except Exception as exc:  # noqa: BLE001
             _translate(exc)
         return ResolveOut(platform=m.platform, video_id=m.video_id, title=m.title,
@@ -249,7 +249,8 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
             raise MediaError("stored_file_missing", "服务器归档文件缺失", 409)
         if track["storage"] not in ("metadata", "cache") or body.storage != "cache":
             raise MediaError("target_storage_invalid", "补取原条目只支持缓存模式", 409)
-        resolved = resolver.resolve_target(body.input, media_type=body.media_type, page=expected[2])
+        resolved = resolver.resolve_target(body.input, media_type=body.media_type, page=expected[2],
+                                           user_id=user_id)
         if (resolved.media_type != body.media_type
                 or _media_key(resolved.platform, resolved.video_id, resolved.page) != expected):
             raise MediaError("target_mismatch", "返回的作品、分集或媒体类型与请求不符", 409)
@@ -283,7 +284,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
             if body.target is not None:
                 _run_target_job(job_id, user_id, body, body.target)
                 return
-            m = resolver.resolve(input_, media_type=media_type)
+            m = resolver.resolve(input_, media_type=media_type, user_id=user_id)
         except (ResolveError, MediaError) as exc:
             store.job_update(job_id, status="failed", error_code=exc.code, error_detail=exc.detail,
                              finished_at=store.now())
@@ -494,7 +495,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
         if not track.get("source_url"):
             raise ApiError(409, "media_unavailable", "该条目没有可用的媒地址，请在客户端重新解析")
         try:
-            m = resolver.resolve(track["source_url"], media_type=track["media_type"])
+            m = resolver.resolve(track["source_url"], media_type=track["media_type"], user_id=ctx.user_id)
         except Exception as exc:  # noqa: BLE001
             _translate(exc)
         if not m.sources:

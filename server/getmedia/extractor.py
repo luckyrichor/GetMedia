@@ -96,14 +96,19 @@ class MediaResolver:
             return "bilibili", m.group(1)
         return None
 
-    def cookie_file(self, platform: str) -> Path | None:
-        """优先用运维/授权导入的 ``<platform>.txt``；没有就现取一份访客 Cookie。
+    def cookie_file(self, platform: str, user_id: str | None = None) -> Path | None:
+        """优先用该用户自己上传的 ``<platform>.<user_id>.txt``，没有就退回运维/默认的
+        ``<platform>.txt``；再没有就现取一份访客 Cookie。
 
         B 站机房 IP 对 ``x/web-interface/view`` 的裸请求会直接 412，
         带上 ``buvid3`` 才放行——这也是 ``creators/`` 里同样的做法。
         """
         if self._cookie_dir is None:
             self._cookie_dir = settings.creator_cookie_dir
+        if user_id:
+            own = Path(self._cookie_dir) / f"{platform}.{user_id}.txt"
+            if own.is_file() and own.stat().st_size > 0:
+                return own
         p = Path(self._cookie_dir) / f"{platform}.txt"
         if p.is_file() and p.stat().st_size > 0:
             return p
@@ -117,7 +122,7 @@ class MediaResolver:
             return None
 
     # ---------- 解析 ----------
-    def resolve(self, text: str, *, media_type: str = "video") -> ResolvedMedia:
+    def resolve(self, text: str, *, media_type: str = "video", user_id: str | None = None) -> ResolvedMedia:
         found = self.sniff(text)
         if found is None:
             raise ResolveError("unsupported_link", "识别不出作品链接；请传单条作品链接或 BV 号", 400)
@@ -128,20 +133,22 @@ class MediaResolver:
                 "抖音直链需要授权 Cookie 与浏览器桥接；请在手机端提取，或先在网页端完成抖音授权",
                 503,
             )
-        return self._resolve_bilibili(vid, media_type=media_type)
+        return self._resolve_bilibili(vid, media_type=media_type, user_id=user_id)
 
-    def resolve_target(self, text: str, *, media_type: str, page: int) -> ResolvedMedia:
+    def resolve_target(self, text: str, *, media_type: str, page: int,
+                       user_id: str | None = None) -> ResolvedMedia:
         found = self.sniff(text)
         if found is None or found[0] != "bilibili":
-            return self.resolve(text, media_type=media_type)
+            return self.resolve(text, media_type=media_type, user_id=user_id)
         pages_in_link = re.findall(r"[?&]p=([^&#\s]+)", text)
         if any(value != str(page) for value in pages_in_link):
             raise ResolveError("target_mismatch", "链接中的分集与目标不符", 409)
-        return self._resolve_bilibili(found[1], media_type=media_type, target_page=page)
+        return self._resolve_bilibili(found[1], media_type=media_type, target_page=page, user_id=user_id)
 
-    def _resolve_bilibili(self, vid: str, *, media_type: str, target_page: int | None = None) -> ResolvedMedia:
+    def _resolve_bilibili(self, vid: str, *, media_type: str, target_page: int | None = None,
+                          user_id: str | None = None) -> ResolvedMedia:
         params = {"bvid": vid} if vid.startswith("BV") else {"aid": vid[2:]}
-        cookies = _parse_cookie_file(self.cookie_file("bilibili"))
+        cookies = _parse_cookie_file(self.cookie_file("bilibili", user_id))
         headers = {"User-Agent": _UA, "Referer": "https://www.bilibili.com/"}
         with self._client_factory(timeout=settings.http_timeout, headers=headers,
                                   cookies=cookies, follow_redirects=True) as client:
@@ -219,8 +226,8 @@ class FakeResolver:
     def __init__(self, *, fail: bool = False, title: str = "示例作品"):
         self.fail, self.title, self.calls = fail, title, []
 
-    def resolve(self, text: str, *, media_type: str = "video") -> ResolvedMedia:
-        self.calls.append(("resolve", text, media_type))
+    def resolve(self, text: str, *, media_type: str = "video", user_id: str | None = None) -> ResolvedMedia:
+        self.calls.append(("resolve", text, media_type, user_id))
         if self.fail:
             raise ResolveError("resolve_failed", "测试注入的解析失败", 502)
         vid = (text.rstrip("/").rsplit("/", 1)[-1] or "BVtest0001")[:16]

@@ -55,11 +55,11 @@ class Lister:
         )
 
 
-def resolver(url, platform=None):
+def resolver(url, platform=None, user_id=None):
     return CreatorRef(Platform.BILIBILI, "2", "https://space.bilibili.com/2/video")
 
 
-def no_cookies(_platform):
+def no_cookies(_platform, _user_id=None):
     return None, "none"
 
 
@@ -575,7 +575,7 @@ def env_with_douyin(tmp_path, *, later=None):
     env.app.state.runtime.write(registration_open=True)
     env.token = make_owner(env, name="boss")
     jobs = env.app.state.creator_jobs
-    jobs.resolve_fn = lambda url, platform=None: CreatorRef(
+    jobs.resolve_fn = lambda url, platform=None, user_id=None: CreatorRef(
         Platform.DOUYIN, "9", "https://www.douyin.com/user/9")
 
     def opener(url, _platform):

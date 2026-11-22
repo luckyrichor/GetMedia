@@ -72,8 +72,8 @@ def build(tmp_path, *, items, link_resolver=None, media_resolver=None):
     app = create_app(settings, clock=C(), alerts=RecordingAlertSink(),
                      creator_lister=lister,
                      creator_resolver=link_resolver or (
-                         lambda url, platform=None: CreatorRef(Platform.BILIBILI, "2", url)),
-                     creator_cookies=lambda p: (None, "none"),
+                         lambda url, platform=None, user_id=None: CreatorRef(Platform.BILIBILI, "2", url)),
+                     creator_cookies=lambda p, user_id=None: (None, "none"),
                      creator_pinned=lambda ref, cookies=None: set(),
                      media_resolver=media_resolver or FakeResolver())
     env = SimpleNamespace(settings=settings, app=app,
@@ -156,7 +156,7 @@ def test_download_expired_link_for_douyin_says_rescan(tmp_path, monkeypatch):
     """抖音没有直链就只能重扫：明确 409，而不是 502 让人反复重试。"""
     items = videos(2, platform=Platform.DOUYIN, play_urls=())
     env = build(tmp_path, items=items,
-                link_resolver=lambda url, platform=None: CreatorRef(Platform.DOUYIN, "sec", url))
+                link_resolver=lambda url, platform=None, user_id=None: CreatorRef(Platform.DOUYIN, "sec", url))
     make_job(env)
     got = env.client.get(f"/v2/creators/jobs/1/items/{items[0].video_id}/file",
                          headers=hdr(env.token))

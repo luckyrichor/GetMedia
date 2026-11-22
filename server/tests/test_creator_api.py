@@ -75,7 +75,7 @@ def creator(open_reg, monkeypatch):
     """把平台适配器换成假的，并避免真的去预热访客 cookie。"""
     provider = FakeProvider()
     monkeypatch.setattr(creator_service, "get_provider", lambda platform: provider)
-    monkeypatch.setattr(creator_service, "cookie_file_for", lambda platform: (None, "none"))
+    monkeypatch.setattr(creator_service, "cookie_file_for", lambda platform, user_id=None: (None, "none"))
     open_reg.provider = provider
     return open_reg
 

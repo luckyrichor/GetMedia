@@ -284,7 +284,8 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
                 media_resolver = getattr(app.state, "extractor", None)
                 if media_resolver is not None:
                     try:
-                        media = media_resolver.resolve(item["source_url"], media_type=media_type)
+                        media = media_resolver.resolve(item["source_url"], media_type=media_type,
+                                                       user_id=ctx.user_id)
                         resp = media_resolver.open_stream(media.sources[0], range_header=range_header)
                     except Exception as exc:  # noqa: BLE001 - 上游问题统一报可重试
                         raise ApiError(502, "media_upstream_failed", "解析作品地址失败，请稍后重试") from exc

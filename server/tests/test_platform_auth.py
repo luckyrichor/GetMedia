@@ -32,6 +32,7 @@ def test_platforms_and_empty_bindings(open_reg):
 
 def test_import_cookie_binds_and_writes_file(open_reg):
     token = make_owner(open_reg, name="boss")
+    uid = open_reg.client.get("/account/me", headers=hdr(token)).json()["id"]
     sid = start(open_reg, token).json()["session_id"]
     r = open_reg.client.post("/account/platform-auth/cookie", headers=hdr(token),
                              json={"session_id": sid, "cookie": GOOD_BILI})
@@ -44,7 +45,8 @@ def test_import_cookie_binds_and_writes_file(open_reg):
     assert b["bindings"][0]["source"] == "webview"
     assert b["credentials"][0]["decryptable"] is True
 
-    p = Path(open_reg.settings.creator_cookie_dir) / "bilibili.txt"
+    # 按用户隔离：写的是 <platform>.<user_id>.txt，不再覆盖全局 <platform>.txt
+    p = Path(open_reg.settings.creator_cookie_dir) / f"bilibili.{uid}.txt"
     assert p.is_file()
     assert oct(p.stat().st_mode & 0o777) == "0o600"
     text = p.read_text()
@@ -74,6 +76,7 @@ def test_cookie_validation(open_reg):
 
 def test_unbind_and_cancel(open_reg):
     token = make_owner(open_reg, name="boss")
+    uid = open_reg.client.get("/account/me", headers=hdr(token)).json()["id"]
     sid = start(open_reg, token).json()["session_id"]
     open_reg.client.post("/account/platform-auth/cookie", headers=hdr(token),
                          json={"session_id": sid, "cookie": GOOD_BILI})
@@ -81,7 +84,7 @@ def test_unbind_and_cancel(open_reg):
                                 headers=hdr(token)).status_code == 200
     assert open_reg.client.post("/account/platform-bindings/bilibili/unbind",
                                 headers=hdr(token)).status_code == 404
-    assert not (Path(open_reg.settings.creator_cookie_dir) / "bilibili.txt").exists()
+    assert not (Path(open_reg.settings.creator_cookie_dir) / f"bilibili.{uid}.txt").exists()
 
     sid2 = start(open_reg, token).json()["session_id"]
     assert open_reg.client.post("/account/platform-auth/cancel", headers=hdr(token),

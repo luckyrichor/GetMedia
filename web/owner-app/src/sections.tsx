@@ -172,24 +172,20 @@ export function Overview({ cfg }: { cfg: OwnerConfig }) {
 
       <div class="cards">
         <div class="metric">
-          <div class="metric-k">媒体缓存保留时间</div>
+          <div class="metric-k">媒体缓存时间</div>
           <div class="metric-v">{fmtTTL(cfg.cache_ttl_seconds)}</div>
         </div>
         <div class="metric">
-          <div class="metric-k">缓存空间上限</div>
+          <div class="metric-k">媒体缓存上限</div>
           <div class="metric-v">{fmtGB(cfg.cache_quota_bytes)}</div>
         </div>
         <div class="metric">
-          <div class="metric-k">媒体文件存储上限</div>
+          <div class="metric-k">媒体存储上限</div>
           <div class="metric-v">{fmtGB(cfg.archive_quota_bytes)}</div>
         </div>
         <div class="metric">
           <div class="metric-k">最近 N 条上限</div>
           <div class="metric-v">{cfg.creator.max_items} 条</div>
-        </div>
-        <div class="metric">
-          <div class="metric-k">可回溯起点</div>
-          <div class="metric-v">{cfg.creator.max_start} 条</div>
         </div>
       </div>
 
