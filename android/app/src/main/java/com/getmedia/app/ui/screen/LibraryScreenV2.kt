@@ -174,7 +174,7 @@ private fun SortChip(
                 Spacer(Modifier.width(4.dp))
                 // 按钮上只写「排序」两个字，不带当前字段：
                 // 视频模式下这一行还要放「显示画面」，带上「：手动」会多占约 35dp，
-                // 正好把最后的按钮挤到第二行；当前字段在下拉里标着「（当前）」，
+                // 正好把最后的按钮挤到第二行；当前字段在下拉里用勾标出，
                 // 读屏也会读出完整说法（见外层 contentDescription）。
                 Text("排序", style = MaterialTheme.typography.labelLarge)
                 if (field != SortField.MANUAL) {
@@ -206,7 +206,9 @@ private fun SortChip(
             SortField.entries.forEach { f ->
                 DropdownMenuItem(
                     modifier = Modifier.testTag(LibraryToolbarTags.option(f)),
-                    text = { Text(if (f == field) "${f.label}（当前）" else f.label) },
+                    // 当前项只靠右边的勾表示，不加「（当前）」文字：勾已经说清楚了，
+                    // 再加四个字只是重复，还会把菜单项文字撑长。
+                    text = { Text(f.label) },
                     onClick = { onPickField(f); menu = false },
                     trailingIcon = {
                         if (f == field) {
@@ -256,7 +258,8 @@ private fun KindPicker(kind: MediaKind, onPickKind: (MediaKind) -> Unit) {
             MediaKind.entries.forEach { k ->
                 DropdownMenuItem(
                     modifier = Modifier.testTag(LibraryToolbarTags.kind(k)),
-                    text = { Text(if (k == kind) "${kindLabel(k)}（当前）" else kindLabel(k)) },
+                    // 同排序菜单：当前类型只用勾表示，不写「（当前）」。
+                    text = { Text(kindLabel(k)) },
                     leadingIcon = {
                         Icon(
                             if (k == MediaKind.AUDIO) Icons.Default.Audiotrack else Icons.Default.Movie,

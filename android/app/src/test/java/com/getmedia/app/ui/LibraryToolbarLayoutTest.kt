@@ -20,6 +20,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -250,6 +251,10 @@ class LibraryToolbarLayoutTest {
             rule.onNodeWithTag(LibraryToolbarTags.option(f)).assertIsDisplayed()
             rule.onNodeWithTag(LibraryToolbarTags.option(f)).assertHeightIsAtLeast(48.dp)
         }
+        // 当前项只用勾标出，菜单里不该再有「（当前）」这类重复文字。
+        for (f in SortField.entries) {
+            rule.onNodeWithText("${f.label}（当前）").assertDoesNotExist()
+        }
         rule.onNodeWithTag(LibraryToolbarTags.option(SortField.NAME)).performClick()
         assert(picked.single() == SortField.NAME) { "点击「名称」应回调 NAME，实际 $picked" }
     }
@@ -284,6 +289,8 @@ class LibraryToolbarLayoutTest {
         rule.onNodeWithTag(LibraryToolbarTags.KIND).performClick()
         rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.AUDIO)).assertIsDisplayed()
         rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.VIDEO)).assertIsDisplayed()
+        // 当前类型同样只靠勾，不写「（当前）」。
+        rule.onNodeWithText("音频（当前）").assertDoesNotExist()
         // 点当前项：菜单关掉，不回调。
         rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.AUDIO)).performClick()
         assert(picked.isEmpty()) { "点当前类型不该回调，实际 $picked" }
