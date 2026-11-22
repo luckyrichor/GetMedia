@@ -121,6 +121,9 @@ def _item_row(row) -> dict:
         files = {"source": {"path": m["media_path"], "bytes": int(m.get("bytes") or 0)}}
     m["files"] = files
     m["is_pinned"] = bool(m.get("is_pinned"))
+    m["pinned_order"] = m.get("pinned_order")
+    # seq 是 SELECT 里窗口子查询算的普通作品全局序号；置顶为 NULL。
+    m["seq"] = m.get("seq")
     m["stored"] = bool(files)
     return m
 
@@ -390,9 +393,23 @@ class CreatorJobService:
     def items(self, user_id: str, job_id: int, *, state: str | None = None, limit: int = 100,
               offset: int = 0) -> dict:
         self._owned(user_id, job_id)
+        # ``seq`` 是普通作品（非置顶）在发布时间倒序里的全局序号，从 1 开始，跨页稳定；
+        # 置顶作品 seq 为 NULL。用相关子查询数「排在它前面的普通作品数 + 1」，
+        # 不依赖分页窗口，翻页、换每页条数序号都不变。带 state 过滤时不编号（手机端逐条领取不需要序号）。
+        seq_sql = "NULL AS seq"
+        order_extra = "is_pinned DESC, pinned_order ASC, published_at DESC, id ASC"
+        if not state:
+            seq_sql = (
+                "CASE WHEN is_pinned THEN NULL ELSE"
+                " (SELECT COUNT(*) FROM creator_items c2 WHERE c2.job_id=creator_items.job_id"
+                "   AND c2.is_pinned=0 AND"
+                "   (c2.published_at > creator_items.published_at OR"
+                "    (c2.published_at = creator_items.published_at AND c2.id < creator_items.id))) + 1"
+                " END AS seq")
         sql = ("SELECT id, video_id, platform, page, title, duration_sec, published_at, is_pinned,"
-               " cover_url, source_url, download_state, track_id, error, bytes, store_error,"
-               " stored_at, added_at, files_json, (media_path IS NOT NULL) AS stored"
+               " pinned_order, cover_url, source_url, download_state, track_id, error, bytes,"
+               " store_error, stored_at, added_at, files_json, (media_path IS NOT NULL) AS stored,"
+               f" {seq_sql}"
                " FROM creator_items WHERE job_id=:j")
         params: dict = {"j": job_id, "l": limit, "o": offset}
         if state:
@@ -400,7 +417,9 @@ class CreatorJobService:
                 raise JobError("bad_state", "未知的条目状态")
             sql += " AND download_state=:st"
             params["st"] = state
-        sql += " ORDER BY published_at DESC, id ASC LIMIT :l OFFSET :o"
+        # 置顶作品独立成组：先按 is_pinned 把置顶放最前，置顶之间按平台顺序（pinned_order），
+        # 普通作品按发布时间倒序；同时间再按 id 兜底保证稳定。
+        sql += (f" ORDER BY {order_extra} LIMIT :l OFFSET :o")
         with self.engine.begin() as c:
             rows = c.execute(text(sql), params).all()
             total = int(c.execute(text("SELECT COUNT(*) FROM creator_items WHERE job_id=:j"),
@@ -536,19 +555,31 @@ class CreatorJobService:
                     break
         for p in picked:
             p["estimated_bytes"] = estimate_bytes(p["duration_sec"], "video", self.s)
+        # 置顶作品独立成组：置顶在前（按平台顺序），普通作品按发布时间倒序。
+        picked.sort(key=lambda p: (
+            0 if p.get("is_pinned") else 1,          # 置顶在前
+            p.get("pinned_order") if p.get("pinned_order") is not None else 1 << 30,
+            -(p.get("published_at") or 0),           # 发布时间倒序
+        ))
         return {"items": picked[:max_items], "total": total, "profile": profile,
                 "has_more": has_more,
                 "estimated_bytes": sum(p["estimated_bytes"] for p in picked[:max_items])}
 
     def _select_one(self, v: CreatorVideo, sel: Selection, pinned: set[str]) -> dict | None:
         pub = _epoch(v.published_at)
-        is_pinned = v.video_id in pinned
+        # 置顶识别：抖音在新数据模型里直接带 is_pinned/pinned_order；B 站靠 pinned set。
+        is_pinned = bool(v.is_pinned) or v.video_id in pinned
+        pinned_order = v.pinned_order
         if not is_pinned:
             raw = v.prefetched or {}
             try:
-                is_pinned = bool(int(raw.get("is_top") or 0))
+                if int(raw.get("is_top") or 0):
+                    is_pinned = True
             except (TypeError, ValueError):
-                is_pinned = False
+                pass
+            # prefetched 兜底识别出的置顶没有平台顺序，排在已有序号的置顶之后。
+            if is_pinned and pinned_order is None:
+                pinned_order = 1 << 30
         if is_pinned and not sel.include_pinned:
             return None
         if sel.mode == "date_range":
@@ -559,8 +590,8 @@ class CreatorJobService:
             if sel.until is not None and pub > sel.until:
                 return None
         return {"video_id": v.video_id, "title": v.title, "duration_sec": v.duration_sec,
-                "published_at": pub, "is_pinned": is_pinned, "cover_url": v.cover_url,
-                "source_url": v.source_url, "platform": v.platform.value,
+                "published_at": pub, "is_pinned": is_pinned, "pinned_order": pinned_order,
+                "cover_url": v.cover_url, "source_url": v.source_url, "platform": v.platform.value,
                 "play_urls": list(v.play_urls)}
 
     # ---------- 执行 ----------
@@ -707,12 +738,13 @@ class CreatorJobService:
                     continue
                 r = c.execute(text(
                     "INSERT OR IGNORE INTO creator_items(job_id, platform, video_id, page, title,"
-                    " duration_sec, published_at, is_pinned, cover_url, source_url, download_state,"
-                    " added_at, updated_at)"
-                    " VALUES(:j,:p,:v,1,:t,:d,:pub,:pin,:cv,:su,'pending',:n,:n)"),
+                    " duration_sec, published_at, is_pinned, pinned_order, cover_url, source_url,"
+                    " download_state, added_at, updated_at)"
+                    " VALUES(:j,:p,:v,1,:t,:d,:pub,:pin,:pord,:cv,:su,'pending',:n,:n)"),
                     {"j": job_id, "p": item["platform"], "v": item["video_id"], "t": item["title"][:200],
                      "d": item["duration_sec"], "pub": item["published_at"], "pin": int(item["is_pinned"]),
-                     "cv": item["cover_url"], "su": item["source_url"], "n": now})
+                     "pord": item.get("pinned_order"), "cv": item["cover_url"], "su": item["source_url"],
+                     "n": now})
                 if r.rowcount:
                     added += 1
                     added_secs += float(item["duration_sec"] or 0)

@@ -633,9 +633,18 @@ class DouyinCreatorProvider:
             raise direct_error or CreatorUnavailable(_BROWSER_INSTALL_HINT)
 
         # 抖音主页会把置顶作品放在列表最前面；范围语义是「按发布时间倒序」，
-        # 所以这里必须重新按 create_time 排序，不能直接信任页面顺序。
+        # 所以普通作品要重新按 create_time 排序，不能直接信任页面顺序。
+        # 但置顶作品要保持平台给的顺序（用户手动设定的置顶排列，不按时间），
+        # 所以在重排前先把置顶作品按原始出现顺序记下来，重排后再把顺序填回。
+        raw_items = catalog.get("items") or []
+        pinned_orders: dict[str, int] = {}
+        for raw in raw_items:
+            if isinstance(raw, dict) and _int(raw.get("is_top")):
+                aweme_id = str(raw.get("aweme_id"))
+                if aweme_id:
+                    pinned_orders.setdefault(aweme_id, len(pinned_orders))
         items = sorted(
-            catalog.get("items") or [],
+            raw_items,
             key=lambda item: _int(item.get("create_time")) or 0,
             reverse=True,
         )
@@ -660,7 +669,7 @@ class DouyinCreatorProvider:
                 )
             raise CreatorRangeError(f"范围超出：该博主只有 {len(items)} 条公开视频")
 
-        videos = [self._to_video(raw, index + 1, ref) for index, raw in enumerate(items)]
+        videos = [self._to_video(raw, index + 1, ref, pinned_orders) for index, raw in enumerate(items)]
         has_more = bool(catalog.get("has_more")) or (total is not None and len(videos) < total)
         return CreatorWindow(
             profile=profile,
@@ -763,7 +772,8 @@ class DouyinCreatorProvider:
             signature=(raw.get("signature") or "").strip() or None,
         )
 
-    def _to_video(self, raw: dict, position: int, ref: CreatorRef) -> CreatorVideo:
+    def _to_video(self, raw: dict, position: int, ref: CreatorRef,
+                  pinned_orders: dict[str, int] | None = None) -> CreatorVideo:
         video = raw.get("video") if isinstance(raw.get("video"), dict) else {}
         stats_raw = raw.get("statistics") if isinstance(raw.get("statistics"), dict) else {}
         desc = (raw.get("desc") or "").strip()
@@ -773,6 +783,7 @@ class DouyinCreatorProvider:
         except (TypeError, ValueError):
             duration = None
         aweme_id = str(raw.get("aweme_id"))
+        pinned_order = (pinned_orders or {}).get(aweme_id)
         return CreatorVideo(
             platform=Platform.DOUYIN,
             video_id=aweme_id,
@@ -793,6 +804,8 @@ class DouyinCreatorProvider:
             ),
             prefetched=raw,
             play_urls=play_urls(raw),
+            is_pinned=pinned_order is not None,
+            pinned_order=pinned_order,
         )
 
     # ---------- 互动数据 ----------

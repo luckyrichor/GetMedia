@@ -57,6 +57,8 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
   border: 1px solid var(--line); color: var(--muted); background: var(--bg);
 }
 .tag.owner { color: var(--accent); border-color: currentColor; }
+/* 置顶作品的序号位标签：用强调色区分「这是置顶，不占序号」 */
+.tag.pin-tag { color: var(--accent); border-color: currentColor; flex: none; }
 .layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: calc(100vh - 110px); }
 
 /* ---- 侧栏 ---- */

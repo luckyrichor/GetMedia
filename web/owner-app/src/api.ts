@@ -235,6 +235,9 @@ export interface CreatorItem {
   duration_sec: number | null;
   published_at: number | null;
   is_pinned: boolean;
+  pinned_order: number | null;
+  /** 普通作品在发布时间倒序里的全局序号（从 1 起）；置顶作品为 null */
+  seq: number | null;
   cover_url: string | null;
   source_url: string;
   download_state: ItemState;

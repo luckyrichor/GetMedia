@@ -128,12 +128,52 @@ def test_latest_n_stops_at_n(jenv):
     assert job["status"] == "done"
     items = jenv.client.get(f"/v2/creators/jobs/{job['id']}/items", headers=hdr(jenv.token)).json()
     assert items["total"] == 5
-    # 置顶不插队：第 1 条本身就是最新一条（置顶），排序仍按发布时间
+    # 置顶作品独立成组放最前（这条置顶恰好也是最新一条，天然在首位），普通作品按发布时间倒序
     assert items["items"][0]["video_id"] == "BVpin000001"
     assert items["items"][0]["is_pinned"] is True
+    assert items["items"][0]["seq"] is None  # 置顶不占序号
+    assert [i["seq"] for i in items["items"][1:]] == [1, 2, 3, 4]  # 普通作品序号从 1 起
     assert [i["published_at"] for i in items["items"]] == sorted(
         [i["published_at"] for i in items["items"]], reverse=True)
     assert job["estimated_bytes"] > 0
+
+
+def test_pinned_items_grouped_first_and_ordered_by_platform(tmp_path):
+    """置顶作品独立成组：不管发布时间多老，都排最前、按平台给的顺序、不占普通作品序号。"""
+    # 两个置顶（发布时间较老，平台顺序 0/1），三个普通作品（发布时间较新，按时间倒序）
+    pinned_a = CreatorVideo(platform=Platform.BILIBILI, video_id="pinA", title="置顶A",
+                            source_url="https://bilibili/video/pinA", position=1, creator_id="2",
+                            duration_sec=10, published_at=(BASE - timedelta(days=100)).isoformat(),
+                            is_pinned=True, pinned_order=0)
+    pinned_b = CreatorVideo(platform=Platform.BILIBILI, video_id="pinB", title="置顶B",
+                            source_url="https://bilibili/video/pinB", position=2, creator_id="2",
+                            duration_sec=10, published_at=(BASE - timedelta(days=90)).isoformat(),
+                            is_pinned=True, pinned_order=1)
+    normal = [
+        CreatorVideo(platform=Platform.BILIBILI, video_id=f"n{i}", title=f"普通{i}",
+                     source_url=f"https://bilibili/video/n{i}", position=3 + i, creator_id="2",
+                     duration_sec=10, published_at=(BASE - timedelta(days=i)).isoformat())
+        for i in range(3)
+    ]
+    videos = [pinned_a, pinned_b] + normal
+
+    lister = Lister(videos)
+    env = build(tmp_path, lister=lister)
+    env.app.state.runtime.write(registration_open=True)
+    token = make_owner(env, name="boss")
+    r = env.client.post("/v2/creators/jobs", headers=hdr(token),
+                        json={"url": "https://space.bilibili.com/2/video", "mode": "all"})
+    job = env.client.get(f"/v2/creators/jobs/{r.json()['id']}", headers=hdr(token)).json()
+    assert job["status"] == "done"
+    items = env.client.get(f"/v2/creators/jobs/{job['id']}/items", headers=hdr(token)).json()["items"]
+
+    # 置顶在最前，按平台顺序（pinA=0 在 pinB=1 前），不占序号
+    assert [i["video_id"] for i in items[:2]] == ["pinA", "pinB"]
+    assert all(i["is_pinned"] for i in items[:2])
+    assert [i["seq"] for i in items[:2]] == [None, None]
+    # 普通作品按发布时间倒序，序号从 1 起
+    assert [i["video_id"] for i in items[2:]] == ["n0", "n1", "n2"]
+    assert [i["seq"] for i in items[2:]] == [1, 2, 3]
 
 
 def test_date_range_and_early_stop(jenv):

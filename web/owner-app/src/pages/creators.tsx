@@ -1046,10 +1046,12 @@ function JobItems({ jobId }: { jobId: number }) {
         <span />
       </div>
       <ul class="plain tight">
-        {items.map((i, idx) => (
+        {items.map((i) => (
           <li class="item-row">
-            {/* 序号接着上一页往下数，翻页后也知道这是第几条 */}
-            <span class="item-no" aria-hidden="true">{(page - 1) * size + idx + 1}</span>
+            {/* 置顶作品不占序号：序号列显示「置顶」标签；普通作品显示全局序号（后端算好，跨页稳定） */}
+            <span class="item-no" aria-hidden="true">
+              {i.is_pinned ? <span class="tag pin-tag">置顶</span> : (i.seq ?? '—')}
+            </span>
             <span class="item-title">
               <span class="ellipsis" title={i.title}>{i.title}</span>
               {/* 手机下载的任务里服务器只记账、不下载，pending 会一直是 pending——所以「待处理」不显示，

@@ -104,6 +104,7 @@ class CreatorVideoOut(BaseModel):
     comments: list[CreatorCommentOut] = Field(default_factory=list)
     comments_status: str | None = None
     is_pinned: bool = False
+    pinned_order: int | None = None
     estimated_bytes: int = 0
 
     @classmethod
@@ -230,6 +231,7 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
                 published_at=(datetime.fromtimestamp(row["published_at"], timezone.utc).isoformat()
                               if row.get("published_at") else None),
                 is_pinned=bool(row.get("is_pinned")),
+                pinned_order=row.get("pinned_order"),
                 estimated_bytes=int(row.get("estimated_bytes") or 0),
             )
             for i, row in enumerate(out["items"])

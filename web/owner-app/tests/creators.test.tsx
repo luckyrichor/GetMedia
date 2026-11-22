@@ -168,10 +168,10 @@ describe('批量提取', () => {
         json: {
           items: [
             { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
-              published_at: null, is_pinned: false, cover_url: null, source_url: 'x',
+              published_at: null, is_pinned: false, seq: 1, cover_url: null, source_url: 'x',
               download_state: 'done', track_id: 9, error: null },
             { id: 2, video_id: 'BV2', platform: 'bilibili', page: 1, title: '第二条作品', duration_sec: 60,
-              published_at: null, is_pinned: false, cover_url: null, source_url: 'x',
+              published_at: null, is_pinned: false, seq: 2, cover_url: null, source_url: 'x',
               download_state: 'failed', track_id: null, error: '平台拒绝' },
           ],
           total: 2, limit: 100, offset: 0,
@@ -205,10 +205,10 @@ describe('批量提取', () => {
         json: {
           items: [
             { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
-              published_at: null, is_pinned: false, cover_url: null, source_url: 'x',
+              published_at: null, is_pinned: false, seq: 1, cover_url: null, source_url: 'x',
               download_state: 'pending', track_id: null, error: null },
             { id: 2, video_id: 'BV2', platform: 'bilibili', page: 1, title: '第二条作品', duration_sec: 60,
-              published_at: null, is_pinned: false, cover_url: null, source_url: 'x',
+              published_at: null, is_pinned: false, seq: 2, cover_url: null, source_url: 'x',
               download_state: 'pending', track_id: null, error: null },
           ],
           total: 2, limit: 100, offset: 0,
@@ -719,6 +719,7 @@ describe('批量任务筛选', () => {
 describe('条目翻页', () => {
   const rows = (from: number, n: number) => Array.from({ length: n }, (_, i) => row({
     id: from + i, video_id: `BV${from + i}`, title: `作品 ${from + i}`,
+    seq: from + i,   // 普通作品的全局序号：从 1 起，跨页连续
   }));
 
   function routes() {

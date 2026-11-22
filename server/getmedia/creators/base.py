@@ -74,6 +74,9 @@ class CreatorVideo:
     prefetched: dict | None = None
     # 可直接下载的媒体地址（按优先级），扫描时顺手存进库；过期或为空时由下载接口重新解析。
     play_urls: tuple[str, ...] = ()
+    # 是否置顶作品；置顶作品在平台原始列表里的顺序（0 起，None 表示非置顶）。
+    is_pinned: bool = False
+    pinned_order: int | None = None
 
 
 @dataclass

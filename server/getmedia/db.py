@@ -482,6 +482,12 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         " WHERE source_input IS NULL AND platform = 'douyin'"
         " AND creator_id = 'MS4wLjABAAAAAR1hYk5la2AbZ_a-00wgh6UnypbV35hOG_8bQvsBqDrNGZpxcHBu7ueuCbAarO5l'",
     ]),
+    # v17 置顶作品独立成组：置顶作品要在列表最前、按平台给的顺序、不占普通作品序号。
+    # ``pinned_order`` 记置顶作品在平台原始列表里的顺序（0 起，NULL 表示非置顶）；
+    # 普通作品仍按 published_at 倒序、序号从 1 开始。is_pinned 已有，这里只补顺序。
+    (17, [
+        "ALTER TABLE creator_items ADD COLUMN pinned_order INTEGER",
+    ]),
 ]
 
 
