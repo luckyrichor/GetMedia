@@ -201,10 +201,10 @@ export function Overview({ cfg }: { cfg: OwnerConfig }) {
       )}
 
       <h2>栏目</h2>
-      <ul class="plain">
+      <ul class="plain sections">
         {SECTIONS.map((s) => (
           <li>
-            <Link to={s.path}>{s.label}</Link>
+            <Link class="sections-label" to={s.path}>{s.label}</Link>
             <span class="muted small">　{s.blurb}</span>
           </li>
         ))}

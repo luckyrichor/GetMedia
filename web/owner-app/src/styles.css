@@ -368,6 +368,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums;
 }
 .plain.tight li { padding: 4px 0; }
+/* 概览页「栏目」：左侧功能名固定列宽，右侧解释文字从同一列起点对齐。 */
+.sections .sections-label { display: inline-block; width: 8.5em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 条目工具条：左边下载全部，右边每页条数与总数 */
 .items-tools { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 6px; }
