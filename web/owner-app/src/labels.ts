@@ -95,6 +95,7 @@ export const SELECTION: Record<string, string> = {
   latest_n: '最近 N 条',
   date_range: '指定日期',
   all: '全部作品',
+  from_start: '指定起点',
 };
 
 export function intervalText(min: number): string {

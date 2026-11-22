@@ -148,6 +148,11 @@ function creatorIdLabel(j: CreatorJob): string {
 function selectionText(j: CreatorJob): string {
   // 「最近 N 条」直接带数字，说成「最近 20 条」，不再「最近 N 条（20 条）」那么绕
   if (j.mode === 'latest_n') return j.limit_n ? `最近 ${j.limit_n} 条` : '最近若干条';
+  // 「指定起点」：从第 N 条开始，往更久/往最新取
+  if (j.mode === 'from_start') {
+    const dir = j.direction === 'newer' ? '往最新' : '往更久';
+    return j.start_n ? `从第 ${j.start_n} 条${dir}` : '指定起点';
+  }
   let s = SELECTION[j.mode] ?? j.mode;
   if (j.since_ts) s += ` · ${fmtDay(j.since_ts)} 起`;
   if (j.until_ts) s += ` 至 ${fmtDay(j.until_ts)}`;
@@ -182,6 +187,8 @@ export function CreatorsPage() {
   const [n, setN] = useState('20');
   const [since, setSince] = useState('');
   const [until, setUntil] = useState(() => todayISO());
+  const [startNo, setStartNo] = useState('10');
+  const [direction, setDirection] = useState<'newer' | 'older'>('older');
   const [pinned, setPinned] = useState(true);
   const [storage, setStorage] = useState<JobStorage>('metadata');
   const [mediaType, setMediaType] = useState<MediaType>('video');
@@ -307,6 +314,8 @@ export function CreatorsPage() {
       n: mode === 'latest_n' ? Number(n) || null : null,
       since: mode === 'date_range' ? since || null : null,
       until: mode === 'date_range' ? until || null : null,
+      start_n: mode === 'from_start' ? Number(startNo) || null : null,
+      direction: mode === 'from_start' ? direction : null,
       include_pinned: pinned,
       formats,
       // 把用户填的原始内容一并带上（数字号 / 链接），后端存进 source_input，
@@ -329,6 +338,10 @@ export function CreatorsPage() {
     }
     if (mode === 'latest_n' && !(Number(n) > 0)) {
       setErr('最近 N 条要填一个正整数');
+      return false;
+    }
+    if (mode === 'from_start' && !(Number(startNo) > 0)) {
+      setErr('指定起点要填一个正整数（第几条作品）');
       return false;
     }
     if (mode === 'date_range' && !since) {
@@ -419,7 +432,7 @@ export function CreatorsPage() {
       <h1>批量提取</h1>
       <ul class="small muted lead-list">
         <li>输入博主主页链接，或直接填抖音号 / B 站号。</li>
-        <li>选取方式：最近 N 条、指定日期、全部作品。</li>
+        <li>选取方式：最近 N 条、指定日期、全部作品、指定起点。</li>
         <li>可以先「预览」看会选多少条，再「开始提取」。</li>
       </ul>
 
@@ -453,7 +466,7 @@ export function CreatorsPage() {
             <Select
               ariaLabel="选取方式"
               value={mode}
-              options={(['latest_n', 'date_range', 'all'] as SelectionMode[])
+              options={(['latest_n', 'date_range', 'all', 'from_start'] as SelectionMode[])
                 .map((m) => ({ value: m, label: SELECTION[m] ?? m }))}
               onChange={(v) => setMode(v as SelectionMode)}
             />
@@ -463,6 +476,32 @@ export function CreatorsPage() {
               <span>条数</span>
               <input type="number" min={1} max={100000} value={n} onInput={(e) => setN((e.target as HTMLInputElement).value)} />
             </label>
+          )}
+          {mode === 'from_start' && (
+            <>
+              <label class="field">
+                <span>起始序号</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={startNo}
+                  onInput={(e) => setStartNo((e.target as HTMLInputElement).value)}
+                />
+              </label>
+              <div class="field">
+                <span>方向</span>
+                <Select
+                  ariaLabel="回溯方向"
+                  value={direction}
+                  options={[
+                    { value: 'older', label: '往更久' },
+                    { value: 'newer', label: '往最新' },
+                  ]}
+                  onChange={(v) => setDirection(v as 'newer' | 'older')}
+                />
+              </div>
+            </>
           )}
           {mode === 'date_range' && (
             <>
@@ -692,7 +731,7 @@ export function CreatorsPage() {
             ariaLabel="筛选：选取方式"
             value={fMode}
             options={[{ value: '', label: '全部方式' }].concat(
-              (['latest_n', 'date_range', 'all'] as const).map((m) => ({ value: m, label: SELECTION[m] ?? m })),
+              (['latest_n', 'date_range', 'all', 'from_start'] as const).map((m) => ({ value: m, label: SELECTION[m] ?? m })),
             )}
             onChange={setFMode}
           />

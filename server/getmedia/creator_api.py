@@ -43,11 +43,13 @@ class CreatorPreviewBody(BaseModel):
     include_stats: bool = Field(True, description="是否补齐点赞/评论/收藏等互动数据")
     include_comments: bool = Field(False, description="是否抓 B 站热门评论正文（需逐条请求，较慢）")
     comment_limit: int = Field(5, ge=1, le=20)
-    # 批量选取：window 保持原来的序号窗口语义；其余三种会做有界扫描
-    mode: Literal["window", "all", "date_range", "latest_n"] = "window"
+    # 批量选取：window 保持原来的序号窗口语义；其余四种会做有界扫描
+    mode: Literal["window", "all", "date_range", "latest_n", "from_start"] = "window"
     since: str | None = Field(None, description="YYYY-MM-DD，北京时间，含当日")
     until: str | None = Field(None, description="YYYY-MM-DD，北京时间，含当日")
     n: int | None = Field(None, ge=1, le=100000, description="latest_n 的 n")
+    start_n: int | None = Field(None, ge=1, le=500, description="from_start 的起点（普通作品序号，1=最新）")
+    direction: Literal["newer", "older"] | None = Field(None, description="from_start 的方向")
     include_pinned: bool = Field(True, description="是否包含置顶作品（只影响筛选，不影响排序）")
 
 
@@ -213,6 +215,8 @@ def register(app, guard, engine, clock, *, jobs=None) -> None:
                 until=parse_day(body.until, end=True) if body.until else None,
                 n=body.n,
                 include_pinned=body.include_pinned,
+                start=body.start_n,
+                direction=body.direction,
             )
             out = jobs.preview(ref, selection, user_id=user_id)
         except (JobError, LinkError) as exc:

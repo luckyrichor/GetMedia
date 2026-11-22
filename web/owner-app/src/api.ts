@@ -156,7 +156,7 @@ export interface ExtractionJob {
 }
 
 // ---------------- 批量提取（5d） ----------------
-export type SelectionMode = 'latest_n' | 'date_range' | 'all';
+export type SelectionMode = 'latest_n' | 'date_range' | 'all' | 'from_start';
 
 export interface CreatorProfile {
   platform: string;
@@ -202,6 +202,9 @@ export interface CreatorJob {
   since_ts: number | null;
   until_ts: number | null;
   limit_n: number | null;
+  /** 指定起点的起点序号（普通作品，1=最新）与方向 */
+  start_n: number | null;
+  direction: 'newer' | 'older' | null;
   include_pinned: boolean;
   storage: string;
   media_type: MediaType;
@@ -501,10 +504,12 @@ export const ownerApi = {
   creatorPreview: (body: {
     url: string; platform?: string | null; mode: SelectionMode;
     n?: number | null; since?: string | null; until?: string | null; include_pinned?: boolean;
+    start_n?: number | null; direction?: 'newer' | 'older' | null;
   }) => api.request<CreatorPreview>('POST', '/v2/creators/preview', body),
   createCreatorJob: (body: {
     url: string; platform?: string | null; mode: SelectionMode; n?: number | null;
     since?: string | null; until?: string | null; include_pinned?: boolean;
+    start_n?: number | null; direction?: 'newer' | 'older' | null;
     storage: JobStorage; media_type: MediaType; formats?: FormatKey[];
     /** 用户当初填的原始内容（抖音号 / B 站号 / 链接），任务卡上用来交代「抓的是谁」 */
     source_input?: string;

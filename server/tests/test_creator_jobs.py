@@ -176,6 +176,38 @@ def test_pinned_items_grouped_first_and_ordered_by_platform(tmp_path):
     assert [i["seq"] for i in items[2:]] == [1, 2, 3]
 
 
+def test_from_start_older_and_newer(jenv):
+    """指定起点：剔除置顶后按普通作品序号定位。older 取第 N 条及更久，newer 取 [1, N]。"""
+    # 置顶(BVpin000001)是最新一条、独立不占序号；普通作品按时间倒序 1..44
+    r = create(jenv, mode="from_start", start_n=3, direction="older")
+    assert r.status_code == 202, r.text
+    job = jenv.client.get(f"/v2/creators/jobs/{r.json()['id']}", headers=hdr(jenv.token)).json()
+    assert job["status"] == "done"
+    items = jenv.client.get(f"/v2/creators/jobs/{job['id']}/items", headers=hdr(jenv.token)).json()["items"]
+    # 置顶在最前，不占序号；普通作品从第 3 条（BVv00000003）开始取到更久，跳过了 1、2 两条
+    assert items[0]["video_id"] == "BVpin000001" and items[0]["seq"] is None
+    assert items[1]["video_id"] == "BVv00000003"
+    # job 内普通作品按时间倒序重排，落库的最新一条（原第 3 条）序号从 1 起
+    assert items[1]["seq"] == 1
+    assert items[2]["video_id"] == "BVv00000004" and items[2]["seq"] == 2
+
+    # newer：取 [1, 3] 普通作品 + 置顶，共 4 条
+    r2 = create(jenv, mode="from_start", start_n=3, direction="newer")
+    job2 = jenv.client.get(f"/v2/creators/jobs/{r2.json()['id']}", headers=hdr(jenv.token)).json()
+    items2 = jenv.client.get(f"/v2/creators/jobs/{job2['id']}/items", headers=hdr(jenv.token)).json()["items"]
+    assert [i["video_id"] for i in items2] == ["BVpin000001", "BVv00000001", "BVv00000002", "BVv00000003"]
+    assert [i["seq"] for i in items2] == [None, 1, 2, 3]
+
+
+def test_from_start_rejects_bad_args(jenv):
+    # 起点越界在 body 校验层（ge=1）就拦，返回 422
+    r = create(jenv, mode="from_start", start_n=0, direction="older")
+    assert r.status_code == 422
+    # 缺方向在 create 业务校验层拦，返回 400
+    r = create(jenv, mode="from_start", start_n=3)
+    assert r.status_code == 400
+
+
 def test_date_range_and_early_stop(jenv):
     since = (BASE - timedelta(days=4)).date().isoformat()
     until = (BASE - timedelta(days=2)).date().isoformat()

@@ -187,6 +187,10 @@ export function Overview({ cfg }: { cfg: OwnerConfig }) {
           <div class="metric-k">最近 N 条上限</div>
           <div class="metric-v">{cfg.creator.max_items} 条</div>
         </div>
+        <div class="metric">
+          <div class="metric-k">可回溯起点上限</div>
+          <div class="metric-v">{cfg.creator.max_start} 条</div>
+        </div>
       </div>
 
       {!cfg.credential_vault && (

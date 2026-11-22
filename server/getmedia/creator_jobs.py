@@ -45,7 +45,7 @@ from .media import MediaError, MediaStore
 log = logging.getLogger("getmedia.creator_jobs")
 
 TZ_CN = timezone(timedelta(hours=8))
-MODES = ("all", "date_range", "latest_n")
+MODES = ("all", "date_range", "latest_n", "from_start")
 ITEM_STATES = ("pending", "downloading", "done", "failed", "skipped")
 # 真的会往服务器写文件的两种；``metadata``（以及历史值 ``phone``）只记账
 DISK_STORAGES = ("cache", "archive")
@@ -82,6 +82,9 @@ class Selection:
     until: int | None = None
     n: int | None = None
     include_pinned: bool = True
+    # 「指定起点」：start 是剔除置顶后的普通作品序号（1=最新），direction 是 newer/older。
+    start: int | None = None
+    direction: str | None = None
 
 
 def parse_day(value: str, *, end: bool = False) -> int:
@@ -220,7 +223,7 @@ class CreatorJobService:
                media_type: str = "video", platform: str | None = None,
                formats: list[str] | None = None, source_input: str | None = None) -> dict:
         if selection.mode not in MODES:
-            raise JobError("bad_mode", "mode 只能是 all / date_range / latest_n")
+            raise JobError("bad_mode", "mode 只能是 all / date_range / latest_n / from_start")
         if storage not in STORAGES:
             raise JobError("bad_storage", "storage 只能是 metadata / cache / archive")
         # 历史值 phone（旧版「手机下载」）等同于只记清单；新任务统一写成 metadata
@@ -232,6 +235,13 @@ class CreatorJobService:
             raise JobError("bad_range", "date_range 需要 since")
         if selection.mode == "latest_n" and not selection.n:
             raise JobError("bad_range", "latest_n 需要 n")
+        if selection.mode == "from_start":
+            if not selection.start or selection.start < 1:
+                raise JobError("bad_range", "from_start 需要一个正整数起点")
+            if selection.start > self.s.creator_max_start:
+                raise JobError("bad_range", f"起点不能超过 {self.s.creator_max_start}")
+            if selection.direction not in ("newer", "older"):
+                raise JobError("bad_range", "direction 只能是 newer 或 older")
         try:
             picked = creator_formats.normalize(media_type, formats)
         except ValueError as exc:
@@ -247,18 +257,20 @@ class CreatorJobService:
         with self.engine.begin() as c:
             c.execute(text(
                 "INSERT INTO creator_jobs(user_id, platform, creator_id, creator_name, source_url, mode,"
-                " since_ts, until_ts, limit_n, include_pinned, storage, media_type, formats,"
+                " since_ts, until_ts, limit_n, start_n, direction, include_pinned, storage, media_type, formats,"
                 " source_input, status, cursor_json, created_at, updated_at)"
-                " VALUES(:u,:p,:cid,'',:src,:m,:s,:t,:n,:pin,:st,:mt,:fm,:in,'pending','{}',:now,:now)"),
+                " VALUES(:u,:p,:cid,'',:src,:m,:s,:t,:n,:sn,:dir,:pin,:st,:mt,:fm,:in,'pending','{}',:now,:now)"),
                 {"u": user_id, "p": ref.platform.value, "cid": ref.creator_id, "src": ref.url,
                  "m": selection.mode, "s": selection.since, "t": selection.until, "n": selection.n,
+                 "sn": selection.start, "dir": selection.direction,
                  "pin": int(selection.include_pinned), "st": storage, "mt": media_type,
                  "fm": json.dumps(picked), "in": (source_input or url)[:500], "now": now})
             job_id = int(c.execute(text("SELECT last_insert_rowid()")).scalar_one())
         return self.get(user_id, job_id)
 
     _JOB_COLS = ("id, platform, creator_id, creator_name, source_url, mode, since_ts, until_ts, limit_n,"
-                 " include_pinned, storage, media_type, status, pause_reason, cursor_json, total, done,"
+                 " start_n, direction, include_pinned, storage, media_type, status, pause_reason,"
+                 " cursor_json, total, done,"
                  " failed, estimated_bytes, formats, source_input, created_at, updated_at,"
                  " started_at, finished_at,"
                  " (SELECT COUNT(*) FROM creator_items i WHERE i.job_id=creator_jobs.id"
@@ -270,7 +282,8 @@ class CreatorJobService:
     def _job(row) -> dict:
         m = row._mapping
         out = {k: m[k] for k in ("id", "platform", "creator_id", "creator_name", "source_url", "mode",
-                                 "since_ts", "until_ts", "limit_n", "storage", "media_type", "status",
+                                 "since_ts", "until_ts", "limit_n", "start_n", "direction",
+                                 "storage", "media_type", "status",
                                  "pause_reason", "total", "done", "failed", "estimated_bytes",
                                  "created_at", "updated_at", "started_at", "finished_at",
                                  "stored", "store_bytes", "source_input")}
@@ -521,6 +534,7 @@ class CreatorJobService:
             has_more = bool(getattr(window, "has_more", False)) or len(picked) >= max_items
         else:
             start, pages = 1, 0
+            normal_seen = 0
             while pages < 10 and len(picked) < max_items:
                 try:
                     window = self.window_fn(ref, start, min(self.s.creator_page_size, 20), cookie_file)
@@ -542,6 +556,16 @@ class CreatorJobService:
                         if selection.mode == "date_range":
                             stop = True
                         continue
+                    # 「指定起点」：序号只对普通作品计数，置顶独立不占序号、不受起点限制。
+                    if selection.mode == "from_start" and not item["is_pinned"]:
+                        normal_seen += 1
+                        if selection.direction == "newer":
+                            if normal_seen > selection.start:
+                                stop = True
+                                break
+                        else:  # older
+                            if normal_seen < selection.start:
+                                continue
                     picked.append(item)
                     if selection.mode == "latest_n" and selection.n and len(picked) >= selection.n:
                         stop = True
@@ -614,7 +638,8 @@ class CreatorJobService:
         ref = CreatorRef(Platform(job["platform"]), job["creator_id"], job["source_url"])
         cookie_file, _src = self.cookie_fn(ref.platform, user_id)
         sel = Selection(mode=job["mode"], since=job["since_ts"], until=job["until_ts"],
-                        n=job["limit_n"], include_pinned=job["include_pinned"])
+                        n=job["limit_n"], include_pinned=job["include_pinned"],
+                        start=job.get("start_n"), direction=job.get("direction"))
         start = 1 if refresh else int((job["cursor"] or {}).get("start") or 1)
         limit_pages = max_pages if max_pages is not None else self.s.creator_max_pages_per_run
         # 「全部作品」一次抓够：抖音的作品列表只能靠浏览器桥接，每次窗口都要从头
@@ -636,6 +661,8 @@ class CreatorJobService:
 
         paused_reason = None
         pages = 0
+        # 「指定起点」按普通作品序号（剔除置顶）定位，需要跨页累计已扫描的普通作品数。
+        normal_seen = 0
         try:
             if refresh and not left:
                 self._finish(job_id, "done")
@@ -651,7 +678,8 @@ class CreatorJobService:
                     left.difference_update(v.video_id for v in window.items)
                     stop = not left
                 else:
-                    stop = self._absorb(job_id, window.items, sel, pinned, job["media_type"])
+                    stop, normal_seen = self._absorb(
+                        job_id, window.items, sel, pinned, job["media_type"], normal_seen=normal_seen)
                 start += len(window.items)
                 pages += 1
                 if not refresh:
@@ -722,20 +750,38 @@ class CreatorJobService:
         return updated
 
     def _absorb(self, job_id: int, videos: list[CreatorVideo], sel: Selection,
-                pinned: set[str], media_type: str) -> bool:
-        """写入本页；返回 True 表示已达到停止条件。"""
+                pinned: set[str], media_type: str, normal_seen: int = 0) -> tuple[bool, int]:
+        """写入本页；返回 (是否达到停止条件, 更新后的普通作品累计序号)。
+
+        ``normal_seen`` 是跨页累计的「已扫描到的普通作品数」（剔除置顶，按发布时间倒序，
+        1=最新），供「指定起点」模式跨页定位起点，其余模式不依赖它。
+        """
         now = self.now()
         added_secs = 0.0
+        stop = False
         with self.engine.begin() as c:
             have = int(c.execute(text("SELECT COUNT(*) FROM creator_items WHERE job_id=:j"),
                                  {"j": job_id}).scalar_one() or 0)
             added = 0
             for v in videos:
                 if sel.mode == "latest_n" and sel.n and have + added >= sel.n:
+                    stop = True
                     break
                 item = self._select_one(v, sel, pinned)
                 if item is None:
                     continue
+                # 「指定起点」：序号只对普通作品计数；置顶作品独立、不占序号、不受起点限制。
+                if sel.mode == "from_start" and not item["is_pinned"]:
+                    normal_seen += 1
+                    if sel.direction == "newer":
+                        # 往最新：取 [1, start]，扫过起点就停
+                        if normal_seen > sel.start:
+                            stop = True
+                            break
+                    else:  # older
+                        # 往最久：取 [start, 末尾]，起点之前的普通作品跳过
+                        if normal_seen < sel.start:
+                            continue
                 r = c.execute(text(
                     "INSERT OR IGNORE INTO creator_items(job_id, platform, video_id, page, title,"
                     " duration_sec, published_at, is_pinned, pinned_order, cover_url, source_url,"
@@ -766,12 +812,14 @@ class CreatorJobService:
                                   {"j": job_id}).scalar_one() or 0)
 
         if sel.mode == "latest_n" and sel.n:
-            return total >= sel.n
+            return total >= sel.n, normal_seen
         if sel.mode == "date_range" and sel.since is not None:
             pubs = [p for p in (_epoch(v.published_at) for v in videos) if p is not None]
             # 列表按发布时间倒序：本页最旧一条已经早于 since，后面只会更早
-            return bool(pubs) and min(pubs) < sel.since
-        return False
+            return bool(pubs) and min(pubs) < sel.since, normal_seen
+        if sel.mode == "from_start":
+            return stop, normal_seen
+        return False, normal_seen
 
     def _save_cursor(self, job_id: int, start: int, videos: list[CreatorVideo]) -> None:
         pubs = [_epoch(v.published_at) for v in videos]

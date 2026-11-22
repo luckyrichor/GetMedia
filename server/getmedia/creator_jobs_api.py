@@ -34,10 +34,12 @@ class JobCreateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     url: str = Field(min_length=1, max_length=2000)
     platform: Literal["bilibili", "douyin"] | None = None
-    mode: Literal["all", "date_range", "latest_n"] = "latest_n"
+    mode: Literal["all", "date_range", "latest_n", "from_start"] = "latest_n"
     since: str | None = Field(None, description="YYYY-MM-DD（北京时间）")
     until: str | None = Field(None, description="YYYY-MM-DD（北京时间，含当日）")
     n: int | None = Field(None, ge=1, le=100000)
+    start_n: int | None = Field(None, ge=1, le=500, description="from_start 的起点（普通作品序号，1=最新）")
+    direction: Literal["newer", "older"] | None = Field(None, description="from_start 的方向")
     include_pinned: bool = True
     storage: Literal["phone", "metadata", "archive", "cache"] = "metadata"
     media_type: Literal["audio", "video"] = "video"
@@ -116,6 +118,8 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
                 until=parse_day(body.until, end=True) if body.until else None,
                 n=body.n,
                 include_pinned=body.include_pinned,
+                start=body.start_n,
+                direction=body.direction,
             )
             job = service.create(ctx.user_id, url=body.url, selection=selection, storage=body.storage,
                                  media_type=body.media_type, platform=body.platform,

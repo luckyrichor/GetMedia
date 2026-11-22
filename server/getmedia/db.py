@@ -488,6 +488,12 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
     (17, [
         "ALTER TABLE creator_items ADD COLUMN pinned_order INTEGER",
     ]),
+    # v18 「指定起点」选取方式：从第 N 个普通作品（剔除置顶，按发布时间倒序）开始，
+    # 往最新（newer）或往最久（older）方向取。start_n 是起点序号（1=最新），direction 是方向。
+    (18, [
+        "ALTER TABLE creator_jobs ADD COLUMN start_n INTEGER",
+        "ALTER TABLE creator_jobs ADD COLUMN direction TEXT",
+    ]),
 ]
 
 
