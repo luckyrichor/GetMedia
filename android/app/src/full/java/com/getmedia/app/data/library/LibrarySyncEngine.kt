@@ -15,9 +15,12 @@ import com.getmedia.app.data.local.TrackEntity
  *
  * 四条铁律，每一条都有对应用例：
  *
- * 1. **只新建**：只在本地没有这个键时插入一行 [LibraryMark.CLOUD_ONLY]；
- *    已有的行（`RESTORED` / `LOCAL_ONLY` / `SYNCED`）**一个字段都不动**，连 `updated_seq`
+ * 1. **只新建，唯一例外是补绑定**：本地没有这个键时插入一行 [LibraryMark.CLOUD_ONLY]；
+ *    已有的行（`RESTORED` / `LOCAL_ONLY` / `SYNCED`）内容**一个字段都不动**，连 `updated_seq`
  *    比较都不做——恢复关联由 [RestoredMatcher] 先处理，其余合并是阶段 5 的事。
+ *    例外：[bindSameKey] —— 同键的本地行若还没有 `serverId`（本机导入、从未上传的条目），
+ *    只把"这条对应服务器哪一行"写上去，标题/文件/收藏/顺序照旧。没有这一步，这类行会在
+ *    换设备后变成"改不动的本机镜像"：本机改名、删除都传不出去。
  * 2. **只发 GET**：本类拿不到任何写通道，[LibrarySyncTransport] 里只有 `pull`。
  * 3. **不碰备份**：写库直接走 DAO，不经过 `TrackRepository`，因此不会触发 `BackupManager.noteWrite()`
  *    的防抖上传；而且这些行的"无整理痕迹"特征会让它们根本进不了快照（`MetadataSnapshot.keepInSnapshot`）。
@@ -41,17 +44,22 @@ class LibrarySyncEngine(
         val marks: Int = 0,
         /** 无文件也无整理痕迹的纯云端行，已直接移出列表（不涉及任何文件）。 */
         val removedRows: Int = 0,
+        /** 本轮给多少条本机行补上了 `serverId`（[bindSameKey]）。 */
+        val bound: Int = 0,
     )
 
     /**
      * 拉完为止（水位为 0 时就是全量翻页）。
      *
+     * [full] 为 true 时无视水位从 0 拉一遍：用于"库里还有本机行没绑 `serverId`"的一次性回填
+     * （见 [LibrarySyncRunner]）。增量水位不会把早期行再送回来，只靠增量永远补不上绑定。
+     *
      * 不在这里吞异常：调用方按 [LibrarySyncProblem] 决定是静默停手（`NOT_AVAILABLE`）、
      * 退避（`RATE_LIMITED`）还是提示（`LOGIN_REQUIRED`）。
      */
-    suspend fun pull(account: String): Result {
+    suspend fun pull(account: String, full: Boolean = false): Result {
         require(account.isNotBlank()) { "账号不能为空" }
-        var cursor = db.libraryAuxDao().cursor(account)?.lastPos ?: 0L
+        var cursor = if (full) 0L else db.libraryAuxDao().cursor(account)?.lastPos ?: 0L
         // 一次性回填：旧版本只在"新建云端行"时写 serverStorage，恢复匹配与老绑定行可能一直是空。
         // 增量水位不会再把那些行送回来，所以只要发现"有 serverId 但没 storage"，就退到全量拉一次。
         // 拉取幂等；全量之后仍是空的（服务器没给这个字段）就写 "unknown" 占位，避免每轮都全量。
@@ -69,6 +77,7 @@ class LibrarySyncEngine(
         var pages = 0
         var marks = 0
         var removedRows = 0
+        var bound = 0
         while (true) {
             val page = transport.pull(cursor, pageSize)
             pages++
@@ -78,6 +87,7 @@ class LibrarySyncEngine(
             tombstones += applied.tombstones
             marks += applied.marks
             removedRows += applied.removedRows
+            bound += applied.bound
             cursor = applied.cursor
             // 空页但 has_more=true 是服务端的边界抖动，直接停，别打空请求
             if (!page.hasMore || page.items.isEmpty()) break
@@ -90,11 +100,11 @@ class LibrarySyncEngine(
                 .forEach { db.trackDao().updateExisting(it.copy(serverStorage = "unknown")) }
         }
         return Result(added = added, skipped = skipped, tombstones = tombstones, pages = pages,
-            cursor = cursor, marks = marks, removedRows = removedRows)
+            cursor = cursor, marks = marks, removedRows = removedRows, bound = bound)
     }
 
     private data class Applied(val added: Int, val skipped: Int, val tombstones: Int, val cursor: Long,
-                               val marks: Int = 0, val removedRows: Int = 0)
+                               val marks: Int = 0, val removedRows: Int = 0, val bound: Int = 0)
 
     /** 一页一个事务：写行与写水位要么一起生效，要么一起不生效。 */
     private suspend fun applyPage(account: String, items: List<CloudTrack>, since: Long): Applied =
@@ -113,6 +123,7 @@ class LibrarySyncEngine(
             var tombstones = 0
             var marks = 0
             var removedRows = 0
+            var bound = 0
             val fresh = ArrayList<TrackEntity>(items.size)
             val now = nowMs()
             val aux = db.libraryAuxDao()
@@ -122,6 +133,11 @@ class LibrarySyncEngine(
                 Triple(it.platform.lowercase(), it.videoKey, account)
             }
             val byServerId = rows.mapNotNull { row -> row.serverId?.let { it to row } }.toMap()
+            // 同键但还没绑 id 的本机行（本机导入、从未上传）。按 key 归组，命中判重时补绑定用。
+            val unboundByKey = rows.asSequence()
+                .filter { row -> row.serverId == null && (row.accountKey == null || row.accountKey == account) }
+                .filter { row -> row.syncState != LibraryMark.DETACHED && row.syncState != LibraryMark.CLOUD_ONLY }
+                .groupBy { keyOf(it) }
 
             for (item in items) {
                 val key = Triple(item.platform.lowercase(), LocalIds.key(item.platform, item.videoId, item.page), account)
@@ -184,6 +200,17 @@ class LibrarySyncEngine(
                     continue
                 }
                 if (key in queuedKeys || id in knownIds || serverKey in knownKeys || identity in normalized) {
+                    // 同键已存在：如果那条本机行还没有 serverId，就把"对应服务器哪一行"补上。
+                    // 刚发起删除的键不补（否则又会被算成"云端有、本机删过"的冲突）。
+                    if (key !in queuedKeys) {
+                        val candidate = unboundByKey[serverKey].orEmpty().singleOrNull {
+                            it.mediaType.equals(item.mediaType, ignoreCase = true)
+                        }
+                        if (candidate != null) {
+                            db.trackDao().updateExisting(bindSameKey(candidate, item, account, now))
+                            bound++
+                        }
+                    }
                     skipped++
                     continue
                 }
@@ -201,10 +228,31 @@ class LibrarySyncEngine(
             val next = (items.maxOfOrNull { it.updatedSeq } ?: since).coerceAtLeast(since)
             aux.putCursor(LibraryCursorEntity(account = account, lastPos = next, lastAt = now))
             Applied(added = added, skipped = skipped, tombstones = tombstones, cursor = next,
-                marks = marks, removedRows = removedRows)
+                marks = marks, removedRows = removedRows, bound = bound)
         }
 
     private fun Long?.orZero(): Long = this ?: 0L
+
+    /**
+     * 给同键的本机行补上 `serverId`（以及服务器权威的几个只读字段）。
+     *
+     * 只写"这条对应服务器哪一行"和服务器侧的只读列；**标题、本地文件、收藏、类别、手动顺序、
+     * 播放列表、入库时间一个字都不动**——用户在这台手机上的整理结果不能被一次绑定冲掉。
+     * `confirmedTitle` 记服务器标题作为以后冲突判断的基准，`title` 仍是本机的。
+     *
+     * 状态按实际情况给：有本地文件就是 `SYNCED`，没文件就是 `CLOUD_ONLY`（列表标"云端未下载"）。
+     */
+    private fun bindSameKey(row: TrackEntity, item: CloudTrack, account: String, now: Long) = row.copy(
+        serverId = item.id,
+        serverSeq = item.updatedSeq,
+        serverPage = item.page,
+        serverUpdatedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 },
+        serverStorage = item.storage.ifBlank { "unknown" },
+        accountKey = account,
+        confirmedTitle = item.title,
+        syncState = if (row.localPath.isNullOrBlank()) LibraryMark.CLOUD_ONLY else SyncState.SYNCED.name,
+        updatedAtMs = now,
+    )
 
     /**
      * 把服务器的新版本合进已有绑定行。**只改服务器权威字段**：

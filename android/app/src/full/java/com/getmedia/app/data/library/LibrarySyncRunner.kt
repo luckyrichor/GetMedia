@@ -297,8 +297,14 @@ object LibrarySyncRunner {
                         restoreFailure(acc, token, e)
                         throw e
                     }
-                    // ③ 拉取：同时收墓碑、更新服务器权威字段
-                    LibrarySyncEngine(db, LibrarySyncApi(token = token)).pull(acc)
+                    // ③ 拉取：同时收墓碑、更新服务器权威字段。
+                    // 还没做过"补绑定回填"就无视水位全量拉一次：本机导入的条目在服务器上有同键行，
+                    // 但增量水位不会把它们送回来，否则这些行永远是"改不动的本机镜像"。
+                    val backfillBinding = !prefs.bindingBackfillDone(acc)
+                    val pulled = LibrarySyncEngine(db, LibrarySyncApi(token = token))
+                        .pull(acc, full = backfillBinding)
+                    if (backfillBinding) prefs.markBindingBackfillDone(acc)
+                    if (pulled.bound > 0) note(db, acc, "${pulled.bound} 项本机条目已与云端对应条目关联")
                     // ④ 标题草稿条件 PATCH（拉取之后，以最新服务器版本为准）
                     val titles = LibraryTitlePush(db, client, acc, valid = { token() != null }).push()
                     if (titles.conflicts > 0) {

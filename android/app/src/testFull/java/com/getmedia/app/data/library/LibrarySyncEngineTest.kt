@@ -118,7 +118,13 @@ class LibrarySyncEngineTest {
 
     // ---------- 不碰已有行 ----------
 
-    @Test fun existingRowsAreNotTouched() = runBlocking {
+    /**
+     * 已有行只允许"补绑定"：`serverId` 那条线可以补上，其余本地字段一个都不许动。
+     *
+     * 0.1.26 之前这里是"一个字段都不动"，结果本机导入的条目在服务器上明明有同键行，
+     * 却永远是"改不动的本机镜像"——改名、删除都传不出去。
+     */
+    @Test fun existingRowsOnlyGainBindingAndKeepLocalFields() = runBlocking {
         val restoredId = LocalIds.localId("bilibili", "BV1", 1)
         val localOnlyId = LocalIds.localId("bilibili", "BV2", 1)
         val syncedId = LocalIds.localId("bilibili", "BV3", 1)
@@ -154,11 +160,125 @@ class LibrarySyncEngineTest {
 
         assertEquals("一条都不该新增", 0, result.added)
         assertEquals(3, result.skipped)
+        assertEquals("两条没有 serverId 的补上了绑定", 2, result.bound)
+
         val after = rows().associateBy { it.id }
-        assertEquals("已有行必须逐字段一致", before, after)
-        // 具体到最容易被覆盖的两个字段
-        assertEquals("我改的名字", after.getValue(restoredId).localTitleOverride)
-        assertEquals("/files/-2.audio", after.getValue(localOnlyId).localPath)
+        // 本地整理痕迹与文件名一个都不许动
+        assertEquals(
+            before.getValue(restoredId).localTitleOverride,
+            after.getValue(restoredId).localTitleOverride,
+        )
+        assertEquals(before.getValue(restoredId).favorite, after.getValue(restoredId).favorite)
+        assertEquals(before.getValue(restoredId).localCategoryId, after.getValue(restoredId).localCategoryId)
+        assertEquals(before.getValue(restoredId).sortIndex, after.getValue(restoredId).sortIndex)
+        assertEquals(before.getValue(restoredId).title, after.getValue(restoredId).title)
+        assertEquals(before.getValue(localOnlyId).localPath, after.getValue(localOnlyId).localPath)
+        // 补上的只有那条线
+        assertEquals(1L, after.getValue(restoredId).serverId)
+        assertEquals(2L, after.getValue(localOnlyId).serverId)
+        // 已经绑在别的 id 上的行不动（同键不同 id 不算同一条）
+        assertEquals(before.getValue(syncedId), after.getValue(syncedId))
+    }
+
+    // ---------- 同键补绑定（0.1.26） ----------
+
+    private fun localCloud(
+        id: Long,
+        videoId: String,
+        page: Int = 1,
+        seq: Long = 117,
+        storage: String = "archive",
+        mediaType: String = "audio",
+    ) = CloudTrack(
+        id = id, platform = "local", videoId = videoId, page = page, title = videoId,
+        uploader = null, durationSec = 254.0, sourceUrl = "", mediaType = mediaType,
+        deleted = false, updatedSeq = seq, updatedAtSec = 1_700_000_000 + id, storage = storage,
+    )
+
+    private fun localRow(
+        videoId: String = "望",
+        state: String = SyncState.LOCAL_ONLY.name,
+        serverId: Long? = null,
+    ) = TrackEntity(
+        id = LocalIds.localId("local", videoId, 1), platform = "local", videoId = videoId,
+        title = "望", uploader = null, durationSec = 254.0, audioBytes = 12_345,
+        audioFormat = "m4a", sourceUrl = "", localPath = "/files/$videoId.m4a",
+        favorite = true, localCategoryId = 3, sortIndex = 2, syncState = state, serverId = serverId,
+    )
+
+    /** 本机导入、没有来源链接的行：同键就补 `serverId`，标题/文件/收藏/顺序全不动。 */
+    @Test fun unboundLocalRowGetsBoundToSameKeyCloudRow() = runBlocking {
+        db.trackDao().upsertAll(listOf(localRow()))
+
+        val (e, _) = engine(listOf(page(listOf(localCloud(40, "望")), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals("不新增行", 0, result.added)
+        assertEquals(1, result.bound)
+        val row = rows().single()
+        assertEquals(40L, row.serverId)
+        assertEquals(117L, row.serverSeq)
+        assertEquals("archive", row.serverStorage)
+        assertEquals(account, row.accountKey)
+        assertEquals("有本地文件就是已同步", SyncState.SYNCED.name, row.syncState)
+        assertEquals("文件不动", "/files/望.m4a", row.localPath)
+        assertEquals("标题不动", "望", row.title)
+        assertTrue("收藏不动", row.favorite)
+        assertEquals("类别不动", 3L, row.localCategoryId)
+        assertEquals("手动顺序不动", 2L, row.sortIndex)
+    }
+
+    /** 媒体类型不一致就不绑：音频和视频共用同一个键，绑错等于把两条不同的东西并成一条。 */
+    @Test fun bindingRequiresSameMediaType() = runBlocking {
+        db.trackDao().upsertAll(listOf(localRow()))
+
+        val (e, _) = engine(listOf(page(listOf(localCloud(40, "望", mediaType = "video")), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals(0, result.bound)
+        assertNull("类型不符不许绑", rows().single().serverId)
+    }
+
+    /** 用户手动解除过关联（DETACHED）的行不自动绑回去，否则"保留本机、脱离云端"就白选了。 */
+    @Test fun detachedRowIsNotRebound() = runBlocking {
+        db.trackDao().upsertAll(listOf(localRow(state = LibraryMark.DETACHED)))
+
+        val (e, _) = engine(listOf(page(listOf(localCloud(40, "望")), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals(0, result.bound)
+        assertNull(rows().single().serverId)
+    }
+
+    /** 本机刚删、还没重放成功的键：连绑定都不能做，否则下一轮又变成"云端有、本机删过"。 */
+    @Test fun keyWaitingForRemovalIsNotBound() = runBlocking {
+        db.trackDao().upsertAll(listOf(localRow()))
+        db.libraryAuxDao().addRemoval(
+            com.getmedia.app.data.local.TrackRemovalEntity(
+                platform = "local", videoKey = LocalIds.key("local", "望", 1), account = account,
+                remoteId = 40, requestedAt = 1, expectedSeq = 117, generation = 1,
+            ),
+        )
+
+        val (e, _) = engine(listOf(page(listOf(localCloud(40, "望")), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals(0, result.bound)
+        assertNull(rows().single().serverId)
+    }
+
+    /** 升级后的那次一次性回填：无视水位从 0 拉，才能看到早期行并补上绑定。 */
+    @Test fun fullPullIgnoresWatermarkAndBinds() = runBlocking {
+        db.trackDao().upsertAll(listOf(localRow()))
+        db.libraryAuxDao().putCursor(LibraryCursorEntity(account, 116, 0))
+
+        val (e, t) = engine(listOf(page(listOf(localCloud(40, "望")), hasMore = false)))
+        val result = e.pull(account, full = true)
+
+        assertEquals("即使水位已在 116 也要从 0 拉", listOf(0L), t.calls)
+        assertEquals(1, result.bound)
+        assertEquals(40L, rows().single().serverId)
+        assertEquals("水位回到最新", 117L, cursor())
     }
 
     @Test fun tombstoneDoesNotRemoveLocalRow() = runBlocking {

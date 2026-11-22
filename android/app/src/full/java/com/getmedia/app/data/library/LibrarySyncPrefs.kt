@@ -33,6 +33,19 @@ class LibrarySyncPrefs(context: Context) {
         prefs.edit().putString("$account.decision", value.name).apply()
     }
 
+    /**
+     * "补绑定回填"做过没有（每账号一次）。
+     *
+     * 本机导入、从未上传的条目在服务器上有同键行却一直没有 `serverId`；增量水位不会把早期行
+     * 再送回来，所以升级后要强制全量拉一次才能补上。做成就置位，避免每轮都全量拉。
+     */
+    fun bindingBackfillDone(account: String): Boolean =
+        prefs.getBoolean("$account.bound-backfill", false)
+
+    fun markBindingBackfillDone(account: String) {
+        prefs.edit().putBoolean("$account.bound-backfill", true).apply()
+    }
+
     fun requiresManualUpload(account: String, id: Long): Boolean =
         prefs.getBoolean("$account.restored.$id.manual", false)
 
