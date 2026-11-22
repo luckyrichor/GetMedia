@@ -75,7 +75,8 @@ object UpdateChecker {
                 val config = AccountService.api.config()
                 prefs.edit().putLong(KEY_LAST_CHECK, now).apply()
                 val latest = config.latest ?: return@launch
-                if (latest.version.isBlank() || latest.apk.isBlank()) return@launch
+                // 免费版只认 free 链接，拿不到就本次不提示（见 UpdateTarget）
+                val link = UpdateTarget.pick(latest, BuildConfig.FLAVOR == "free") ?: return@launch
                 if (!AppVersion.isNewer(latest.version, BuildConfig.VERSION_NAME)) return@launch
                 if (prefs.getString(KEY_IGNORED, null) == latest.version) return@launch
                 if (snoozedVersion == latest.version) return@launch
@@ -83,12 +84,12 @@ object UpdateChecker {
                 _prompt.value = UpdatePrompt(
                     version = latest.version,
                     notes = latest.notes,
-                    apkUrl = latest.apk,
-                    sha256 = latest.sha256,
+                    apkUrl = link.apk,
+                    sha256 = link.sha256,
                     mandatory = mandatory,
                 )
                 if (prefs.getString(KEY_NOTIFIED, null) != latest.version) {
-                    UpdateNotifications.notify(app, latest.version, latest.notes, latest.apk)
+                    UpdateNotifications.notify(app, latest.version, latest.notes, link.apk)
                     prefs.edit().putString(KEY_NOTIFIED, latest.version).apply()
                 }
             } catch (_: Exception) {

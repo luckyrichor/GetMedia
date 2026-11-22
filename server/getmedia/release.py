@@ -13,20 +13,35 @@ _VER = re.compile(r"^\d+(\.\d+){1,3}$")
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 
 
+def _link(d: dict | None) -> dict | None:
+    """校验一组 {apk, sha256}；任一不合格整组丢弃，不给出半残链接。"""
+    if not isinstance(d, dict):
+        return None
+    apk, sha = d.get("apk"), d.get("sha256")
+    if not (isinstance(apk, str) and apk.startswith("https://") and len(apk) <= 500):
+        return None
+    if not (isinstance(sha, str) and _SHA.match(sha)):
+        return None
+    return {"apk": apk, "sha256": sha}
+
+
 def _clean(d: dict) -> dict:
     out: dict = {"min_version": None, "latest": None}
     mv = d.get("min_version")
     out["min_version"] = mv if isinstance(mv, str) and _VER.match(mv) else None
     lt = d.get("latest")
     if isinstance(lt, dict) and isinstance(lt.get("version"), str) and _VER.match(lt["version"]):
-        apk = lt.get("apk")
-        sha = lt.get("sha256")
-        out["latest"] = {
+        latest = {
             "version": lt["version"],
             "notes": lt["notes"][:2000] if isinstance(lt.get("notes"), str) else "",
-            "apk": apk if isinstance(apk, str) and apk.startswith("https://") and len(apk) <= 500 else None,
-            "sha256": sha if isinstance(sha, str) and _SHA.match(sha) else None,
+            **(_link(lt) or {"apk": None, "sha256": None}),
         }
+        # 免费版是另一个包名的独立安装包，必须单独给链接。免费版客户端只认这一块：
+        # 没有就"本版不提示"，绝不退回完整版的包（那会装成另一个 App）。
+        free = _link(lt.get("free"))
+        if free:
+            latest["free"] = free
+        out["latest"] = latest
     return out
 
 

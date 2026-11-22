@@ -46,7 +46,11 @@ data class MeInfo(
     val privacyVersion: Int? = null,
 )
 
-data class LatestRelease(val version: String, val notes: String, val apk: String, val sha256: String)
+data class LatestRelease(
+    val version: String, val notes: String, val apk: String, val sha256: String,
+    /** 免费版安装包的直链。免费版与完整版包名不同，装错了就是另一个 App，所以单独给。 */
+    val freeApk: String = "", val freeSha256: String = "",
+)
 
 data class ServerConfig(
     val registrationOpen: Boolean, val inviteRequired: Boolean, val maintenance: String?,
@@ -108,7 +112,11 @@ object AccountJson {
 
     fun config(o: JSONObject): ServerConfig {
         val latest = o.optJSONObject("latest")?.let {
-            LatestRelease(it.optString("version"), it.optString("notes"), it.optString("apk"), it.optString("sha256"))
+            val free = it.optJSONObject("free")
+            LatestRelease(
+                it.optString("version"), it.optString("notes"), it.optString("apk"), it.optString("sha256"),
+                free?.optString("apk").orEmpty(), free?.optString("sha256").orEmpty(),
+            )
         }
         return ServerConfig(
             o.optBoolean("registration_open"), o.optBoolean("invite_required"),
