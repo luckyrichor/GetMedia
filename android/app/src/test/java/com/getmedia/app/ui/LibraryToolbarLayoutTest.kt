@@ -255,12 +255,12 @@ class LibraryToolbarLayoutTest {
     }
 
     /**
-     * 类型只有音频/视频两个，始终有一个被选中：两个都必须在，且点击要回调。
-     * 「全部」已经移除，不再有"一个都不选"的状态。
+     * 类型改成下拉：按钮上只有当前类型，点开才有音频/视频两项。
+     * 选当前项不做任何事；选另一项要回调。
      */
     @Test
     @Config(sdk = [33], qualifiers = "w320dp-h640dp-xhdpi")
-    fun kindChipsAreBothVisibleAndClickable() {
+    fun kindDropdownListsBothAndPicks() {
         val picked = mutableListOf<MediaKind>()
         rule.setContent {
             MaterialTheme {
@@ -278,13 +278,91 @@ class LibraryToolbarLayoutTest {
                 )
             }
         }
+        // 默认不展开：两个选项都不在界面上（这正是省下来的宽度）。
+        rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.VIDEO)).assertDoesNotExist()
+        rule.onNodeWithTag(LibraryToolbarTags.KIND).assertIsDisplayed()
+        rule.onNodeWithTag(LibraryToolbarTags.KIND).performClick()
         rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.AUDIO)).assertIsDisplayed()
         rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.VIDEO)).assertIsDisplayed()
-        assertSortFullyUsable()
+        // 点当前项：菜单关掉，不回调。
+        rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.AUDIO)).performClick()
+        assert(picked.isEmpty()) { "点当前类型不该回调，实际 $picked" }
+        // 再点开，选视频。
+        rule.onNodeWithTag(LibraryToolbarTags.KIND).performClick()
         rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.VIDEO)).performClick()
-        rule.onNodeWithTag(LibraryToolbarTags.kind(MediaKind.VIDEO)).performClick()
-        assert(picked == listOf(MediaKind.VIDEO, MediaKind.VIDEO)) {
-            "点「视频」两次应回调两次 VIDEO（不会取消选中），实际 $picked"
+        assert(picked == listOf(MediaKind.VIDEO)) { "应只回调一次 VIDEO，实际 $picked" }
+    }
+
+    /**
+     * 切音频/视频时「排序」和「导入」的横向位置必须一模一样（用户提的"同一个位置"），
+     * 且都在同一行、「导入」贴最右；多出来的「显示画面」插在排序左边。
+     *
+     * 宽度取 **384dp**：手机 2（1080×2400、density 450）的可用宽度就是 384dp。
+     * 早先按 393dp 断言是过的，装到 384dp 的真机上「不显示画面」换到了第二行——
+     * 回归用例的宽度必须照真机来，否则等于没测。
+     */
+    @Test
+    @Config(sdk = [33], qualifiers = "w384dp-h854dp-xhdpi")
+    fun sortAndImportKeepSamePlaceWhenSwitchingKind() {
+        var kind by mutableStateOf(MediaKind.AUDIO)
+        rule.setContent {
+            MaterialTheme {
+                Box(Modifier.width(384.dp)) {
+                    LibraryToolbar(
+                        timer = null,
+                        sortField = SortField.MANUAL,
+                        sortAsc = false,
+                        importing = false,
+                        kind = kind,
+                        onPickKind = { kind = it },
+                        onToggleDirection = {},
+                        onPickField = {},
+                        onImport = {},
+                        onCancelTimer = {},
+                        videoDisplayEnabled = true,
+                        onToggleVideoDisplay = {},
+                    )
+                }
+            }
         }
+        fun bounds(tag: String) = rule.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+
+        val audioSort = bounds(LibraryToolbarTags.SORT)
+        val audioImport = bounds(LibraryToolbarTags.IMPORT)
+        rule.onNodeWithTag(LibraryToolbarTags.VIDEO_DISPLAY).assertDoesNotExist()
+
+        saveShot("after-384-audio")
+        kind = MediaKind.VIDEO
+        rule.waitForIdle()
+        saveShot("after-384-video")
+
+        val videoSort = bounds(LibraryToolbarTags.SORT)
+        val videoImport = bounds(LibraryToolbarTags.IMPORT)
+        val videoDisplay = bounds(LibraryToolbarTags.VIDEO_DISPLAY)
+
+        assert(audioSort.left == videoSort.left && audioSort.width == videoSort.width) {
+            "切视频后排序按钮移位了：$audioSort -> $videoSort"
+        }
+        assert(audioImport.left == videoImport.left && audioImport.width == videoImport.width) {
+            "切视频后导入按钮移位了：$audioImport -> $videoImport"
+        }
+        // 同一行：三个按钮的纵向中心线一致（换行就会差一整行高）。
+        val sortCenter = (videoSort.top + videoSort.bottom) / 2
+        val importCenter = (videoImport.top + videoImport.bottom) / 2
+        val displayCenter = (videoDisplay.top + videoDisplay.bottom) / 2
+        assert(kotlin.math.abs(sortCenter - importCenter) < 1f && kotlin.math.abs(sortCenter - displayCenter) < 1f) {
+            "视频模式下换行了：排序 $videoSort，导入 $videoImport，显示画面 $videoDisplay"
+        }
+        // 顺序：类型 … 显示画面 · 排序 · 导入。多出来的按钮插在排序左边，不推走排序和导入。
+        assert(videoDisplay.right <= videoSort.left + 0.5f) {
+            "「显示画面」应在排序左侧：显示画面 $videoDisplay，排序 $videoSort"
+        }
+        // 导入贴最右：右边缘 = 384dp - 12dp 内边距（允许 1px 抗锯齿误差）。
+        val density = rule.density.density
+        val contentRight = 384.dp.value * density - 12.dp.value * density
+        assert(kotlin.math.abs(videoImport.right - contentRight) <= 1f) {
+            "「导入」应贴最右 $contentRight，实际 ${videoImport.right}"
+        }
+        assertSortFullyUsable()
     }
 }

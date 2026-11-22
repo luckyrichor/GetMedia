@@ -36,6 +36,7 @@ import com.getmedia.app.ui.components.uiAccentContainer
 import com.getmedia.app.ui.components.uiCardColor
 import com.getmedia.app.ui.components.uiHairline
 import com.getmedia.app.ui.components.uiMuted
+import com.getmedia.app.ui.components.NoticeHost
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -151,7 +152,10 @@ private fun SortChip(
     var menu by remember { mutableStateOf(false) }
     // 和旁边的「云端同步」「导入」保持同一套外观：透明底 + outline 描边 + 12dp 圆角 + 32dp 高。
     val shape = RoundedCornerShape(12.dp)
-    Box(Modifier.testTag(LibraryToolbarTags.SORT).heightIn(min = 48.dp)) {
+    Box(
+        Modifier.testTag(LibraryToolbarTags.SORT).heightIn(min = 48.dp)
+            .semantics { contentDescription = "排序方式：${field.label}" },
+    ) {
         // 视觉只有 32dp 高（和旁边 chip 齐平），但点击热区撑到 48dp：
         // 上下各 8dp 的透明区域也能点，满足触控目标，不靠"看起来大"。
         Row(
@@ -168,8 +172,11 @@ private fun SortChip(
                     tint = MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(Modifier.width(4.dp))
-                // 按钮上写明「排序：手动」，不再只写字段名 —— 单独一个「手动」看不出是干什么的。
-                Text("排序：" + field.label, style = MaterialTheme.typography.labelLarge)
+                // 按钮上只写「排序」两个字，不带当前字段：
+                // 视频模式下这一行还要放「显示画面」，带上「：手动」会多占约 35dp，
+                // 正好把最后的按钮挤到第二行；当前字段在下拉里标着「（当前）」，
+                // 读屏也会读出完整说法（见外层 contentDescription）。
+                Text("排序", style = MaterialTheme.typography.labelLarge)
                 if (field != SortField.MANUAL) {
                     Spacer(Modifier.width(2.dp))
                     Icon(
@@ -216,15 +223,77 @@ private fun SortChip(
 }
 
 /**
- * 媒体库顶部的操作条：定时状态 + 「音频/视频」+ 排序 + 导入。
+ * 「音频 / 视频」合并成一个下拉按钮：按钮上只显示当前类型，点开再选另一个。
+ *
+ * 原来是两个并排的 FilterChip，白占一块宽度；切到视频又多一个「显示画面」，
+ * 一行放不下就把「导入」挤到第二行。合成一个按钮后省下的宽度正好留给「显示画面」。
+ * 始终有一个类型被选中，不存在「都不选」的状态；点当前类型不做任何事。
+ */
+@Composable
+private fun KindPicker(kind: MediaKind, onPickKind: (MediaKind) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
+    // 和排序、导入同一套外观：透明底 + outline 描边 + 12dp 圆角 + 32dp 高，点击热区撑到 48dp。
+    Box(
+        Modifier.testTag(LibraryToolbarTags.KIND).heightIn(min = 48.dp).clickable { menu = true },
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier.height(32.dp).clip(shape)
+                .border(1.dp, MaterialTheme.colorScheme.outline, shape)
+                .padding(start = 10.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 不放类型图标：这一段宽度要留给「显示画面」，光 2 个字的文字 + 下拉箭头
+            // 已经足够说明这是个切换器（图标 15dp + 间距 4dp 正好是差的那一点）。
+            Text(kindLabel(kind), style = MaterialTheme.typography.labelLarge)
+            Icon(
+                Icons.Default.ArrowDropDown, "切换音频或视频", Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            MediaKind.entries.forEach { k ->
+                DropdownMenuItem(
+                    modifier = Modifier.testTag(LibraryToolbarTags.kind(k)),
+                    text = { Text(if (k == kind) "${kindLabel(k)}（当前）" else kindLabel(k)) },
+                    leadingIcon = {
+                        Icon(
+                            if (k == MediaKind.AUDIO) Icons.Default.Audiotrack else Icons.Default.Movie,
+                            null, Modifier.size(18.dp),
+                        )
+                    },
+                    trailingIcon = {
+                        if (k == kind) {
+                            Icon(
+                                Icons.Default.Check, null, Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    },
+                    onClick = {
+                        menu = false
+                        if (k != kind) onPickKind(k)
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun kindLabel(kind: MediaKind) = if (kind == MediaKind.AUDIO) "音频" else "视频"
+
+/**
+ * 媒体库顶部的操作条：定时状态 + 「音频/视频」下拉 + 排序 + 导入（视频模式再加「显示画面」）。
  *
  * 单独抽出来是为了能在 JVM 上做渲染回归（320dp 窄屏、字体 200%、横屏），
  * 不必挂整个页面（整页依赖 Room 与播放器单例）。
  *
  * 布局约束（回归用例守住）：
  * - 定时状态**不能**和排序挤在同一行抢宽度；
- * - 「音频/视频」「排序」「导入」放在同一行，宽度不够（窄屏 / 字体 200%）时**整块**换行，
- *   换行由 [FlowRow] 处理，不会把任何一个按钮挤成 0 宽；
+ * - 一行从左到右是「类型 …… 显示画面 · 排序 · 导入」，中间那段空白把后三个推到右边，
+ *   **导入贴最右**；这样切到视频只是多出「显示画面」，排序与导入的位置一个字都不动；
+ * - 宽度不够（窄屏 / 字体 200%）时退回 [FlowRow] 换行，不会把任何一个按钮挤成 0 宽；
  * - 排序控件在任何宽度与字体缩放下都要完整可见、可点击，触控区 ≥ 48dp。
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -275,74 +344,91 @@ internal fun LibraryToolbar(
                 ) { Text("取消") }
             }
         }
-        // 「音频/视频」+ 排序 + 导入：同一行的 FlowRow，宽度不够时整块换行。
-        // 类型筛选原来是独立一行、还带个「全部」，既浪费一行又把左边距撑没了；
-        // 现在只留音频/视频两个、始终选中一个，和排序、导入并进一行。
-        // 定时条的开关只影响上面那一行，这一行的可用宽度不变，所以不会跟着跳。
-        FlowRow(
-            Modifier.fillMaxWidth().testTag(LibraryToolbarTags.ROOT),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            // 二选一，点已选中的那个也不会取消 —— 没有「都不选」的状态。
-            MediaKind.entries.forEach { k ->
-                Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
-                    FilterChip(
-                        selected = kind == k,
-                        onClick = { onPickKind(k) },
-                        label = {
-                            Text(
-                                if (k == MediaKind.AUDIO) "音频" else "视频",
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                        },
-                        modifier = Modifier.testTag(LibraryToolbarTags.kind(k)),
+        // 一行布局：类型在左，中间一段弹性空白，后面「显示画面 · 排序 · 导入」右对齐，导入贴最右。
+        // 顺序是刻意这样排的：切到视频只在空白段里多插一个「显示画面」，
+        // 排序和导入因为是从右边算起，位置与音频模式完全一样，不抖也不换行。
+        BoxWithConstraints(Modifier.fillMaxWidth().testTag(LibraryToolbarTags.ROOT)) {
+            // 窄屏或大字体：四个控件按自然宽度加起来放不下，退回换行。
+            // 宁可多占一行，也不能把「排序」挤出屏幕（320dp + 字体 200% 是历史的真实故障）。
+            val stacked = maxWidth < 352.dp || LocalDensity.current.fontScale > 1.2f
+            val gap = 6.dp
+            if (stacked) {
+                FlowRow(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(gap),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    KindPicker(kind = kind, onPickKind = onPickKind)
+                    if (kind == MediaKind.VIDEO) {
+                        VideoDisplayChip(enabled = videoDisplayEnabled, onToggle = onToggleVideoDisplay)
+                    }
+                    SortChip(
+                        field = sortField,
+                        ascending = sortAsc,
+                        onToggleDirection = onToggleDirection,
+                        onPickField = onPickField,
                     )
+                    ImportChip(importing = importing, onImport = onImport)
                 }
-            }
-            // 视频 tab 专属：显示 / 不显示画面的全局开关。关掉后只出声不出画面。
-            if (kind == MediaKind.VIDEO) {
-                Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
-                    FilterChip(
-                        selected = !videoDisplayEnabled,
-                        onClick = onToggleVideoDisplay,
-                        label = {
-                            Text(
-                                if (videoDisplayEnabled) "显示画面" else "不显示画面",
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                if (videoDisplayEnabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                null,
-                                Modifier.size(16.dp),
-                            )
-                        },
-                        modifier = Modifier.testTag(LibraryToolbarTags.VIDEO_DISPLAY),
+            } else {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(gap),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    KindPicker(kind = kind, onPickKind = onPickKind)
+                    // 弹性空白：吃掉中间所有余量，把后面三个推到右边；音频模式下这一段更长，
+                    // 排序/导入的横向位置不变。
+                    Spacer(Modifier.weight(1f))
+                    if (kind == MediaKind.VIDEO) {
+                        VideoDisplayChip(enabled = videoDisplayEnabled, onToggle = onToggleVideoDisplay)
+                    }
+                    SortChip(
+                        field = sortField,
+                        ascending = sortAsc,
+                        onToggleDirection = onToggleDirection,
+                        onPickField = onPickField,
                     )
+                    ImportChip(importing = importing, onImport = onImport)
                 }
-            }
-            // 排序：主体点一下翻转正/倒序，右侧小箭头点开字段下拉（手动才能长按拖动）。
-            SortChip(
-                field = sortField,
-                ascending = sortAsc,
-                onToggleDirection = onToggleDirection,
-                onPickField = onPickField,
-            )
-            // 导入本地媒体：把系统文件选择器里选中的音频或视频复制进库。
-            // 外面包一层 48dp 高的盒子，和排序控件同高、居中对齐（FlowRow 行内没有 itemVerticalAlignment）。
-            Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
-                AssistChip(
-                    onClick = onImport,
-                    enabled = !importing,
-                    label = { Text(if (importing) "导入中…" else "导入", style = MaterialTheme.typography.labelLarge) },
-                    leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(16.dp)) },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.testTag(LibraryToolbarTags.IMPORT),
-                )
             }
         }
+    }
+}
+
+/** 导入本地媒体：把系统文件选择器里选中的音频或视频复制进库。 */
+@Composable
+private fun ImportChip(importing: Boolean, onImport: () -> Unit) {
+    // 外面包一层 48dp 高的盒子，和排序控件同高、居中对齐。
+    Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+        AssistChip(
+            onClick = onImport,
+            enabled = !importing,
+            label = { Text(if (importing) "导入中…" else "导入", style = MaterialTheme.typography.labelLarge) },
+            leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(16.dp)) },
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.testTag(LibraryToolbarTags.IMPORT),
+        )
+    }
+}
+
+/** 视频模式专属：显示 / 不显示画面的全局开关。关掉后只出声不出画面。 */
+@Composable
+private fun VideoDisplayChip(enabled: Boolean, onToggle: () -> Unit) {
+    Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+        FilterChip(
+            selected = !enabled,
+            onClick = onToggle,
+            label = {
+                Text(
+                    if (enabled) "显示画面" else "不显示画面",
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            },
+            // 不放眼睛图标：图标 + 间距要占 26dp，384dp 宽的一行里正是差这一点。
+            // 文案「显示画面 / 不显示画面」本身已经说得很清楚。
+            modifier = Modifier.testTag(LibraryToolbarTags.VIDEO_DISPLAY),
+        )
     }
 }
 
@@ -353,8 +439,10 @@ internal object LibraryToolbarTags {
     const val SORT = "library-sort"
     const val SORT_MENU = "library-sort-menu"
     const val IMPORT = "library-import"
+    const val KIND = "library-kind"
     const val VIDEO_DISPLAY = "library-video-display"
-    fun kind(kind: MediaKind): String = "library-kind-${kind.name}"
+    /** 类型下拉里的选项（音频 / 视频）。 */
+    fun kind(kind: MediaKind): String = "library-kind-option-${kind.name}"
     fun option(field: SortField): String = "sort-option-${field.name}"
 }
 
@@ -494,7 +582,8 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
     }
     Scaffold(
         containerColor = Color.Transparent,
-        snackbarHost = { SnackbarHost(snackbar) },
+        // 提示条右上角带「×」，排序 / 显示画面的提示不用等它自己消失。
+        snackbarHost = { NoticeHost(snackbar) },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)

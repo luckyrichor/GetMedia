@@ -38,6 +38,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.getmedia.app.data.local.MediaKind
+import com.getmedia.app.ui.components.NoticeHost
 import com.getmedia.app.data.local.TrackEntity
 import com.getmedia.app.data.repo.ErrorText
 import com.getmedia.app.data.repo.TrackRepository
@@ -235,7 +236,8 @@ fun ExtractScreen(prefill: String? = null, onSharedConsumed: () -> Unit = {}) {
 
     Scaffold(
         containerColor = Color.Transparent,
-        snackbarHost = { SnackbarHost(snackbar) },
+        // 提示条右上角带「×」：提取失败等原因不用等它自己消失。
+        snackbarHost = { NoticeHost(snackbar) },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(

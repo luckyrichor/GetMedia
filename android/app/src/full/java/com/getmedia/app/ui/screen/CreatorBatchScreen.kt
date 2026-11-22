@@ -49,6 +49,7 @@ import com.getmedia.app.data.repo.ErrorText
 import com.getmedia.app.data.repo.PendingNotice
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.ui.components.Footnote
+import com.getmedia.app.ui.components.NoticeHost
 import com.getmedia.app.ui.components.InlineBanner
 import com.getmedia.app.ui.components.SectionCard
 import com.getmedia.app.ui.components.SubPageScaffold
@@ -380,7 +381,7 @@ fun CreatorBatchScreen(onBack: () -> Unit) {
                     BatchSection(vm)
                 }
             }
-            SnackbarHost(
+            NoticeHost(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
             )
