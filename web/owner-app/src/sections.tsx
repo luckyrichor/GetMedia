@@ -185,11 +185,11 @@ export function Overview({ cfg }: { cfg: OwnerConfig }) {
         </div>
         <div class="metric">
           <div class="metric-k">最近 N 条上限</div>
-          <div class="metric-v">{cfg.creator.max_items} 条</div>
+          <div class="metric-v">{cfg.creator.max_items}</div>
         </div>
         <div class="metric">
-          <div class="metric-k">最久可提取上限</div>
-          <div class="metric-v">{cfg.creator.max_start} 条</div>
+          <div class="metric-k">提取起点上限</div>
+          <div class="metric-v">{cfg.creator.max_start}</div>
         </div>
       </div>
 
