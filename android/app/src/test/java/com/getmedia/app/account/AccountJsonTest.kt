@@ -55,6 +55,19 @@ class AccountJsonTest {
         assertEquals("维护中", d.maintenance); assertEquals("0.2.0", d.latest?.version)
     }
 
+    @Test fun configParsesFreeBuildLink() {
+        // 免费版与完整版包名不同：latest.free 是免费版自己的安装包
+        val c = AccountJson.config(JSONObject("""{"registration_open":true,"invite_required":false,"min_version":"0.1.0",
+            "latest":{"version":"0.1.28","notes":"n","apk":"https://example.invalid/full.apk","sha256":"f",
+            "free":{"apk":"https://example.invalid/free.apk","sha256":"g"}}}"""))
+        assertEquals("https://example.invalid/free.apk", c.latest?.freeApk)
+        assertEquals("g", c.latest?.freeSha256)
+        // 老服务端没有 free 时留空，绝不把完整版链接当成免费版的
+        val d = AccountJson.config(JSONObject("""{"registration_open":true,"invite_required":false,"min_version":"0.1.0",
+            "latest":{"version":"0.1.28","notes":"n","apk":"https://example.invalid/full.apk","sha256":"f"}}"""))
+        assertEquals("", d.latest?.freeApk); assertEquals("", d.latest?.freeSha256)
+    }
+
     @Test fun legalBundleParses() {
         val doc = """{"version":2,"effective_date":"2026-10-30","sha256":"ab","text":"t"}"""
         val b = AccountJson.legal(JSONObject("""{"documents":{"user_agreement":$doc,"privacy_policy":$doc}}"""))
