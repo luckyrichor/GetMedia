@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.getmedia.app.data.repo.BackgroundStore.init(this)
+        com.getmedia.app.data.repo.VideoDisplayPrefs.init(this)
         setContent {
             GetMediaTheme {
                 val background by com.getmedia.app.data.repo.BackgroundStore.state.collectAsState()

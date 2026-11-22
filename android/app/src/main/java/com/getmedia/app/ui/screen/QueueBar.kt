@@ -42,13 +42,15 @@ fun QueueBar() {
     var showVideo by remember { mutableStateOf(false) }
     val current = queue.getOrNull(index)?.track
     val isVideo = current?.mediaType == MediaKind.VIDEO.name
+    // 全局「显示画面」开关：关闭时即使选中视频也不出画面，只有声音。
+    val videoDisplayEnabled by com.getmedia.app.data.repo.VideoDisplayPrefs.showVideo.collectAsState()
     LaunchedEffect(current?.id) { showVideo = isVideo }
     if (queue.isNotEmpty()) {
         Column {
-            if (isVideo && showVideo) VideoPlaybackPanel { showVideo = false }
+            if (isVideo && showVideo && videoDisplayEnabled) VideoPlaybackPanel { showVideo = false }
             HorizontalDivider()
             Row(Modifier.fillMaxWidth().height(88.dp).padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f).padding(end = 8.dp).clickable(enabled = isVideo) { showVideo = true }) {
+                Column(Modifier.weight(1f).padding(end = 8.dp).clickable(enabled = isVideo && videoDisplayEnabled) { showVideo = true }) {
                     Text(queue.getOrNull(index)?.track?.title ?: queue.first().track.title,
                         style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     key(queue.getOrNull(index)?.track?.id) {

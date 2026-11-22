@@ -240,6 +240,8 @@ internal fun LibraryToolbar(
     onPickField: (SortField) -> Unit,
     onImport: () -> Unit,
     onCancelTimer: () -> Unit,
+    videoDisplayEnabled: Boolean = true,
+    onToggleVideoDisplay: () -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         // 定时状态单独一行，绝不和排序抢宽度。
@@ -298,6 +300,29 @@ internal fun LibraryToolbar(
                     )
                 }
             }
+            // 视频 tab 专属：显示 / 不显示画面的全局开关。关掉后只出声不出画面。
+            if (kind == MediaKind.VIDEO) {
+                Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+                    FilterChip(
+                        selected = !videoDisplayEnabled,
+                        onClick = onToggleVideoDisplay,
+                        label = {
+                            Text(
+                                if (videoDisplayEnabled) "显示画面" else "不显示画面",
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                if (videoDisplayEnabled) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                null,
+                                Modifier.size(16.dp),
+                            )
+                        },
+                        modifier = Modifier.testTag(LibraryToolbarTags.VIDEO_DISPLAY),
+                    )
+                }
+            }
             // 排序：主体点一下翻转正/倒序，右侧小箭头点开字段下拉（手动才能长按拖动）。
             SortChip(
                 field = sortField,
@@ -305,7 +330,7 @@ internal fun LibraryToolbar(
                 onToggleDirection = onToggleDirection,
                 onPickField = onPickField,
             )
-            // 导入本地音频：把系统文件选择器里选中的音频复制进库。
+            // 导入本地媒体：把系统文件选择器里选中的音频或视频复制进库。
             // 外面包一层 48dp 高的盒子，和排序控件同高、居中对齐（FlowRow 行内没有 itemVerticalAlignment）。
             Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
                 AssistChip(
@@ -328,6 +353,7 @@ internal object LibraryToolbarTags {
     const val SORT = "library-sort"
     const val SORT_MENU = "library-sort-menu"
     const val IMPORT = "library-import"
+    const val VIDEO_DISPLAY = "library-video-display"
     fun kind(kind: MediaKind): String = "library-kind-${kind.name}"
     fun option(field: SortField): String = "sort-option-${field.name}"
 }
@@ -382,6 +408,7 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
     var selectedCategories by remember { mutableStateOf(setOf<Long>()) }
     val endMs = endTimeMs?.plus(59_999L)
     val mode by PlayerHolder.mode.collectAsState()
+    val videoDisplayEnabled by com.getmedia.app.data.repo.VideoDisplayPrefs.showVideo.collectAsState()
     val timer = timerStatus()
     LaunchedEffect(Unit) { playlistRepo.ensureDefault() }
     val allTracks by db.trackDao().allWithTimeRange(query, startMs, endMs).collectAsState(initial = emptyList())
@@ -417,8 +444,8 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
         scope.launch {
             importing = true
-            runCatching { DiagnosticsStore.operation("导入本地音频") { trackRepo.importAudio(uris).getOrThrow() } }
-                .onSuccess { notice = if (it == 0) "没有新增音频（都已在库中）" else "已导入 $it 首音频" }
+            runCatching { DiagnosticsStore.operation("导入本地媒体") { trackRepo.importAudio(uris).getOrThrow() } }
+                .onSuccess { notice = if (it == 0) "没有新增（都已在库中）" else "已导入 $it 个" }
                 .onFailure { notice = it.message ?: "导入失败" }
             importing = false
         }
@@ -579,8 +606,13 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                         sortAsc = f.defaultAsc
                         notice = "排序：" + f.describe(sortAsc)
                     },
-                    onImport = { importLauncher.launch(arrayOf("audio/*")) },
+                    onImport = { importLauncher.launch(arrayOf("audio/*", "video/*")) },
                     onCancelTimer = { PlayerHolder.cancelTimer(); notice = "已取消定时播放" },
+                    videoDisplayEnabled = videoDisplayEnabled,
+                    onToggleVideoDisplay = {
+                        com.getmedia.app.data.repo.VideoDisplayPrefs.setShowVideo(context, !videoDisplayEnabled)
+                        notice = if (!videoDisplayEnabled) "已开启视频画面" else "已关闭视频画面（只播声音）"
+                    },
                 )
                 if (startMs != null || endTimeMs != null) {
                     AreaButton(onClick = { startMs = null; endTimeMs = null }) { Text("${startMs?.let { displayDateTime(it) } ?: "不限"} ~ ${endTimeMs?.let { displayDateTime(it) } ?: "不限"} ×") }

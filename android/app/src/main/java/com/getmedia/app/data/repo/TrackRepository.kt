@@ -421,19 +421,21 @@ class TrackRepository(
         }
     }
 
-    // ---------- 导入本地音频 ----------
+    // ---------- 导入本地媒体（音频 / 视频） ----------
 
     /**
-     * 把系统文件选择器选中的音频复制进应用私有目录并入库。
+     * 把系统文件选择器选中的媒体（音频或视频）复制进应用私有目录并入库。
      *
-     * 场景：重装/换机后把之前导出的音频搬回来，或把手里的本地文件加进库。
-     * id 由文件内容的 sha256 派生（负数），同一个文件重复导入不会产生副本。
+     * 场景：重装/换机后把之前导出的媒体搬回来，或把手里的本地文件加进库。
+     * 每个文件按内容判断是音频还是视频（有没有视频轨），分别落库到 audio/video 目录、
+     * 标对应的 mediaType。id 由「类型 + 文件内容 sha256」派生（负数），
+     * 同一个文件重复导入不会产生副本，且同一内容当音频/视频导入互不冲突。
      */
     suspend fun importAudio(uris: List<Uri>, onProgress: (String) -> Unit = {}): Result<Int> = runCatching {
         withContext(Dispatchers.IO) {
             var added = 0
             uris.forEachIndexed { index, uri ->
-                val name = displayName(uri)?.takeIf { it.isNotBlank() } ?: "未命名音频"
+                val name = displayName(uri)?.takeIf { it.isNotBlank() } ?: "未命名媒体"
                 val title = titleOf(name)
                 onProgress("正在导入 ${index + 1}/${uris.size}：$title")
                 val staged = File.createTempFile("import-", ".part", context.cacheDir)
@@ -442,9 +444,11 @@ class TrackRepository(
                         staged.outputStream().use { out -> input.copyTo(out) }
                     } ?: error("无法读取：$title")
                     if (staged.length() <= 0L) error("文件为空：$title")
+                    val video = hasVideoTrack(staged)
                     val hash = sha256(staged)
-                    val id = importId(hash)
-                    val dest = File(audioDir, "$id.audio")
+                    val id = importId(hash, video)
+                    val dir = File(context.filesDir, if (video) "video" else "audio").apply { mkdirs() }
+                    val dest = File(dir, if (video) "$id.mp4" else "$id.audio")
                     if (dest.exists() && dest.length() == staged.length()) {
                         onProgress("已在库中：$title")
                         return@forEachIndexed
@@ -463,10 +467,11 @@ class TrackRepository(
                             uploader = null,
                             durationSec = durationOf(dest),
                             audioBytes = dest.length(),
-                            audioFormat = name.substringAfterLast('.', "m4a").lowercase(),
+                            audioFormat = name.substringAfterLast('.', if (video) "mp4" else "m4a").lowercase(),
                             sourceUrl = "",
                             audioSha256 = hash,
                             localPath = dest.absolutePath,
+                            mediaType = (if (video) MediaKind.VIDEO else MediaKind.AUDIO).name,
                         ))
                     }
                     added++
@@ -475,7 +480,7 @@ class TrackRepository(
                     staged.delete()
                 }
             }
-            onProgress("导入完成：$added 首")
+            onProgress("导入完成：$added 个")
             added
         }
     }
@@ -513,9 +518,22 @@ class TrackRepository(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun importId(hash: String): Long {
-        val bytes = MessageDigest.getInstance("SHA-256").digest("import:$hash".toByteArray())
+    private fun importId(hash: String, video: Boolean): Long {
+        val kind = if (video) "video" else "audio"
+        val bytes = MessageDigest.getInstance("SHA-256").digest("import:$kind:$hash".toByteArray())
         val positive = java.nio.ByteBuffer.wrap(bytes).long and Long.MAX_VALUE
         return -(positive.takeIf { it > 0 } ?: 1L)
     }
+
+    /** 用 MediaMetadataRetriever 判断文件里有没有视频轨；检测失败（例如损坏文件）按音频兜底。 */
+    private fun hasVideoTrack(file: File): Boolean = runCatching {
+        val retriever = android.media.MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_HAS_VIDEO)
+                ?.let { it == "yes" } ?: false
+        } finally {
+            retriever.release()
+        }
+    }.getOrDefault(false)
 }
