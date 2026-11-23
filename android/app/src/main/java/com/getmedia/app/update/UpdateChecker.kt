@@ -1,6 +1,7 @@
 package com.getmedia.app.update
 
 import android.content.Context
+import android.content.SharedPreferences
 import com.getmedia.app.BuildConfig
 import com.getmedia.app.account.AccountService
 import kotlinx.coroutines.CoroutineScope
@@ -27,23 +28,36 @@ data class UpdatePrompt(
  * （版本、更新说明、APK 直链、sha256），免费通道也在白名单里，所以不需要为这件事
  * 新开一个接口，也不需要登录。
  *
- * 三条自我约束：
- * 1. **进前台才查**，且 6 小时最多一次——不做后台轮询，不额外耗电；
+ * 四条自我约束：
+ * 1. **进前台才查**，同一版本内 6 小时最多一次——不做后台轮询，不额外耗电；
+ *    节流与"刚升级就放行"的规则在 [UpdateGate] 里，可单测。
  * 2. 同一个版本只发一次系统通知；用户点"稍后"后本次进程内不再弹，
  *    但下次进前台仍会看到（避免"提示过一次就永远不再提"）；
- * 3. 任何失败都静默：版本检查不该让开 App 变慢或报错。
+ * 3. 任何失败都静默：版本检查不该让开 App 变慢或报错；
+ * 4. 设置页的「检查更新」走 [checkNow]：不受节流限制、忽略"不再提示这个版本"，
+ *    并把结果（正在查 / 已是最新 / 失败）通过 [manual] 显示出来——手动动作必须有回应。
  */
 object UpdateChecker {
 
     private const val PREFS = "app-update"
-    private const val CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
     private const val KEY_LAST_CHECK = "last-check-at"
+    private const val KEY_CHECKED_VERSION = "checked-version"
     private const val KEY_IGNORED = "ignored-version"
     private const val KEY_NOTIFIED = "notified-version"
+
+    /** 用户手动检查的可见结果；自动检查从不写它，保持静默。 */
+    sealed class ManualCheck {
+        data object Checking : ManualCheck()
+        data object UpToDate : ManualCheck()
+        data object Failed : ManualCheck()
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _prompt = MutableStateFlow<UpdatePrompt?>(null)
     val prompt: StateFlow<UpdatePrompt?> = _prompt.asStateFlow()
+
+    private val _manual = MutableStateFlow<ManualCheck?>(null)
+    val manual: StateFlow<ManualCheck?> = _manual.asStateFlow()
 
     private var checking = false
 
@@ -55,31 +69,49 @@ object UpdateChecker {
         val app = context.applicationContext
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
-        if (now - prefs.getLong(KEY_LAST_CHECK, 0L) < CHECK_INTERVAL_MS) return
-        check(app, prefs, now)
+        val due = UpdateGate.shouldCheck(
+            now = now,
+            lastCheckAt = prefs.getLong(KEY_LAST_CHECK, 0L),
+            checkedVersion = prefs.getString(KEY_CHECKED_VERSION, null),
+            currentVersion = BuildConfig.VERSION_NAME,
+        )
+        if (!due) return
+        check(app, prefs, now, manual = false)
     }
 
-    /** 用户主动检查（设置页用）。忽略 6 小时节流。 */
+    /** 用户主动检查（设置页「检查更新」）。忽略节流与"不再提示这个版本"。 */
     fun checkNow(context: Context) {
         val app = context.applicationContext
-        check(app, app.getSharedPreferences(PREFS, Context.MODE_PRIVATE), System.currentTimeMillis())
+        check(app, app.getSharedPreferences(PREFS, Context.MODE_PRIVATE), System.currentTimeMillis(), manual = true)
     }
 
-    private fun check(app: Context, prefs: android.content.SharedPreferences, now: Long) {
+    private fun check(app: Context, prefs: SharedPreferences, now: Long, manual: Boolean) {
         synchronized(this) {
             if (checking) return
             checking = true
         }
+        if (manual) _manual.value = ManualCheck.Checking
         scope.launch {
             try {
                 val config = AccountService.api.config()
-                prefs.edit().putLong(KEY_LAST_CHECK, now).apply()
-                val latest = config.latest ?: return@launch
+                // 只有查成功才推进计时器：网络失败时下次进前台还能再试。
+                // 版本号一起记，用来判断"这次记录属于哪个版本"。
+                prefs.edit()
+                    .putLong(KEY_LAST_CHECK, now)
+                    .putString(KEY_CHECKED_VERSION, BuildConfig.VERSION_NAME)
+                    .apply()
+                val latest = config.latest
                 // 免费版只认 free 链接，拿不到就本次不提示（见 UpdateTarget）
-                val link = UpdateTarget.pick(latest, BuildConfig.FLAVOR == "free") ?: return@launch
-                if (!AppVersion.isNewer(latest.version, BuildConfig.VERSION_NAME)) return@launch
-                if (prefs.getString(KEY_IGNORED, null) == latest.version) return@launch
-                if (snoozedVersion == latest.version) return@launch
+                val link = latest?.let { UpdateTarget.pick(it, BuildConfig.FLAVOR == "free") }
+                if (latest == null || link == null || !AppVersion.isNewer(latest.version, BuildConfig.VERSION_NAME)) {
+                    if (manual) _manual.value = ManualCheck.UpToDate
+                    return@launch
+                }
+                // 自动检查尊重用户的"稍后"与"不再提示"；手动检查是明确动作，一律照给。
+                if (!manual) {
+                    val ignored = prefs.getString(KEY_IGNORED, null) == latest.version
+                    if (ignored || snoozedVersion == latest.version) return@launch
+                }
                 val mandatory = AppVersion.isNewer(config.minVersion, BuildConfig.VERSION_NAME)
                 _prompt.value = UpdatePrompt(
                     version = latest.version,
@@ -88,12 +120,15 @@ object UpdateChecker {
                     sha256 = link.sha256,
                     mandatory = mandatory,
                 )
+                // 弹窗本身就是手动检查的结果，不再额外显示提示文字。
+                _manual.value = null
                 if (prefs.getString(KEY_NOTIFIED, null) != latest.version) {
                     UpdateNotifications.notify(app, latest.version, latest.notes, link.apk)
                     prefs.edit().putString(KEY_NOTIFIED, latest.version).apply()
                 }
             } catch (_: Exception) {
                 // 静默：网络、解析、未初始化都按"这次没查到"处理
+                if (manual) _manual.value = ManualCheck.Failed
             } finally {
                 checking = false
             }
@@ -112,5 +147,10 @@ object UpdateChecker {
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_IGNORED, version).apply()
         _prompt.value = null
+    }
+
+    /** 清掉手动检查的结果文字（设置页在几秒后调用）。 */
+    fun clearManual() {
+        _manual.value = null
     }
 }

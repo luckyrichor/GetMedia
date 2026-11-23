@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Storage
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -53,7 +54,9 @@ import com.getmedia.app.ui.components.uiIsDark
 import com.getmedia.app.ui.components.uiMuted
 import com.getmedia.app.ui.components.uiSuccess
 import com.getmedia.app.ui.components.uiSuccessContainer
+import com.getmedia.app.update.UpdateChecker
 import java.io.File
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -77,6 +80,20 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
     val placeholders = com.getmedia.app.placeholder.PlaceholderCatalog.items
     val background by com.getmedia.app.data.repo.BackgroundStore.state.collectAsState()
     val version = remember { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "未知" }
+    // 「检查更新」的结果只在行副标题上短暂停留，避免一行文字长期挂着过期的结论。
+    val manualCheck by UpdateChecker.manual.collectAsState()
+    LaunchedEffect(manualCheck) {
+        if (manualCheck == UpdateChecker.ManualCheck.UpToDate || manualCheck == UpdateChecker.ManualCheck.Failed) {
+            delay(4000)
+            UpdateChecker.clearManual()
+        }
+    }
+    val updateHint = when (manualCheck) {
+        UpdateChecker.ManualCheck.Checking -> "正在检查…"
+        UpdateChecker.ManualCheck.UpToDate -> "已是最新版本"
+        UpdateChecker.ManualCheck.Failed -> "检查失败，请稍后重试"
+        null -> "看看有没有新版本"
+    }
     val diagnosticExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         if (uri != null) scope.launch {
             runCatching {
@@ -182,6 +199,17 @@ fun MyScreen(openAuth: Boolean = false, onAuthOpened: () -> Unit = {}) {
         SectionTitle("关于")
         SectionCard {
             SettingRow(Icons.Rounded.BugReport, "版本 $version", subtitle = "分享链接提取音频", showChevron = true, onClick = { dialog = "about" })
+            RowDivider()
+            // 进前台自动查有 6 小时节流，这里是唯一能让用户立刻要一次结果的地方。
+            SettingRow(
+                Icons.Rounded.SystemUpdate,
+                "检查更新",
+                subtitle = updateHint,
+                showChevron = false,
+                onClick = {
+                    if (manualCheck != UpdateChecker.ManualCheck.Checking) UpdateChecker.checkNow(context)
+                },
+            )
         }
         Spacer(Modifier.height(28.dp))
         Text(
