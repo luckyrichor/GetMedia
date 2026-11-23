@@ -50,6 +50,22 @@ class TrackFile:
     bytes: int
 
 
+CATEGORY_MAX = 200
+
+
+def _clean_category(value: str | None) -> str | None:
+    """类别路径规整：去掉空段与首尾空白，最长 200 字；规整后为空就是「未分类」。
+
+    用路径（``音乐/古风``）而不是类别编号做跨设备身份：手机上的类别 id 是本地自增的，
+    两台机器同一类别的编号几乎不可能相同，路径才是唯一能对齐的东西。
+    """
+    if not value:
+        return None
+    parts = [p.strip() for p in str(value).split("/")]
+    out = "/".join(p for p in parts if p)
+    return out[:CATEGORY_MAX] or None
+
+
 def _row_to_dict(row) -> dict:
     m = row._mapping
     return {
@@ -72,12 +88,16 @@ def _row_to_dict(row) -> dict:
         "updated_at": m["updated_at"],
         "cache_expires_at": m["cache_expires_at"],
         "has_file": m["media_path"] is not None,
+        # 整理信息（schema v19）：收藏是布尔，类别是路径字符串（"音乐/古风"），
+        # 空串表示未分类。用路径而不是编号，因为两台设备的类别编号互不相干。
+        "favorite": bool(m["favorite"]),
+        "category": m["category"] or "",
     }
 
 
 _COLS = ("id, user_id, media_type, platform, video_id, page, title, uploader, duration_sec, "
          "cover_url, source_url, storage, media_path, bytes, sha256, pinned, deleted, "
-         "updated_seq, created_at, updated_at, cache_expires_at, last_access_at")
+         "updated_seq, created_at, updated_at, cache_expires_at, last_access_at, favorite, category")
 
 
 class MediaStore:
@@ -381,7 +401,15 @@ class MediaStore:
         return _row_to_dict(row), True
 
     def patch(self, user_id: str, track_id: int, *, title: str | None = None,
-              uploader: str | None = None, pinned: bool | None = None) -> dict:
+              uploader: str | None = None, pinned: bool | None = None,
+              favorite: bool | None = None, category: str | None = None,
+              category_set: bool = False) -> dict:
+        """改条目自身字段。
+
+        ``category_set`` 是"请求体里出现过 category"的标记：``None`` 与 ``""`` 都表示
+        **清空类别**，而"没传这个字段"表示不动它——Pydantic 的 ``model_fields_set`` 能区分，
+        所以这里要一个显式开关，不能靠 ``category is not None`` 猜。
+        """
         sets, params = [], {"i": track_id, "u": user_id, "n": self.now()}
         if title is not None:
             if not title.strip():
@@ -391,6 +419,10 @@ class MediaStore:
             sets.append("uploader=:up"); params["up"] = uploader.strip() or None
         if pinned is not None:
             sets.append("pinned=:pin"); params["pin"] = int(pinned)
+        if favorite is not None:
+            sets.append("favorite=:fav"); params["fav"] = int(bool(favorite))
+        if category_set:
+            sets.append("category=:cat"); params["cat"] = _clean_category(category)
         if not sets:
             raise MediaError("nothing_to_update", "没有要修改的字段")
         with self.engine.begin() as c:

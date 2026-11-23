@@ -46,7 +46,7 @@ class LibrarySyncClient(
     baseUrl: String = BuildConfig.OWNER_SERVER_BASE,
     private val client: OkHttpClient = AccountApi.defaultClient(),
     private val token: () -> String? = SessionStore::token,
-) : LibraryUploadTransport, LibraryWriteTransport {
+) : LibraryUploadTransport, LibraryWriteTransport, MetaWriteTransport {
 
     private val base = baseUrl.trimEnd('/')
     private val json = "application/json; charset=utf-8".toMediaType()
@@ -123,6 +123,27 @@ class LibrarySyncClient(
             .build()
         call(request) { text -> LibrarySyncJson.singleTrack(text) }
     }
+
+    /**
+     * 收藏与类别：走网页端那条 `PATCH /v2/tracks/{id}`。
+     *
+     * 只带这两个字段，标题/置顶一概不碰——多带一个字段就可能在另一端覆盖别人刚改的东西。
+     * 这条路没有 If-Match：收藏是"最后一次操作算数"的语义，冲突时不需要让用户裁决。
+     */
+    override suspend fun patchMeta(trackId: Long, favorite: Boolean, category: String): CloudTrack =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject()
+                .put("favorite", favorite)
+                .put("category", category)
+                .toString()
+            val request = Request.Builder()
+                .url((base + PATH + "/" + trackId).toHttpUrl())
+                .header("Accept", "application/json")
+                .header("X-GetMedia-Session", session())
+                .patch(body.toRequestBody(json))
+                .build()
+            call(request) { text -> LibrarySyncJson.singleTrack(text) }
+        }
 
     private fun <T> call(request: Request, parse: (String) -> T): T = try {
         client.newCall(request).execute().use { response ->

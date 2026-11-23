@@ -112,7 +112,7 @@ class LibraryTablesMigrationTest {
             .build()
         try {
             val sqlite = db.openHelper.writableDatabase
-            assertEquals(4, sqlite.version)
+            assertEquals(5, sqlite.version)
             val tables = tableNames(sqlite)
             assertTrue("缺 track_removals：$tables", tables.contains("track_removals"))
             assertTrue("缺 library_cursor：$tables", tables.contains("library_cursor"))
@@ -186,9 +186,10 @@ class LibraryTablesMigrationTest {
         // 退回 v3：重建一份没有 v4 新列的 tracks，并只留 v3 的两张辅助表。
         // 不用 ALTER TABLE DROP COLUMN：Android 的 SQLite 在目标版本上不支持。
         val newTrackColumns = listOf("serverStorage", "confirmedTitle", "pendingTitle",
-            "pendingTitleBaseSeq", "pendingTitleGen")
+            "pendingTitleBaseSeq", "pendingTitleGen", "metaDirty")
         SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
             downgradeTracks(raw, newTrackColumns, "tracks_v3")
+            downgradePlaylists(raw, "playlists_v3")
             raw.execSQL("DROP TABLE IF EXISTS track_removals")
             raw.execSQL("DROP TABLE IF EXISTS library_cursor")
             raw.execSQL("DROP TABLE IF EXISTS remote_marks")
@@ -197,10 +198,10 @@ class LibraryTablesMigrationTest {
         }
 
         db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5)
             .allowMainThreadQueries().build()
         try {
-            assertEquals("升级后必须是 v4", 4, db.openHelper.writableDatabase.version)
+            assertEquals("升级后必须是 v5", 5, db.openHelper.writableDatabase.version)
             assertEquals("tracks 一行都不能少、一个字段都不能变", beforeTracks, db.trackDao().allNow())
             assertEquals("播放列表归属与顺序不变", beforeItems, db.playlistDao().itemsAll())
             assertEquals("类别不变", listOf("通勤"), db.categoryDao().allNow().map { it.name })
@@ -284,7 +285,8 @@ class LibraryTablesMigrationTest {
         // 退回 v2：去掉 v4 新列，删掉 v3/v4 才有的三张表
         SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
             downgradeTracks(raw, listOf("serverStorage", "confirmedTitle", "pendingTitle",
-                "pendingTitleBaseSeq", "pendingTitleGen"), "tracks_v2")
+                "pendingTitleBaseSeq", "pendingTitleGen", "metaDirty"), "tracks_v2")
+            downgradePlaylists(raw, "playlists_v2")
             raw.execSQL("DROP TABLE IF EXISTS track_removals")
             raw.execSQL("DROP TABLE IF EXISTS library_cursor")
             raw.execSQL("DROP TABLE IF EXISTS remote_marks")
@@ -292,10 +294,10 @@ class LibraryTablesMigrationTest {
         }
 
         db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5)
             .allowMainThreadQueries().build()
         try {
-            assertEquals("必须连续升到 v4", 4, db.openHelper.writableDatabase.version)
+            assertEquals("必须连续升到 v5", 5, db.openHelper.writableDatabase.version)
             val tables = tableNames(db.openHelper.writableDatabase)
             listOf("tracks", "categories", "playlists", "playlist_items",
                 "track_removals", "library_cursor", "remote_marks").forEach {
@@ -303,7 +305,11 @@ class LibraryTablesMigrationTest {
             }
             assertEquals("tracks 逐字段不变", beforeTracks, db.trackDao().allNow())
             assertEquals("categories 不变", beforeCategories, db.categoryDao().allNow())
-            assertEquals("playlists 不变", beforePlaylists, db.playlistDao().allNow())
+            // v5 的迁移会把已有列表标成"待推送"（不标就永远进不了云端），其余字段必须一字不差
+            val afterPlaylists = db.playlistDao().allNow()
+            assertEquals("列表内容不变，只多一个待推送标记",
+                beforePlaylists.map { it.copy(dirty = true) }, afterPlaylists)
+            assertEquals("首次对齐时间从 0 开始", 0L, afterPlaylists.first().syncedAt)
             assertEquals("playlist_items 不变", beforeItems, db.playlistDao().itemsAll())
             assertEquals("v2 没有删除队列，升级后应为空", 0, db.libraryAuxDao().removalCount("boss"))
             assertNull("v2 没有水位，升级后应为空", db.libraryAuxDao().cursor("boss"))
@@ -344,23 +350,43 @@ class LibraryTablesMigrationTest {
      * 不依赖 `ALTER TABLE DROP COLUMN`（Android 目标版本的 SQLite 不支持）：
      * 从真实 DDL 里按顶层逗号切掉新列，建临时表、复制旧列、改名。
      */
-    private fun downgradeTracks(raw: SQLiteDatabase, removedColumns: List<String>, tempName: String) {
-        val v4Ddl = raw.rawQuery("SELECT sql FROM sqlite_master WHERE type='table' AND name='tracks'", null)
-            .use { c -> if (c.moveToFirst()) c.getString(0) else error("找不到 tracks 表") }
-        val inner = v4Ddl.substringAfter("(").substringBeforeLast(")")
+    /** 把某张表"退回"到没有 [removedColumns] 的形状：重建表、搬数据、原名复位。 */
+    private fun downgradeTable(
+        raw: SQLiteDatabase,
+        table: String,
+        keepColumns: List<String>,
+        removedColumns: List<String>,
+        tempName: String,
+    ) {
+        val ddl = raw.rawQuery("SELECT sql FROM sqlite_master WHERE type='table' AND name='$table'", null)
+            .use { c -> if (c.moveToFirst()) c.getString(0) else error("找不到 $table 表") }
+        val inner = ddl.substringAfter("(").substringBeforeLast(")")
         val defs = inner.split(",").filterNot { def ->
             val head = def.trimStart()
             removedColumns.any { head.startsWith("`$it`") || head.startsWith("$it ") }
         }
         val oldDdl = "CREATE TABLE `$tempName` (" + defs.joinToString(",") + ")"
-        val oldColumns = fieldsOf(TrackEntity::class.java).filterNot { it in removedColumns }
-        raw.execSQL("ALTER TABLE `tracks` RENAME TO `tracks_v4`")
+        val cols = keepColumns.joinToString(", ") { "`$it`" }
+        raw.execSQL("ALTER TABLE `$table` RENAME TO `${table}_new`")
         raw.execSQL(oldDdl)
-        val cols = oldColumns.joinToString(", ") { "`$it`" }
-        raw.execSQL("INSERT INTO `$tempName` ($cols) SELECT $cols FROM `tracks_v4`")
-        raw.execSQL("DROP TABLE `tracks_v4`")
-        raw.execSQL("ALTER TABLE `$tempName` RENAME TO `tracks`")
+        raw.execSQL("INSERT INTO `$tempName` ($cols) SELECT $cols FROM `${table}_new`")
+        raw.execSQL("DROP TABLE `${table}_new`")
+        raw.execSQL("ALTER TABLE `$tempName` RENAME TO `$table`")
     }
+
+    private fun downgradeTracks(raw: SQLiteDatabase, removedColumns: List<String>, tempName: String) =
+        downgradeTable(
+            raw, "tracks",
+            fieldsOf(TrackEntity::class.java).filterNot { it in removedColumns },
+            removedColumns, tempName,
+        )
+
+    /** 播放列表退回 v4：去掉跨设备同步那两列。 */
+    private fun downgradePlaylists(raw: SQLiteDatabase, tempName: String) =
+        downgradeTable(
+            raw, "playlists", listOf("id", "name", "createdAt", "isDefault"),
+            listOf("dirty", "syncedAt"), tempName,
+        )
 
     private fun tableNames(db: SQLiteDatabase): Set<String> =
         db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'", null).use { c ->

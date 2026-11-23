@@ -82,6 +82,10 @@ data class CloudTrack(
     val storage: String = "",
     /** 服务器是否已有文件；与 [storage] 一起用于删除确认与下载提示。 */
     val hasFile: Boolean = false,
+    /** 收藏（schema v19；旧服务器不返回就是 false）。 */
+    val favorite: Boolean = false,
+    /** 类别路径（`音乐/古风`）；空串表示未分类。 */
+    val category: String = "",
 )
 
 /** 一页拉取结果。[nextSeq] 是本页最大 `updated_seq`，**不能**当水位直接用（见引擎）。 */

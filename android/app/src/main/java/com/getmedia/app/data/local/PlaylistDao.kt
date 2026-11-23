@@ -65,4 +65,36 @@ interface PlaylistDao {
 
     @Query("DELETE FROM playlist_items WHERE trackId = :trackId")
     suspend fun removeTrack(trackId: Long)
+
+    // ---------- 跨设备同步（v5 起） ----------
+
+    /** 本机改过、还没推上去的列表。 */
+    @Query("SELECT * FROM playlists WHERE dirty = 1 ORDER BY id")
+    suspend fun dirtyNow(): List<PlaylistEntity>
+
+    @Query("UPDATE playlists SET dirty = 1 WHERE id = :id")
+    suspend fun markDirty(id: Long)
+
+    @Query("UPDATE playlists SET dirty = 0 WHERE id = :id")
+    suspend fun markClean(id: Long)
+
+    /** 推送成功：清脏位并记下对齐时间。 */
+    @Query("UPDATE playlists SET dirty = 0, syncedAt = :now WHERE id = :id")
+    suspend fun markSynced(id: Long, now: Long)
+
+    /** 拉取时按名称找本地列表：名称就是跨设备身份。 */
+    @Query("SELECT * FROM playlists WHERE name = :name LIMIT 1")
+    suspend fun byName(name: String): PlaylistEntity?
+
+    @Query("SELECT * FROM playlist_removals WHERE account = :account ORDER BY requestedAt")
+    suspend fun removals(account: String): List<PlaylistRemovalEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun addRemoval(removal: PlaylistRemovalEntity)
+
+    @Query("DELETE FROM playlist_removals WHERE account = :account AND name = :name")
+    suspend fun dropRemoval(account: String, name: String)
+
+    @Query("DELETE FROM playlist_items WHERE playlistId = :id AND trackId NOT IN (:keep)")
+    suspend fun keepOnly(id: Long, keep: List<Long>)
 }

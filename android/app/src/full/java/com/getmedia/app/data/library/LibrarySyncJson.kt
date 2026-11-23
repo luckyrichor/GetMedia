@@ -94,6 +94,8 @@ object LibrarySyncJson {
             updatedAtSec = o.optLong("updated_at", 0),
             storage = o.optString("storage"),
             hasFile = o.optBoolean("has_file", false),
+            favorite = o.optBoolean("favorite", false),
+            category = o.optString("category").trim(),
         )
     }
 

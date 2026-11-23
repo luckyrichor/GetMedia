@@ -93,6 +93,25 @@ interface TrackDao {
     @Query("UPDATE tracks SET favorite = :fav WHERE id = :id")
     suspend fun setFavorite(id: Long, fav: Boolean)
 
+    // ---------- 整理信息推送（v5 起） ----------
+
+    /** 本机改过、还没推上去的收藏/类别；只挑已绑定服务器 id 的行（没绑的推了也没处放）。 */
+    @Query("SELECT * FROM tracks WHERE metaDirty = 1 AND serverId IS NOT NULL AND accountKey = :account ORDER BY id")
+    suspend fun metaDirty(account: String): List<TrackEntity>
+
+    @Query("UPDATE tracks SET favorite = :fav, metaDirty = 1 WHERE id = :id")
+    suspend fun setFavoriteDirty(id: Long, fav: Boolean)
+
+    @Query("UPDATE tracks SET localCategoryId = :categoryId, metaDirty = 1, updatedAtMs = :now WHERE id = :id")
+    suspend fun moveDirty(id: Long, categoryId: Long, now: Long)
+
+    /** 推送成功：清脏位，同时把服务器回来的一行记下来（版本号要跟上，否则下一轮又白推）。 */
+    @Query("UPDATE tracks SET metaDirty = 0, serverSeq = :seq, serverUpdatedAtMs = :updatedAtMs WHERE id = :id")
+    suspend fun markMetaClean(id: Long, seq: Long, updatedAtMs: Long)
+
+    @Query("UPDATE tracks SET metaDirty = 0 WHERE id = :id")
+    suspend fun clearMetaDirty(id: Long)
+
     /** 本机提取/导入入库：保留已有的收藏、分类、重命名与入库时间。 */
     @Transaction
     suspend fun upsertLocal(track: TrackEntity) {

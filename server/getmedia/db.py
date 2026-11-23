@@ -494,6 +494,40 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "ALTER TABLE creator_jobs ADD COLUMN start_n INTEGER",
         "ALTER TABLE creator_jobs ADD COLUMN direction TEXT",
     ]),
+    # v19 整理信息跨设备同步：收藏与所属类别挂在条目上，播放列表单独两张表。
+    #
+    # - ``tracks.favorite`` / ``tracks.category``：category 存**类别路径**（如 ``音乐/古风``），
+    #   空/NULL 表示未分类。不存类别编号——两台设备的类别编号互不相干，路径才是它们能对齐的东西。
+    # - ``playlists``：按 ``(user_id, name)`` 唯一，名称就是跨设备的身份。``deleted`` 是墓碑，
+    #   别的设备靠它知道"这个列表被删了"；``updated_seq`` 只在播放列表自己的序号空间里递增
+    #   （客户端每次全量拉，列表数量很小，不需要和曲库共用水位）。
+    # - ``playlist_items``：存条目的平台三元组而不是 track id——条目可能还没被这台设备拉下来，
+    #   存 id 会让它永远对不上。
+    (19, [
+        "ALTER TABLE tracks ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE tracks ADD COLUMN category TEXT",
+        """CREATE TABLE IF NOT EXISTS playlists(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            updated_seq INTEGER NOT NULL,
+            deleted INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(user_id, name))""",
+        "CREATE INDEX IF NOT EXISTS idx_playlists_user_seq ON playlists(user_id, updated_seq)",
+        """CREATE TABLE IF NOT EXISTS playlist_items(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            playlist_id INTEGER NOT NULL,
+            platform TEXT NOT NULL,
+            video_id TEXT NOT NULL,
+            page INTEGER NOT NULL DEFAULT 1,
+            order_index INTEGER NOT NULL DEFAULT 0,
+            added_at INTEGER NOT NULL,
+            UNIQUE(user_id, playlist_id, platform, video_id, page))""",
+        "CREATE INDEX IF NOT EXISTS idx_playlist_items_list ON playlist_items(playlist_id, order_index)",
+    ]),
 ]
 
 

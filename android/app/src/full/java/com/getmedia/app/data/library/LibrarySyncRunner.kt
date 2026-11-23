@@ -153,6 +153,16 @@ object LibrarySyncRunner {
             if (pulled.bound > 0) {
                 note(db, session.loginName, "${pulled.bound} 项本机条目已与云端对应条目关联")
             }
+            // 播放列表也拉一遍（只拉不推）：别的设备刚拖好的顺序，这台不动手也能看到。
+            // 本地未推送的改动在拉取里会被跳过（dirty 位），留给完整的一轮去推。
+            try {
+                val lists = PlaylistSyncClient(token = token)
+                LibraryPlaylistSync(db, lists, lists).sync(session.loginName, push = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 静默：下一分钟再试
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -356,6 +366,7 @@ object LibrarySyncRunner {
             val db = AppDatabase.get(context)
             val token = syncToken(session, prefs)
             val client = LibrarySyncClient(token = token)
+            val playlistClient = PlaylistSyncClient(token = token)
             val uploader = uploader(db, client, account, prefs, manual = false)
             val round = LibrarySyncRound(
                 pull = { acc ->
@@ -396,6 +407,23 @@ object LibrarySyncRunner {
                     }
                     // ⑤ 墓碑确认
                     refreshRemovedAsk(db, acc, token)
+                    // ⑥ 收藏与类别：本机改过的推上去（放在拉取之后，serverId 与云端版本都是新的）
+                    val meta = LibraryMetaPush(db, client, acc).push()
+                    if (meta.pushed > 0) note(db, acc, "${meta.pushed} 项收藏或类别已同步")
+                    if (meta.stopped != null && meta.stopped != LibrarySyncProblem.NOT_AVAILABLE) {
+                        note(db, acc, "收藏与类别未同步完：${meta.reason}")
+                    }
+                    // ⑦ 播放列表：重放删除 → 拉云端 → 推本地改动
+                    val lists = LibraryPlaylistSync(db, playlistClient, playlistClient).sync(acc)
+                    val changed = lists.created + lists.pulled + lists.removed + lists.pushed
+                    if (lists.removed > 0) {
+                        note(db, acc, "${lists.removed} 个播放列表已在其他设备上删除")
+                    }
+                    if (lists.stopped != null && lists.stopped != LibrarySyncProblem.NOT_AVAILABLE) {
+                        note(db, acc, "播放列表未同步完：${lists.reason}")
+                    } else if (changed > 0 && lists.created + lists.pulled > 0) {
+                        note(db, acc, "播放列表已更新（新增 ${lists.created}、更新 ${lists.pulled}、上传 ${lists.pushed}）")
+                    }
                 },
                 candidateCount = { uploader.candidates().size },
                 upload = { acc -> upload(uploader, db, acc) },

@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .errors import ApiError
 from .extractor import MediaResolver, ResolveError, iter_source
 from .media import MediaError, MediaStore
+from .collections import CollectionStore
 from .service import AuthCtx
 
 log = logging.getLogger("getmedia.media_api")
@@ -78,6 +79,31 @@ class TrackPatchBody(BaseModel):
     title: str | None = Field(None, min_length=1, max_length=200)
     uploader: str | None = Field(None, max_length=100)
     pinned: bool | None = None
+    """整理信息（schema v19）：收藏与所属类别路径。
+
+    category 的"清空"用空串表达；不传这个字段就是"不动它"——靠 ``model_fields_set`` 区分，
+    两种意思不能用同一个 None 表达。
+    """
+    favorite: bool | None = None
+    category: str | None = Field(None, max_length=200)
+
+
+class PlaylistItemBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    platform: Literal["bilibili", "douyin", "local"]
+    video_id: str = Field(min_length=1, max_length=128)
+    page: int = Field(1, ge=1, le=10000)
+
+
+class PlaylistPutBody(BaseModel):
+    """整体替换一个播放列表的成员与顺序。
+
+    不做逐条增删：手机侧一次拖动排序会改十几条的序号，逐条同步既慢又容易半途中断，
+    整体替换只有一次写、失败就是没写，边界清楚。
+    """
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=100)
+    items: list[PlaylistItemBody] = Field(default_factory=list, max_length=2000)
 
 
 class SyncTitleBody(BaseModel):
@@ -216,6 +242,7 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
     """挂载 P2a 路由；返回 MediaStore 供后台任务与其他模块复用。"""
     store = store or MediaStore(engine, app.state.settings, clock)
     resolver = resolver or MediaResolver()
+    collections = CollectionStore(engine, clock)
     app.state.media, app.state.extractor = store, resolver
 
     def _tid(raw: str) -> int:
@@ -401,7 +428,9 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
     def patch_track(track_id: str, body: TrackPatchBody, ctx: AuthCtx = Depends(guard)):
         try:
             return store.patch(ctx.user_id, _tid(track_id), title=body.title,
-                               uploader=body.uploader, pinned=body.pinned)
+                               uploader=body.uploader, pinned=body.pinned,
+                               favorite=body.favorite, category=body.category,
+                               category_set="category" in body.model_fields_set)
         except MediaError as exc:
             _translate(exc)
 
@@ -440,6 +469,31 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
             _translate(exc)
         response.headers["ETag"] = f'"{t["updated_seq"]}"'
         return t
+
+    # ---------- 播放列表（整理信息同步，schema v19） ----------
+    #
+    # 身份是**名称**：两台设备上同名的列表被视为同一个（隐私说明 v3 的承诺）。
+    # 成员存平台三元组而不是 track id，条目还没被这台设备拉下来也能对上。
+    # 走整体替换，不做逐条增删：一次拖动排序会改十几条序号，逐条同步既慢又容易半途中断。
+    @app.get("/v2/sync/playlists")
+    def list_playlists(ctx: AuthCtx = Depends(guard)):
+        return {"playlists": collections.list_all(ctx.user_id)}
+
+    @app.put("/v2/sync/playlists")
+    def put_playlist(body: PlaylistPutBody, ctx: AuthCtx = Depends(guard)):
+        try:
+            return collections.replace(ctx.user_id, body.name,
+                                       [item.model_dump() for item in body.items])
+        except MediaError as exc:
+            _translate(exc)
+
+    @app.delete("/v2/sync/playlists")
+    def delete_playlist(name: str = Query(min_length=1, max_length=100),
+                        ctx: AuthCtx = Depends(guard)):
+        try:
+            return collections.remove(ctx.user_id, name)
+        except MediaError as exc:
+            _translate(exc)
 
     @app.post("/v2/tracks/{track_id}/restore")
     def restore_track(track_id: str, ctx: AuthCtx = Depends(guard)):

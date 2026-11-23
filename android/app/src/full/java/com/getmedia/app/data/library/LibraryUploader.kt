@@ -113,6 +113,9 @@ class LibraryUploader(
                 // 服务器已有同键（created=false）：以服务器为准改标题，但本机改过名的不动
                 title = if (created.created || current.localTitleOverride != null) current.title else server.title,
                 confirmedTitle = server.title,
+                // 建库接口只收 8 个字段，不带收藏与类别；这一行若有本机整理信息，
+                // 标成待推送，让同一轮的整理信息推送把它补上去（没有整理信息就不用多打一次 PATCH）。
+                metaDirty = current.favorite || current.localCategoryId != MetadataSnapshot.DEFAULT_CATEGORY_ID,
                 updatedAtMs = nowMs(),
             ),
         )

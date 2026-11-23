@@ -186,8 +186,11 @@ class TrackRepository(
     }
 
     suspend fun setFavorite(id: Long, fav: Boolean) {
-        trackDao.setFavorite(id, fav)
+        // 标脏 + 立刻推一轮：收藏是用户最常点的一个动作，不能等下一次进前台。
+        // 没登录/没绑定服务器 id 时脏位会留着，等绑定补上后由同步器带走。
+        trackDao.setFavoriteDirty(id, fav)
         BackupManager.noteWrite()
+        cloudSync.onLocalChange(context)
     }
 
     // ---------- 提取 ----------

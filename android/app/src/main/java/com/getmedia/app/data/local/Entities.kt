@@ -77,6 +77,15 @@ data class TrackEntity(
     val pendingTitleBaseSeq: Long? = null,
     /** 本地操作世代：迟到的旧响应不能覆盖后来草稿。 */
     val pendingTitleGen: Long? = null,
+
+    /**
+     * 收藏或类别是本机改的、还没推上去（v5 起）。
+     *
+     * 拉取时先看这一位：为 true 就**不拿云端的收藏/类别覆盖本地**，留给下一轮推送；
+     * 推送成功才清回 false。没有它的话，"在这台手机点了收藏、还没推"会被下一分钟的
+     * 前台轮询用云端旧值抹掉——用户看到的是收藏自己跳回去了。
+     */
+    @ColumnInfo(defaultValue = "0") val metaDirty: Boolean = false,
 )
 
 @Entity(tableName = "categories")
@@ -97,6 +106,34 @@ data class PlaylistEntity(
     val name: String,
     val createdAt: Long = System.currentTimeMillis(),
     @ColumnInfo(defaultValue = "0") val isDefault: Boolean = false,
+    /**
+     * 本地改动（改名、加删条目、拖动排序）还没推上去（v5 起）。
+     *
+     * 列表是整体替换推送的，所以不需要记录"改了哪一条"，一个标记就够：
+     * 推成功清回 false；拉取时这一位为 true 的列表**不拿云端内容覆盖**。
+     */
+    @ColumnInfo(defaultValue = "0") val dirty: Boolean = false,
+    /**
+     * 最近一次与云端对齐的时间（0 表示**从未对齐**，含刚升级上来的老本地列表）。
+     *
+     * 首次对齐一律以云端为准：两台设备各自有一份同名列表时，先升级的那台不该把
+     * 自己的内容盖到云端上——先看看云端有没有，有就听云端的，没有才把自己这份传上去。
+     */
+    @ColumnInfo(defaultValue = "0") val syncedAt: Long = 0,
+)
+
+/**
+ * 待重放的"播放列表删除"（v5 起）。
+ *
+ * 按**名称**记录，因为名称就是跨设备身份（隐私说明 v3：两台设备同名的列表视为同一个）。
+ * 与 [TrackRemovalEntity] 同一条纪律：先写队列再动手，推送成功才出队；失败留着重试，
+ * 不会出现"本机删了、云端还在、下次拉取又建回来"的循环。
+ */
+@Entity(tableName = "playlist_removals", primaryKeys = ["account", "name"])
+data class PlaylistRemovalEntity(
+    val account: String,
+    val name: String,
+    val requestedAt: Long = System.currentTimeMillis(),
 )
 
 @Entity(tableName = "playlist_items", primaryKeys = ["playlistId", "trackId"])

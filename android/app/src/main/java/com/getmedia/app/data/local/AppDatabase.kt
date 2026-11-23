@@ -18,8 +18,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         TrackEntity::class, CategoryEntity::class, PlaylistEntity::class, PlaylistItemEntity::class,
         TrackRemovalEntity::class, LibraryCursorEntity::class, RemoteMarkEntity::class,
+        PlaylistRemovalEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -110,6 +111,35 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v4 → v5（整理信息跨设备同步）：曲库补"收藏/类别待推送"标记，列表补脏位，
+         * 另建一张"待重放的列表删除"。
+         *
+         * 全部是 `ALTER TABLE ADD COLUMN` 加一张新表：升级后旧行一个字段都不变，
+         * 已有的收藏、类别、列表内容原样保留——**本机整理结果不能因为一次升级被重置**。
+         */
+        val MIGRATION_4_5_SQL: List<String> = listOf(
+            "ALTER TABLE tracks ADD COLUMN `metaDirty` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE playlists ADD COLUMN `dirty` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE playlists ADD COLUMN `syncedAt` INTEGER NOT NULL DEFAULT 0",
+            // 升级前就有内容的列表要传一次：不置脏位它们永远不会进云端（本地列表本来 dirty=0）。
+            // 第一轮会先拉云端——云端已有同名列表时以云端为准，只有云端没有才把本地这份传上去，
+            // 所以两台设备先后升级不会互相覆盖。
+            "UPDATE playlists SET dirty = 1",
+        )
+
+        val PLAYLIST_REMOVALS_4_5_SQL: String =
+            "CREATE TABLE IF NOT EXISTS `playlist_removals` (`account` TEXT NOT NULL, " +
+                "`name` TEXT NOT NULL, `requestedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`account`, `name`))"
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_4_5_SQL.forEach(db::execSQL)
+                db.execSQL(PLAYLIST_REMOVALS_4_5_SQL)
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -119,7 +149,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "getmedia.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)

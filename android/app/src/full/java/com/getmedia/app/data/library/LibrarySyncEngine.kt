@@ -268,7 +268,7 @@ class LibrarySyncEngine(
      *    只把服务器的实际标题记到 `confirmedTitle`，作为以后冲突判断的基准。
      * 3. 其余情况：服务器为准。
      */
-    private fun mergeServer(existing: TrackEntity, item: CloudTrack, now: Long): TrackEntity {
+    private suspend fun mergeServer(existing: TrackEntity, item: CloudTrack, now: Long): TrackEntity {
         var state = existing.syncState
         var title = existing.title
         var confirmed = existing.confirmedTitle
@@ -283,6 +283,18 @@ class LibrarySyncEngine(
             confirmed = item.title
             state = SyncState.SYNCED.name
         }
+        // 收藏与类别：本机有未推送的改动就保留本地（下一轮推上去），否则以云端为准。
+        // 不做"取并集"之类的聪明事：收藏是单值，取并集会让"取消收藏"永远传不出去。
+        var favorite = existing.favorite
+        var categoryId = existing.localCategoryId
+        if (!existing.metaDirty) {
+            favorite = item.favorite
+            categoryId = if (item.category.isBlank()) {
+                MetadataSnapshot.DEFAULT_CATEGORY_ID
+            } else {
+                CategoryPaths.ensurePath(db.categoryDao(), item.category, now)
+            }
+        }
         return existing.copy(
             title = title,
             confirmedTitle = confirmed,
@@ -290,6 +302,8 @@ class LibrarySyncEngine(
             pendingTitle = existing.pendingTitle,
             pendingTitleBaseSeq = existing.pendingTitleBaseSeq,
             pendingTitleGen = existing.pendingTitleGen,
+            favorite = favorite,
+            localCategoryId = categoryId,
             uploader = item.uploader,
             durationSec = item.durationSec,
             sourceUrl = item.sourceUrl.ifBlank { existing.sourceUrl },
@@ -306,36 +320,45 @@ class LibrarySyncEngine(
     private fun keyOf(t: TrackEntity): Triple<String, String, Int> =
         Triple(t.platform.lowercase(), MetadataSnapshot.videoIdOf(t), MetadataSnapshot.pageOf(t))
 
-    private fun entity(item: CloudTrack, id: Long, account: String, now: Long) = TrackEntity(
-        id = id,
-        platform = item.platform,
-        // 与直提取/服务器提取/恢复同一套键形态：B 站 P2 存成 BV1xx-p2，重新下载才落回同一行
-        videoId = LocalIds.key(item.platform, item.videoId, item.page),
-        title = item.title,
-        uploader = item.uploader,
-        durationSec = item.durationSec,
-        // 云端只有元数据：没有文件、没有字节数、没有格式。格式留空字符串而不是编一个
-        // "m4a"——列表要显示的就是"未知/云端"，编出来的值会让"重新下载后格式不对"变成悬案。
-        audioBytes = null,
-        audioFormat = "",
-        sourceUrl = item.sourceUrl,
-        localPath = null,
-        favorite = false,
-        localCategoryId = MetadataSnapshot.DEFAULT_CATEGORY_ID,
-        updatedAtMs = now,
-        addedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 } ?: now,
-        sortIndex = 0,
-        mediaType = runCatching { MediaKind.valueOf(item.mediaType.uppercase()) }
-            .getOrDefault(MediaKind.AUDIO).name,
-        serverId = item.id,
-        serverSeq = item.updatedSeq,
-        serverPage = item.page,
-        serverUpdatedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 },
-        syncState = LibraryMark.CLOUD_ONLY,
-        accountKey = account,
-        serverStorage = item.storage.ifBlank { null },
-        confirmedTitle = item.title,
-    )
+    private suspend fun entity(item: CloudTrack, id: Long, account: String, now: Long): TrackEntity {
+        // 云端行可能带着别的设备建的类别路径：本地缺哪级就补哪级，条目才落得进去。
+        // 路径为空就是「未分类」，不需要建任何节点。
+        val categoryId = if (item.category.isBlank()) {
+            MetadataSnapshot.DEFAULT_CATEGORY_ID
+        } else {
+            CategoryPaths.ensurePath(db.categoryDao(), item.category, now)
+        }
+        return TrackEntity(
+            id = id,
+            platform = item.platform,
+            // 与直提取/服务器提取/恢复同一套键形态：B 站 P2 存成 BV1xx-p2，重新下载才落回同一行
+            videoId = LocalIds.key(item.platform, item.videoId, item.page),
+            title = item.title,
+            uploader = item.uploader,
+            durationSec = item.durationSec,
+            // 云端只有元数据：没有文件、没有字节数、没有格式。格式留空字符串而不是编一个
+            // "m4a"——列表要显示的就是"未知/云端"，编出来的值会让"重新下载后格式不对"变成悬案。
+            audioBytes = null,
+            audioFormat = "",
+            sourceUrl = item.sourceUrl,
+            localPath = null,
+            favorite = item.favorite,
+            localCategoryId = categoryId,
+            updatedAtMs = now,
+            addedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 } ?: now,
+            sortIndex = 0,
+            mediaType = runCatching { MediaKind.valueOf(item.mediaType.uppercase()) }
+                .getOrDefault(MediaKind.AUDIO).name,
+            serverId = item.id,
+            serverSeq = item.updatedSeq,
+            serverPage = item.page,
+            serverUpdatedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 },
+            syncState = LibraryMark.CLOUD_ONLY,
+            accountKey = account,
+            serverStorage = item.storage.ifBlank { null },
+            confirmedTitle = item.title,
+        )
+    }
 
     companion object {
         /** 与服务器 `limit` 默认值一致；一页 200 行在 2000 条规模下是 10 次请求。 */

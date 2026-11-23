@@ -50,12 +50,14 @@ class LibrarySyncEngineTest {
         title: String = "云端 $id",
         mediaType: String = "audio",
         storage: String = "metadata",
+        favorite: Boolean = false,
+        category: String = "",
     ) = CloudTrack(
         id = id, platform = "bilibili", videoId = videoId, page = page, title = title,
         uploader = "某UP", durationSec = 12.5,
         sourceUrl = "https://www.bilibili.com/video/$videoId?p=$page",
         mediaType = mediaType, deleted = deleted, updatedSeq = seq, updatedAtSec = 1_700_000_000 + id,
-        storage = storage,
+        storage = storage, favorite = favorite, category = category,
     )
 
     private class FakeTransport(private val pages: MutableList<Any>) : LibrarySyncTransport {
@@ -315,7 +317,7 @@ class LibrarySyncEngineTest {
         assertTrue("纯云端镜像无文件无痕迹，可以直接移出列表", rows().isEmpty())
     }
 
-    @Test fun newerServerVersionUpdatesServerFieldsButKeepsLocalOrganization() = runBlocking {
+    @Test fun newerServerVersionAdoptsCloudOrganizationButKeepsLocalFiles() = runBlocking {
         val id = LocalIds.localId("bilibili", "BV1", 1)
         db.trackDao().upsertAll(listOf(
             cloudRow(id, deletedMirror = false).copy(
@@ -323,6 +325,7 @@ class LibrarySyncEngineTest {
                 title = "旧标题", confirmedTitle = "旧标题", serverSeq = 1, serverStorage = "archive",
             ),
         ))
+        // 云端这一条没有收藏、也没有类别：本机没标脏，说明就是云端的状态（别的设备取消过）
         val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 5, title = "服务器新名")), hasMore = false)))
         e.pull(account)
 
@@ -330,10 +333,42 @@ class LibrarySyncEngineTest {
         assertEquals("服务器标题为准", "服务器新名", row.title)
         assertEquals("服务器新名", row.confirmedTitle)
         assertEquals(5L, row.serverSeq)
-        assertEquals("收藏不动", true, row.favorite)
-        assertEquals("类别不动", 3L, row.localCategoryId)
+        assertEquals("收藏以云端为准", false, row.favorite)
+        assertEquals("类别以云端为准", CategoryPaths.DEFAULT_ID, row.localCategoryId)
         assertEquals("手动顺序不动", 7L, row.sortIndex)
         assertEquals("本地文件不动", "/files/-1.audio", row.localPath)
+    }
+
+    @Test fun dirtyOrganizationIsNotOverwrittenByPull() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(
+                favorite = true, localCategoryId = 3, metaDirty = true,
+                title = "旧标题", confirmedTitle = "旧标题", serverSeq = 1,
+            ),
+        ))
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 5)), hasMore = false)))
+        e.pull(account)
+
+        val row = rows().single()
+        assertEquals("本机刚点的收藏不能被拉取抹掉", true, row.favorite)
+        assertEquals("本机刚改的类别不能被拉取抹掉", 3L, row.localCategoryId)
+        assertTrue("脏位留着，等推送把它带走", row.metaDirty)
+        assertEquals("服务器版本仍然要跟上", 5L, row.serverSeq)
+    }
+
+    @Test fun cloudRowCarriesFavoriteAndCreatesCategoryPath() = runBlocking {
+        val (e, _) = engine(listOf(page(listOf(
+            cloud(1, videoId = "BV1", favorite = true, category = "音乐/古风"),
+        ), hasMore = false)))
+        e.pull(account)
+
+        val row = rows().single()
+        assertTrue("云端收藏要落到本机", row.favorite)
+        val category = db.categoryDao().byId(row.localCategoryId)
+        assertEquals("古风", category?.name)
+        val parent = category?.parentId?.let { db.categoryDao().byId(it) }
+        assertEquals("音乐", parent?.name)
     }
 
     @Test fun pendingDraftIsNeverOverwrittenByPull() = runBlocking {

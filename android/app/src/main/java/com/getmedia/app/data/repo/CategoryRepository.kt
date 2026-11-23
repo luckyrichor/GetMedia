@@ -62,8 +62,12 @@ class CategoryRepository(private val context: Context) {
         val target = categories.byId(categoryId) ?: error("目标类别不存在")
         require(target.kind != "CONTAINER") { "目标类别装有子类别，不能放音频" }
         if (target.kind == null) categories.update(target.copy(kind = "LEAF"))
-        tracks.move(trackId, categoryId, System.currentTimeMillis())
-    }.also { BackupManager.noteWrite() }
+        // 标脏：这个条目的类别还没推上去，拉取时不能被云端的旧类别顶回来
+        tracks.moveDirty(trackId, categoryId, System.currentTimeMillis())
+    }.also {
+        BackupManager.noteWrite()
+        cloudSync.onLocalChange(context)
+    }
 
     suspend fun recordAccess(id: Long) = categories.recordAccess(id, System.currentTimeMillis())
 
@@ -82,6 +86,11 @@ class CategoryRepository(private val context: Context) {
             val ids = descendants(id, all)
             val affected = tracks.allNow().filter { it.localCategoryId in ids }
             deletedIds.addAll(affected.map { it.id })
+            // 条目被删掉后，含它的播放列表内容也变了：这些列表要重推一次，
+            // 否则云端的成员里会留着一串对不上任何条目的引用。
+            val touchedLists = playlists.itemsAll()
+                .filter { it.trackId in deletedIds }
+                .mapTo(HashSet()) { it.playlistId }
             // 与删行同一事务：用户勾了"同时从云端移除"的条目先入队
             val account = SessionStore.current.value?.loginName
             if (account != null && cloudIds.isNotEmpty()) {
@@ -92,6 +101,7 @@ class CategoryRepository(private val context: Context) {
                 tracks.delete(track.id)
                 track.localPath?.let { files.add(File(it)) }
             }
+            touchedLists.forEach { playlists.markDirty(it) }
             // 子类别先删，避免以后加入外键时出现父子顺序问题。
             ids.reversed().forEach { categories.delete(it) }
             affected.size
