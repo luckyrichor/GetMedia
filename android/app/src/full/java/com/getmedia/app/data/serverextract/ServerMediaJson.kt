@@ -12,19 +12,19 @@ object ServerMediaJson {
 
     fun resolve(text: String): ResolveInfo {
         val root = object0(text)
-        val platform = root.optString("platform")
-        val videoId = root.optString("video_id")
+        val platform = root.text("platform").orEmpty()
+        val videoId = root.text("video_id").orEmpty()
         if (platform.isBlank() || videoId.isBlank()) {
             throw ServerMediaException(ServerProblem.SERVER, "服务器返回的解析结果不完整")
         }
         return ResolveInfo(
             platform = platform,
             videoId = videoId,
-            title = root.optString("title").ifBlank { "未命名作品" },
+            title = root.text("title") ?: "未命名作品",
             durationSec = root.number("duration_sec"),
-            uploader = root.optString("uploader").ifBlank { null },
-            coverUrl = root.optString("cover_url").ifBlank { null },
-            sourceUrl = root.optString("source_url").ifBlank { null },
+            uploader = root.text("uploader"),
+            coverUrl = root.text("cover_url"),
+            sourceUrl = root.text("source_url"),
             estimatedBytes = root.optLong("estimated_bytes", 0),
         )
     }
@@ -38,14 +38,14 @@ object ServerMediaJson {
         if (id <= 0) throw ServerMediaException(ServerProblem.SERVER, "服务器没有返回任务编号")
         return ExtractJob(
             id = id,
-            status = JobStatus.of(root.optString("status")),
-            mediaType = root.optString("media_type"),
-            storage = root.optString("storage"),
-            platform = root.optString("platform").ifBlank { null },
-            videoId = root.optString("video_id").ifBlank { null },
+            status = JobStatus.of(root.text("status").orEmpty()),
+            mediaType = root.text("media_type").orEmpty(),
+            storage = root.text("storage").orEmpty(),
+            platform = root.text("platform"),
+            videoId = root.text("video_id"),
             trackId = root.optLong("track_id", 0).takeIf { it > 0 },
-            errorCode = root.optString("error_code").ifBlank { null },
-            errorDetail = root.optString("error_detail").ifBlank { null },
+            errorCode = root.text("error_code"),
+            errorDetail = root.text("error_detail"),
         )
     }
 
@@ -55,20 +55,20 @@ object ServerMediaJson {
         if (id <= 0) throw ServerMediaException(ServerProblem.SERVER, "服务器没有返回媒体编号")
         return ServerTrack(
             id = id,
-            platform = root.optString("platform"),
-            videoId = root.optString("video_id"),
+            platform = root.text("platform").orEmpty(),
+            videoId = root.text("video_id").orEmpty(),
             page = root.optInt("page", 1).coerceAtLeast(1),
-            title = root.optString("title").ifBlank { "未命名作品" },
-            uploader = root.optString("uploader").ifBlank { null },
+            title = root.text("title") ?: "未命名作品",
+            uploader = root.text("uploader"),
             durationSec = root.number("duration_sec"),
-            coverUrl = root.optString("cover_url").ifBlank { null },
-            sourceUrl = root.optString("source_url").orEmpty(),
-            storage = root.optString("storage"),
+            coverUrl = root.text("cover_url"),
+            sourceUrl = root.text("source_url").orEmpty(),
+            storage = root.text("storage").orEmpty(),
             bytes = root.optLong("bytes", 0).takeIf { it > 0 },
             updatedSeq = root.optLong("updated_seq", 0),
             updatedAtSec = root.optLong("updated_at", 0).takeIf { it > 0 },
             hasFile = root.optBoolean("has_file"),
-            mediaType = root.optString("media_type"),
+            mediaType = root.text("media_type").orEmpty(),
             deleted = root.optBoolean("deleted"),
             sha256 = root.optString("sha256").takeIf { !root.isNull("sha256") && it.isNotBlank() },
         )
@@ -138,4 +138,13 @@ object ServerMediaJson {
 
     private fun JSONObject.number(key: String): Double? =
         if (has(key) && !isNull(key)) optDouble(key).takeUnless { it.isNaN() } else null
+
+    /**
+     * 取文本字段：键不存在、值为 JSON `null`、值为空串，一律当"没有"。
+     *
+     * 不能用裸 `optString`——值为 `null` 时它返回字符串 `"null"`，
+     * 界面上就会出现名字叫 `null` 的作者。
+     */
+    private fun JSONObject.text(key: String): String? =
+        if (isNull(key)) null else optString(key).ifBlank { null }
 }

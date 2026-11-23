@@ -92,6 +92,30 @@ class LibrarySyncJsonTest {
         assertNull("没有 uploader 时是 null，不是空串", page.items[1].uploader)
     }
 
+    @Test fun jsonNullFieldsAreTreatedAsAbsent() {
+        // 服务器对没有作者 / 没有类别的行给的是 JSON null；裸 optString 会得到字符串 "null"
+        val text = """{"items":[{"id":5,"platform":"bilibili","video_id":"BV9","page":1,
+                        "title":null,"uploader":null,"category":null,"source_url":null,
+                        "storage":null,"media_type":null,"updated_seq":5,"updated_at":1}],
+                       "next_seq":5,"has_more":false}"""
+        val item = LibrarySyncJson.page(text).items.single()
+        assertNull("作者是 null 就要当没作者，不能变成名字叫 null", item.uploader)
+        assertEquals("", item.category)
+        assertEquals("", item.sourceUrl)
+        assertEquals("", item.storage)
+        assertEquals("未命名作品", item.title)
+        assertEquals("audio", item.mediaType)
+    }
+
+    @Test fun rowWithNullPlatformIsDropped() {
+        val text = """{"items":[{"id":6,"platform":null,"video_id":"BV9","updated_seq":6},
+                                 {"id":7,"platform":"bilibili","video_id":"BV8","updated_seq":7}],
+                       "next_seq":7,"has_more":false}"""
+        val page = LibrarySyncJson.page(text)
+        assertEquals("平台是 null 的行算不出本地 id，只能丢", 1, page.items.size)
+        assertEquals(7L, page.items[0].id)
+    }
+
     @Test fun pageDropsRowsWithoutKey() {
         val text = """{"items":[{"id":1,"platform":"","video_id":"BV1","updated_seq":1},
                                  {"id":2,"platform":"bilibili","video_id":"","updated_seq":2},

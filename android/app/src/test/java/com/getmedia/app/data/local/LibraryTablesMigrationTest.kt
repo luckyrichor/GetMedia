@@ -112,7 +112,7 @@ class LibraryTablesMigrationTest {
             .build()
         try {
             val sqlite = db.openHelper.writableDatabase
-            assertEquals(5, sqlite.version)
+            assertEquals(6, sqlite.version)
             val tables = tableNames(sqlite)
             assertTrue("缺 track_removals：$tables", tables.contains("track_removals"))
             assertTrue("缺 library_cursor：$tables", tables.contains("library_cursor"))
@@ -198,10 +198,10 @@ class LibraryTablesMigrationTest {
         }
 
         db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6)
             .allowMainThreadQueries().build()
         try {
-            assertEquals("升级后必须是 v5", 5, db.openHelper.writableDatabase.version)
+            assertEquals("升级后必须是 v6", 6, db.openHelper.writableDatabase.version)
             assertEquals("tracks 一行都不能少、一个字段都不能变", beforeTracks, db.trackDao().allNow())
             assertEquals("播放列表归属与顺序不变", beforeItems, db.playlistDao().itemsAll())
             assertEquals("类别不变", listOf("通勤"), db.categoryDao().allNow().map { it.name })
@@ -294,10 +294,10 @@ class LibraryTablesMigrationTest {
         }
 
         db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6)
             .allowMainThreadQueries().build()
         try {
-            assertEquals("必须连续升到 v5", 5, db.openHelper.writableDatabase.version)
+            assertEquals("必须连续升到 v6", 6, db.openHelper.writableDatabase.version)
             val tables = tableNames(db.openHelper.writableDatabase)
             listOf("tracks", "categories", "playlists", "playlist_items",
                 "track_removals", "library_cursor", "remote_marks").forEach {
@@ -387,6 +387,60 @@ class LibraryTablesMigrationTest {
             raw, "playlists", listOf("id", "name", "createdAt", "isDefault"),
             listOf("dirty", "syncedAt"), tempName,
         )
+
+    /**
+     * v5 → v6：早期拉取把服务器的 `null` 存成了字符串 `"null"`，升级时要一次性纠正。
+     *
+     * 只改 `uploader` / `category` 两列：其余字段（标题、时长、文件、服务器身份）必须原样。
+     * 走的是 Room 真实打开路径，不是"我手动跑一遍 SQL 看它不报错"。
+     */
+    @Test fun nullStringFromOldPullIsCleanedUpOnUpgrade() = runBlocking {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val name = "lib-upgrade-null-cleanup.db"
+        ctx.deleteDatabase(name)
+
+        val dirty = TrackEntity(
+            id = -301, platform = "bilibili", videoId = "BVnull", title = "带 null 的一行",
+            uploader = "null", durationSec = 12.0, audioBytes = 1024, audioFormat = "m4a",
+            sourceUrl = "https://b/BVnull", localCategoryId = 3, addedAtMs = 1_700_000_000_000,
+            serverId = 91, serverSeq = 5, updatedAtMs = 1_700_000_000_111,
+        )
+        val clean = TrackEntity(
+            id = -302, platform = "bilibili", videoId = "BVok", title = "本来就没有作者",
+            uploader = null, durationSec = 0.0, audioBytes = 0, audioFormat = "m4a",
+            sourceUrl = "https://b/BVok", addedAtMs = 1_700_000_000_001,
+        )
+
+        var db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
+            .allowMainThreadQueries().build()
+        try {
+            db.trackDao().upsertAll(listOf(dirty, clean))
+        } finally {
+            db.close()
+        }
+
+        // 退回 v5：这个库的表结构没变，只是把"写坏了的值"留在里面，再把版本号降回去
+        SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
+            raw.version = 5
+        }
+
+        db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
+            .addMigrations(AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6)
+            .allowMainThreadQueries().build()
+        try {
+            val rows = db.trackDao().allNow().associateBy { it.id }
+            assertNull("字符串 null 的作者要清成真的没有", rows.getValue(-301L).uploader)
+            assertNull("本来就没有作者的行不受影响", rows.getValue(-302L).uploader)
+            // 其它字段一个都不能动
+            assertEquals("带 null 的一行", rows.getValue(-301L).title)
+            assertEquals(91L, rows.getValue(-301L).serverId)
+            assertEquals(1_700_000_000_111, rows.getValue(-301L).updatedAtMs)
+            assertEquals(3L, rows.getValue(-301L).localCategoryId)
+        } finally {
+            db.close()
+            ctx.deleteDatabase(name)
+        }
+    }
 
     private fun tableNames(db: SQLiteDatabase): Set<String> =
         db.rawQuery("SELECT name FROM sqlite_master WHERE type='table'", null).use { c ->

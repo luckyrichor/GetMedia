@@ -70,8 +70,8 @@ object LibrarySyncJson {
 
     /** 解析一条；**键不全的行直接丢掉**（没有 platform/video_id 就没法算本地 id）。 */
     private fun track(o: JSONObject, strictCatalog: Boolean = false): CloudTrack? {
-        val platform = o.optString("platform").trim()
-        val videoId = o.optString("video_id").trim()
+        val platform = o.text("platform").orEmpty().trim()
+        val videoId = o.text("video_id").orEmpty().trim()
         if (platform.isEmpty() || videoId.isEmpty()) return null
         val id = o.optLong("id", 0)
         if (id <= 0) return null
@@ -82,22 +82,31 @@ object LibrarySyncJson {
             // 服务器把分 P 放在 page 列，video_id 不带后缀；万一带上就先剥掉，统一成规范形态
             videoId = if (page > 1 && !strictCatalog) videoId.removeSuffix("-p$page") else videoId,
             page = page,
-            title = o.optString("title").ifBlank { "未命名作品" },
-            uploader = o.optString("uploader").ifBlank { null },
+            title = o.text("title") ?: "未命名作品",
+            uploader = o.text("uploader"),
             durationSec = if (o.has("duration_sec") && !o.isNull("duration_sec")) {
                 o.optDouble("duration_sec").takeUnless { it.isNaN() }
             } else null,
-            sourceUrl = o.optString("source_url"),
-            mediaType = o.optString("media_type").ifBlank { if (strictCatalog) "" else "audio" },
+            sourceUrl = o.text("source_url").orEmpty(),
+            mediaType = o.text("media_type") ?: if (strictCatalog) "" else "audio",
             deleted = o.optBoolean("deleted", false),
             updatedSeq = o.optLong("updated_seq", 0),
             updatedAtSec = o.optLong("updated_at", 0),
-            storage = o.optString("storage"),
+            storage = o.text("storage").orEmpty(),
             hasFile = o.optBoolean("has_file", false),
             favorite = o.optBoolean("favorite", false),
-            category = o.optString("category").trim(),
+            category = o.text("category").orEmpty().trim(),
         )
     }
+
+    /**
+     * 取文本字段：键不存在、值为 JSON `null`、值为空串，一律当"没有"。
+     *
+     * 不能用裸 `optString`——`org.json` 在值为 `null` 时返回字符串 `"null"`，
+     * 于是"没有作者"会变成名字叫 `null` 的作者，界面上直接显示 `null`。
+     */
+    private fun JSONObject.text(name: String): String? =
+        if (isNull(name)) null else optString(name).ifBlank { null }
 
     /** `GET /v2/tracks/{id}` / `PATCH /v2/sync/tracks/{id}` 返回的单条。 */
     fun singleTrack(text: String): CloudTrack {

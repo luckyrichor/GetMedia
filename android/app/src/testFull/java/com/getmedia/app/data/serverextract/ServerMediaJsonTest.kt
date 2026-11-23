@@ -20,8 +20,29 @@ class ServerMediaJsonTest {
         assertEquals("https://c/1.jpg", info.coverUrl)
     }
 
-    @Test fun resolveRejectsMissingIdentity() {
-        try {
+    @Test fun resolveTreatsJsonNullUploaderAsMissing() {
+        // 服务器把"没有作者"存成 NULL，JSON 里就是 null；裸 optString 会给出字符串 "null"
+        val info = ServerMediaJson.resolve(
+            """{"platform":"bilibili","video_id":"BV1","title":null,"uploader":null,
+                "cover_url":null,"source_url":null}"""
+        )
+        assertNull(info.uploader)
+        assertNull(info.coverUrl)
+        assertNull(info.sourceUrl)
+        assertEquals("未命名作品", info.title)
+    }
+
+    @Test fun trackTreatsJsonNullStorageAsEmpty() {
+        val track = ServerMediaJson.track(
+            """{"id":9,"platform":"bilibili","video_id":"BV1","page":1,"title":"一",
+                "uploader":null,"storage":null,"media_type":null}"""
+        )
+        assertNull(track.uploader)
+        assertEquals("", track.storage)
+        assertEquals("", track.mediaType)
+    }
+
+    @Test fun resolveRejectsMissingIdentity() {        try {
             ServerMediaJson.resolve("""{"title":"只有标题"}""")
             fail("缺 platform / video_id 应当报错")
         } catch (e: ServerMediaException) {

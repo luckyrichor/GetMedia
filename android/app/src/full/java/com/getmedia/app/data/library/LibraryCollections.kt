@@ -189,14 +189,14 @@ class PlaylistSyncClient(
         if (items != null) {
             for (i in 0 until items.length()) {
                 val it = items.optJSONObject(i) ?: continue
-                val platform = it.optString("platform").trim()
-                val videoId = it.optString("video_id").trim()
+                val platform = it.text("platform").orEmpty().trim()
+                val videoId = it.text("video_id").orEmpty().trim()
                 if (platform.isEmpty() || videoId.isEmpty()) continue
                 parsed += CloudPlaylistItem(platform, videoId, it.optInt("page", 1).coerceIn(1, 9999))
             }
         }
         return CloudPlaylist(
-            name = o.optString("name").trim(),
+            name = o.text("name").orEmpty().trim(),
             deleted = o.optBoolean("deleted", false),
             seq = o.optLong("updated_seq", 0),
             items = parsed,
@@ -424,3 +424,7 @@ class LibraryPlaylistSync(
         }?.id
     }
 }
+
+/** 值为 JSON `null` 时裸 `optString` 会返回字符串 `"null"`，不能用。 */
+private fun JSONObject.text(name: String): String? =
+    if (isNull(name)) null else optString(name).ifBlank { null }

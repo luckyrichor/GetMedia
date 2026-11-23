@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TrackRemovalEntity::class, LibraryCursorEntity::class, RemoteMarkEntity::class,
         PlaylistRemovalEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -140,6 +140,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v5 → v6：清掉早期拉取写进库里的字符串 `"null"`。
+         *
+         * 旧解析用裸 `optString`：服务器把"没有作者"存成 NULL，JSON 里是 `null`，
+         * `org.json` 却给出字符串 `"null"`，于是界面上显示成名字叫 `null` 的作者。
+         * 解析已经改掉，但**已经落库的行不会自己变**——同步是增量的，那些行不会再被拉一次，
+         * 所以在这里一次性纠正。只改 `uploader` 一列，其它字段一概不动。
+         *
+         * （类别不是存路径的列：本机按 id 挂在 `localCategoryId` 上，路径是同步时算出来的，
+         * 所以这里没有需要清理的类别列。）
+         */
+        val MIGRATION_5_6_SQL: List<String> = listOf(
+            "UPDATE tracks SET uploader = NULL WHERE uploader = 'null'",
+        )
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_5_6_SQL.forEach(db::execSQL)
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -149,7 +170,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "getmedia.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)
