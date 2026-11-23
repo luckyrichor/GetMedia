@@ -136,6 +136,11 @@ class TrackRepository(
     suspend fun removeAll(ids: Set<Long>, cloudIds: Set<Long> = emptySet()): Int {
         if (ids.isEmpty()) return 0
         return withContext(NonCancellable) {
+            // 删行会把列表成员一起清掉，但清成员本身不会把列表标成"有本机改动"。
+            // 不标的话：本机列表少了几条，云端那份还留着指向已删作品的成员，另一台设备上
+            // 这个列表的项数就对不上，而且要等下一次谁真改了才整表覆盖、才谈得上以谁为准。
+            // 所以在清成员之前记下"哪些列表被动到了"，这一轮把云端成员一并清掉。
+            var listsTouched = false
             val removed = withContext(Dispatchers.IO) {
                 fileMutex.withLock {
                     db.withTransaction {
@@ -144,8 +149,15 @@ class TrackRepository(
                         if (account != null && cloudIds.isNotEmpty()) {
                             cloudSync.queueRemovals(db, account, tracks, cloudIds, System.currentTimeMillis())
                         }
+                        val playlists = db.playlistDao()
                         // Bound query size so selecting a large library cannot exceed SQLite bind limits.
                         tracks.map { it.id }.chunked(500).forEach {
+                            // DB 顺序不能反：先问"这条在哪些列表里"，再删成员。
+                            val holders = playlists.idsContaining(it)
+                            if (holders.isNotEmpty()) {
+                                playlists.markDirtyAll(holders)
+                                listsTouched = true
+                            }
                             trackDao.removePlaylistReferences(it)
                             trackDao.deleteByIds(it)
                         }
@@ -155,8 +167,8 @@ class TrackRepository(
             }
             withContext(Dispatchers.Main) { PlayerHolder.removeTracks(context, removed.map { it.id }.toSet()) }
             BackupManager.noteWrite()
-            // 有云端删除要重放：立刻推一轮，别等下一次进前台。
-            if (cloudIds.isNotEmpty()) cloudSync.onLocalChange(context)
+            // 云端删除要重放，或者本机列表因为这次删除变了：立刻推一轮，别等下一次进前台。
+            if (cloudIds.isNotEmpty() || listsTouched) cloudSync.onLocalChange(context)
             removed.size
         }
     }

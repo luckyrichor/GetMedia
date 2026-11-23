@@ -75,6 +75,18 @@ interface PlaylistDao {
     @Query("UPDATE playlists SET dirty = 1 WHERE id = :id")
     suspend fun markDirty(id: Long)
 
+    /**
+     * 这些条目出现在哪些列表里。
+     *
+     * **必须在删成员之前查**：删完就查不到这条属于哪些列表了，那些列表也就不会被标脏。
+     */
+    @Query("SELECT DISTINCT playlistId FROM playlist_items WHERE trackId IN (:trackIds)")
+    suspend fun idsContaining(trackIds: List<Long>): List<Long>
+
+    /** 一次把多个列表标成"有本机改动"，避免逐条 update。 */
+    @Query("UPDATE playlists SET dirty = 1 WHERE id IN (:ids)")
+    suspend fun markDirtyAll(ids: List<Long>)
+
     @Query("UPDATE playlists SET dirty = 0 WHERE id = :id")
     suspend fun markClean(id: Long)
 
