@@ -134,9 +134,14 @@ class LibrarySyncEngine(
             }
             val byServerId = rows.mapNotNull { row -> row.serverId?.let { it to row } }.toMap()
             // 同键但还没绑 id 的本机行（本机导入、从未上传）。按 key 归组，命中判重时补绑定用。
+            //
+            // 这里不再排除 `CLOUD_ONLY`：曲库行一定是先有 `serverId` 才有 `CLOUD_ONLY`，
+            // 所以"`CLOUD_ONLY` 且 `serverId` 为空"只可能是播放列表拉取补出来的**占位行**
+            // （见 `LibraryPlaylists.placeholder`）。它正是要绑的对象——绑上之后这条
+            // "列表里看得见、下不了"的条目就变成真正的云端未下载条目，可以直接下载。
             val unboundByKey = rows.asSequence()
                 .filter { row -> row.serverId == null && (row.accountKey == null || row.accountKey == account) }
-                .filter { row -> row.syncState != LibraryMark.DETACHED && row.syncState != LibraryMark.CLOUD_ONLY }
+                .filter { row -> row.syncState != LibraryMark.DETACHED }
                 .groupBy { keyOf(it) }
 
             for (item in items) {
@@ -242,17 +247,31 @@ class LibrarySyncEngine(
      *
      * 状态按实际情况给：有本地文件就是 `SYNCED`，没文件就是 `CLOUD_ONLY`（列表标"云端未下载"）。
      */
-    private fun bindSameKey(row: TrackEntity, item: CloudTrack, account: String, now: Long) = row.copy(
-        serverId = item.id,
-        serverSeq = item.updatedSeq,
-        serverPage = item.page,
-        serverUpdatedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 },
-        serverStorage = item.storage.ifBlank { "unknown" },
-        accountKey = account,
-        confirmedTitle = item.title,
-        syncState = if (row.localPath.isNullOrBlank()) LibraryMark.CLOUD_ONLY else SyncState.SYNCED.name,
-        updatedAtMs = now,
-    )
+    private fun bindSameKey(row: TrackEntity, item: CloudTrack, account: String, now: Long): TrackEntity {
+        // 占位行（播放列表拉取补出来的"有位置、没文件"的条目）：标题只有作品号、
+        // 类型只能猜 AUDIO。绑定这一刻正好把服务器的标题与类型补上——它不是用户
+        // 在这台手机上的整理结果，覆盖掉不会丢任何东西。
+        val placeholder = row.serverId == null && row.syncState == LibraryMark.CLOUD_ONLY &&
+            row.confirmedTitle == null
+        val mediaType = if (placeholder) {
+            runCatching { MediaKind.valueOf(item.mediaType.uppercase()) }.getOrDefault(MediaKind.AUDIO).name
+        } else {
+            row.mediaType
+        }
+        return row.copy(
+            serverId = item.id,
+            serverSeq = item.updatedSeq,
+            serverPage = item.page,
+            serverUpdatedAtMs = (item.updatedAtSec * 1000).takeIf { it > 0 },
+            serverStorage = item.storage.ifBlank { "unknown" },
+            accountKey = account,
+            title = if (placeholder) item.title else row.title,
+            confirmedTitle = item.title,
+            mediaType = mediaType,
+            syncState = if (row.localPath.isNullOrBlank()) LibraryMark.CLOUD_ONLY else SyncState.SYNCED.name,
+            updatedAtMs = now,
+        )
+    }
 
     /**
      * 把服务器的新版本合进已有绑定行。**只改服务器权威字段**：

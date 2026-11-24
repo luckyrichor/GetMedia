@@ -309,7 +309,7 @@ class LibraryCollectionsTest {
         assertTrue("脏位留着，部署后自愈", db.playlistDao().byId(id)!!.dirty)
     }
 
-    @Test fun itemsMissingLocallyAreSkippedNotFatal() = runBlocking {
+    @Test fun itemsMissingLocallyBecomePlaceholdersInsteadOfDisappearing() = runBlocking {
         db.trackDao().upsertAll(listOf(track("a")))
         val remote = mutableListOf(
             CloudPlaylist(
@@ -322,12 +322,52 @@ class LibraryCollectionsTest {
         )
         val transport = FakeLists(remote)
 
-        val result = LibraryPlaylistSync(db, transport, transport).sync(account)
+        LibraryPlaylistSync(db, transport, transport).sync(account)
 
-        assertEquals(1, result.created)
         val list = db.playlistDao().allNow().single()
-        val items = db.playlistDao().itemsNow(list.id)
-        assertEquals("对不上的条目跳过，能对上的照常写", 1, items.size)
-        assertNotNull(db.trackDao().byId(items.single().trackId))
+        val items = db.playlistDao().itemsNow(list.id).sortedBy { it.orderIndex }
+        assertEquals("成员一个都不能丢：对不上的要补占位行", 2, items.size)
+        assertEquals("顺序按云端", listOf(0, 1), items.map { it.orderIndex })
+
+        val missingId = LocalIds.localId("douyin", "not-yet-synced", 1)
+        assertEquals("缺的那条要指向确定性 id", missingId, items.first().trackId)
+        val placeholder = db.trackDao().byId(missingId)
+        assertNotNull("占位行必须落库", placeholder)
+        assertEquals(
+            "状态与「云端未下载」完全一致，界面才会标未下载",
+            LibraryMark.CLOUD_ONLY, placeholder!!.syncState,
+        )
+        assertNull("占位行没有云端身份，等曲库行到了再绑", placeholder.serverId)
+        assertNull("占位行没有文件", placeholder.localPath)
+        assertEquals("标题先放作品号", "not-yet-synced", placeholder.title)
+        assertFalse(
+            "占位行不能被当成本机新增上传",
+            com.getmedia.app.data.local.SyncState.mayUploadToLibrary(
+                com.getmedia.app.data.local.SyncState.of(placeholder.syncState), hasLocalFile = false,
+            ),
+        )
+    }
+
+    @Test fun queuedDeletionKeysAreNotRevivedByPlaceholders() = runBlocking {
+        // 用户刚在手机上删掉这件作品，删除还没重放成功。列表里若还有它，
+        // 不能靠"补占位行"把它复活成一条未下载条目。
+        db.libraryAuxDao().addRemoval(
+            com.getmedia.app.data.local.TrackRemovalEntity(
+                platform = "douyin", videoKey = "gone", account = account,
+            ),
+        )
+        val remote = mutableListOf(
+            CloudPlaylist(
+                name = "跑步", deleted = false, seq = 3,
+                items = listOf(CloudPlaylistItem("douyin", "gone", 1)),
+            ),
+        )
+        val transport = FakeLists(remote)
+
+        LibraryPlaylistSync(db, transport, transport).sync(account)
+
+        val list = db.playlistDao().allNow().single()
+        assertTrue("删过的作品不补", db.playlistDao().itemsNow(list.id).isEmpty())
+        assertNull(db.trackDao().byId(LocalIds.localId("douyin", "gone", 1)))
     }
 }

@@ -1202,6 +1202,8 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
             },
             badge = if (dialog == "playlists") "${playlists.size} 个" else null,
             confirmText = if (dialog == "playlists") "完成" else "返回列表",
+            // 列表卡片与成员都可能很多，浮层要给足高度，否则内容被裁、滚动也不生效。
+            tall = true,
             onConfirm = { dialog = if (dialog == "playlists") null else "playlists" },
         ) {
             if (dialog == "playlists") {
@@ -1216,20 +1218,12 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
             } else if (dialog == "playlistEdit") {
                 SheetPill("添加条目或类别", Icons.Default.Add, { selectedTracks = emptySet(); selectedCategories = emptySet(); dialog = "playlistPick" }, primary = true)
                 val entries by playlistRepo.items(playlistId ?: -1L).collectAsState(initial = emptyList())
-                if (entries.isNotEmpty()) {
-                    SheetPill("播放此列表", Icons.Default.PlayArrow, {
-                        queueItems(entries.mapNotNull { entry -> libraryTracks.firstOrNull { it.id == entry.trackId } }, true, playlistId)
-                        dialog = null
-                    })
-                    SheetPill("导出此列表", Icons.Default.Download, {
-                        exportTracks = entries.mapNotNull { entry -> libraryTracks.firstOrNull { it.id == entry.trackId } }
-                            .map(ExportTrack::of)
-                        dialog = null
-                    })
-                }
+                val listTracks = entries.mapNotNull { entry -> libraryTracks.firstOrNull { it.id == entry.trackId } }
+                val missingFiles = listTracks.filter { it.localPath?.let { p -> File(p).exists() } != true }
                 entries.forEach { entry ->
                     val track = libraryTracks.firstOrNull { it.id == entry.trackId }
                     if (track != null) {
+                        val waiting = cloudSync.awaitingDownload(track)
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = uiCardColor(),
@@ -1241,12 +1235,73 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                                     listOfNotNull(
                                         track.uploader?.takeIf { it.isNotBlank() },
                                         track.durationSec?.takeIf { it > 0 }?.let { formatDuration(it) },
+                                        // 未下载的成员在这里必须说出来：它有位置、能点，但没文件。
+                                        // 以前这类成员会被整条丢掉，用户看到的是"列表比他台少几条"。
+                                        if (waiting) "未下载" else null,
                                     ).joinToString("  ·  ").ifBlank { MediaWording.noun(listOf(track.mediaType)) },
-                                    fontSize = 11.sp, color = uiMuted(), maxLines = 1,
+                                    fontSize = 11.sp, maxLines = 1,
+                                    color = if (waiting) MaterialTheme.colorScheme.primary else uiMuted(),
+                                )
+                            }
+                        }
+                    } else {
+                        // 成员指向的曲库行不在了（历史遗留）。同步会把行补回来，这里先给一条
+                        // 可见的占位，避免卡片写着"6 项"、点进去只看到 2 条。
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = uiCardColor(),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                                Text("条目缺失", fontSize = 14.sp, color = uiMuted())
+                                Text(
+                                    "本机曲库里暂时找不到这一条，下次同步会补回来",
+                                    fontSize = 11.sp, color = uiMuted(), maxLines = 2,
                                 )
                             }
                         }
                     }
+                }
+                // 条目先列、按钮后放：sheet 高度只够几行，按钮排在前面会把条目顶出屏幕
+                // （6 条就溢出了，而且溢出部分连滚动手势都够不到）。
+                if (entries.isNotEmpty()) {
+                    SheetPill("播放此列表", Icons.Default.PlayArrow, {
+                        queueItems(listTracks, true, playlistId)
+                        dialog = null
+                    })
+                    SheetPill("导出此列表", Icons.Default.Download, {
+                        exportTracks = listTracks.map(ExportTrack::of)
+                        dialog = null
+                    })
+                }
+                // "缺的 N 项"：另一台设备加进列表、这台还没下载的成员。**点了才下**，
+                // 不在后台自动拉（同步每分钟一轮，自动下载会变成批量提取）。
+                // 没有可下载来源的（列表占位条：作品还没被任何设备上传）如实说明，不假装能下。
+                if (missingFiles.isNotEmpty()) {
+                    val downloadable = missingFiles.filter { cloudSync.repairOptions(it).canDownload }
+                    SheetPill(
+                        if (downloadable.isEmpty()) "缺 ${missingFiles.size} 项，暂时下不了"
+                        else "下载缺的 ${downloadable.size} 项",
+                        Icons.Default.CloudDownload,
+                        {
+                            if (downloadable.isEmpty()) {
+                                notice = "这 ${missingFiles.size} 项目前没有可下载的来源，等云端有文件后再试"
+                            } else {
+                                operate {
+                                    notice = "正在补齐 ${downloadable.size} 项…"
+                                    var done = 0
+                                    val failed = ArrayList<String>()
+                                    for (item in downloadable) {
+                                        runCatching { cloudSync.download(context, item) }
+                                            .onSuccess { done++ }
+                                            .onFailure { failed += item.title }
+                                    }
+                                    notice = if (failed.isEmpty()) "已补齐 $done 项"
+                                    else "已补齐 $done 项，${failed.size} 项未完成：${failed.first()}"
+                                }
+                            }
+                        },
+                    )
                 }
             } else {
                 Row {

@@ -9,6 +9,7 @@ import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.CategoryDao
 import com.getmedia.app.data.local.CategoryEntity
 import com.getmedia.app.data.local.LocalIds
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.PlaylistEntity
 import com.getmedia.app.data.local.PlaylistItemEntity
 import com.getmedia.app.data.local.TrackEntity
@@ -328,6 +329,10 @@ class LibraryPlaylistSync(
         var removed = 0
         var blocked = 0
         val now = System.currentTimeMillis()
+        // 用户在本机删掉、还没重放成功的作品：列表成员对不上时**不补占位行**，
+        // 否则下一轮就把刚删的作品又"复活"成一条未下载条目。
+        val queuedKeys = db.libraryAuxDao().removals(account)
+            .mapTo(HashSet()) { it.platform.lowercase() to it.videoKey }
         db.withTransaction {
             val rows = db.trackDao().allNow()
             for (remote in cloud) {
@@ -343,24 +348,28 @@ class LibraryPlaylistSync(
                 }
                 if (local == null) {
                     val id = dao.insert(PlaylistEntity(name = remote.name, dirty = false, syncedAt = now))
-                    writeItems(id, remote.items, rows)
+                    writeItems(id, remote.items, rows, account, queuedKeys, now)
                     created++
                 } else if (local.syncedAt == 0L) {
                     // 首次对齐（含从老版本升上来）：以云端为准，哪怕本地这一份正在待推送。
                     // 反过来的话，先升级的设备会把自己的内容盖掉另一台已经同步好的列表。
                     dao.clear(local.id)
-                    writeItems(local.id, remote.items, rows)
+                    writeItems(local.id, remote.items, rows, account, queuedKeys, now)
                     dao.markSynced(local.id, now)
                     pulled++
                 } else if (!local.dirty) {
                     dao.clear(local.id)
-                    writeItems(local.id, remote.items, rows)
+                    writeItems(local.id, remote.items, rows, account, queuedKeys, now)
                     pulled++
                 } else {
                     // 本地有未推送的改动：不覆盖，交给 ③
                     blocked++
                 }
             }
+            // 存量修复：列表里有些成员指向的曲库行已经不在了（历史遗留：先建行、行后来被删，
+            // 或者这台设备从来就没这行）。云端列表带着完整三元组，正好能把它们补回来。
+            // 只"补行"不动成员与顺序，所以不会盖掉用户还没推上去的改动。
+            healMissing(account, cloud, queuedKeys, now)
         }
 
         // ③ 推本地改过的列表：整体替换，一次写要么全成要么全不成
@@ -397,21 +406,126 @@ class LibraryPlaylistSync(
     }
 
     /**
-     * 把云端条目写成本地条目；对不上曲库行的**直接跳过**。
+     * 把云端条目写成本地条目。
      *
-     * 对不上不是错误：条目可能刚在网页端建好、手机这一轮还没拉到。列表本身会在下一轮
-     * （那时行已在库里）用云端内容重建一次，缺的条目自然补上——不需要在这里存悬空引用。
+     * **对不上曲库行的成员不再丢弃**（0.1.33 起）：按确定性 id 补一条"占位行"——状态与
+     * 「云端未下载」完全相同（`CLOUD_ONLY`、无文件、无 `serverId`），列表里照样占位、
+     * 界面上标未下载；等另一台把那件作品传上云端，曲库拉取会按同一个 id 把这一行绑上
+     * （[LibrarySyncEngine] 的 `bindSameKey`），不需要任何清理动作。
+     *
+     * 之前这里直接 `return@forEachIndexed`：成员在这台设备上凭空消失，而且**不会自愈**
+     * （每一轮都按云端重建，缺的行一直缺）。更糟的是这台设备一旦有本地改动，整体替换会
+     * 把"少一条"的整表 PUT 上去，云端跟着少——另一台再拉下来也少了。11-22 的
+     * 「生死相随」就是这么丢的：手机 2 曲库对不上，推了 5 条把云端的 6 条盖掉。
+     *
+     * 两个例外仍然跳过：
+     * - 键在本机删除队列里（`queuedKeys`）：用户刚删过这件作品，补回来等于复活；
+     * - 键算不出（空平台/空作品号已在解析时过滤，这里不会出现）。
      */
-    private suspend fun writeItems(playlistId: Long, items: List<CloudPlaylistItem>, rows: List<TrackEntity>) {
+    private suspend fun writeItems(
+        playlistId: Long,
+        items: List<CloudPlaylistItem>,
+        rows: List<TrackEntity>,
+        account: String,
+        queuedKeys: Set<Pair<String, String>>,
+        now: Long,
+    ) {
         if (items.isEmpty()) return
         val byId = rows.associateBy { it.id }
         val additions = ArrayList<PlaylistItemEntity>(items.size)
+        val missing = LinkedHashMap<Long, TrackEntity>()
         items.forEachIndexed { index, item ->
-            val id = localIdOf(item, rows, byId) ?: return@forEachIndexed
+            val known = localIdOf(item, rows, byId)
+            if (known != null) {
+                additions += PlaylistItemEntity(playlistId, known, orderIndex = index)
+                return@forEachIndexed
+            }
+            val key = LocalIds.key(item.platform, item.videoId, item.page)
+            if ((item.platform.lowercase() to key) in queuedKeys) return@forEachIndexed
+            val id = LocalIds.localId(item.platform, item.videoId, item.page)
+            missing.getOrPut(id) { placeholder(id, item, account, now) }
             additions += PlaylistItemEntity(playlistId, id, orderIndex = index)
         }
+        // IGNORE：占位行与真实行撞 id 时绝不覆盖真实行（真实行的键与 id 一定一致，
+        // 走到这里只是因为本轮 `rows` 是事务开始时的快照）。
+        if (missing.isNotEmpty()) db.trackDao().insertIgnore(missing.values.toList())
         if (additions.isNotEmpty()) db.playlistDao().add(additions)
     }
+
+    /**
+     * 存量修复：成员指向的曲库行不存在时，按云端三元组把行补回来（占位行）。
+     *
+     * 为什么需要它：`writeItems` 保证的是"以后写进来的成员都有行"。可历史上已经写进来的
+     * 成员可能还指着一条后来被删掉的行——界面按 id 找行找不到就整条不渲染，于是卡片写着
+     * "6 项"、点进去只看到 2 条。成员的身份信息只剩一个 id，反推不出平台与作品号，
+     * 只有云端列表还带着完整三元组，所以修复必须借云端这一份。
+     *
+     * 三个约束：
+     * - **只补行，不碰成员**：不加、不删、不排序，用户没推上去的改动原样保留；
+     * - 键在本机删除队列里的不补（用户删过这件作品，补回来等于复活）；
+     * - `insertIgnore`，与已有行撞 id 时绝不覆盖。
+     */
+    private suspend fun healMissing(
+        account: String,
+        cloud: List<CloudPlaylist>,
+        queuedKeys: Set<Pair<String, String>>,
+        now: Long,
+    ) {
+        val items = db.playlistDao().itemsAll()
+        if (items.isEmpty()) return
+        val present = items.mapTo(HashSet()) { it.trackId }
+        val rows = db.trackDao().allNow().mapTo(HashSet()) { it.id }
+        val filling = LinkedHashMap<Long, TrackEntity>()
+        for (remote in cloud) {
+            if (remote.deleted) continue
+            for (item in remote.items) {
+                val id = LocalIds.localId(item.platform, item.videoId, item.page)
+                if (id !in present || id in rows) continue
+                val key = LocalIds.key(item.platform, item.videoId, item.page)
+                if ((item.platform.lowercase() to key) in queuedKeys) continue
+                filling.getOrPut(id) { placeholder(id, item, account, now) }
+            }
+        }
+        if (filling.isNotEmpty()) db.trackDao().insertIgnore(filling.values.toList())
+    }
+
+    /**
+     * 列表成员的占位行：**有位置、没文件、不能播**，标成「云端未下载」。
+     *
+     * 标题只能拿成员自己的标识：云端列表只存平台三元组（`platform/video_id/page`），
+     * 没有标题；曲库里对不上也意味着这台设备拿不到标题。`local` 平台的 `video_id`
+     * 本来就是作品名，所以这类占位条显示正常；`bilibili`/`douyin` 会先显示作品号，
+     * 等云端曲库行到了以后由 [LibrarySyncEngine] 的合并逻辑换成真标题。
+     *
+     * `mediaType` 只能猜 `AUDIO`：三元组里没有类型。真行绑定后也不会改回来，
+     * 所以占位条若其实是视频，界面上会按音频措辞显示——只影响措辞，不影响播放。
+     */
+    private fun placeholder(
+        id: Long,
+        item: CloudPlaylistItem,
+        account: String,
+        now: Long,
+    ) = TrackEntity(
+        id = id,
+        platform = item.platform,
+        videoId = LocalIds.key(item.platform, item.videoId, item.page),
+        title = item.videoId,
+        uploader = null,
+        durationSec = null,
+        audioBytes = null,
+        audioFormat = "",
+        sourceUrl = "",
+        localPath = null,
+        favorite = false,
+        localCategoryId = MetadataSnapshot.DEFAULT_CATEGORY_ID,
+        updatedAtMs = now,
+        addedAtMs = now,
+        sortIndex = 0,
+        mediaType = MediaKind.AUDIO.name,
+        serverId = null,
+        syncState = LibraryMark.CLOUD_ONLY,
+        accountKey = account,
+    )
 
     /** 先用确定性 id 直接命中；历史上按旧规则写入的行再用键比对兜底。 */
     private fun localIdOf(item: CloudPlaylistItem, rows: List<TrackEntity>, byId: Map<Long, TrackEntity>): Long? {

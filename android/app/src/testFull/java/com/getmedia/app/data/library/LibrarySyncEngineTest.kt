@@ -84,8 +84,34 @@ class LibrarySyncEngineTest {
 
     // ---------- 建行 ----------
 
-    @Test fun createsCloudOnlyRowsWithServerIdentity() = runBlocking {
-        val (e, t) = engine(listOf(page(listOf(cloud(1, page = 2), cloud(2)), hasMore = false)))
+    @Test fun playlistPlaceholderIsBoundAndTitledWhenCloudRowArrives() = runBlocking {
+        // 顺序：播放列表先到（曲库里还没有这件作品）→ 拉取补了一条占位行，
+        // 标题只有作品号、没有 serverId。下一轮曲库行到了，必须**绑到同一行**并换上真标题。
+        val id = LocalIds.localId("bilibili", "BV9", 1)
+        db.trackDao().insertIgnore(
+            listOf(
+                TrackEntity(
+                    id = id, platform = "bilibili", videoId = "BV9", title = "BV9",
+                    uploader = null, durationSec = null, audioBytes = null, audioFormat = "",
+                    sourceUrl = "", localPath = null, addedAtMs = 1, updatedAtMs = 1,
+                    syncState = LibraryMark.CLOUD_ONLY, accountKey = account,
+                ),
+            ),
+        )
+        val (e, _) = engine(
+            listOf(page(listOf(cloud(9, videoId = "BV9", title = "真标题")), hasMore = false)),
+        )
+        val result = e.pull(account)
+
+        assertEquals("占位行要被绑定，不能另起一行", 1, rows().size)
+        val row = db.trackDao().byId(id)!!
+        assertEquals(9L, row.serverId)
+        assertEquals(LibraryMark.CLOUD_ONLY, row.syncState)
+        assertEquals("绑定后换成云端标题", "真标题", row.title)
+        assertEquals(1, result.bound)
+    }
+
+    @Test fun createsCloudOnlyRowsWithServerIdentity() = runBlocking {        val (e, t) = engine(listOf(page(listOf(cloud(1, page = 2), cloud(2)), hasMore = false)))
         val result = e.pull(account)
 
         assertEquals(2, result.added)

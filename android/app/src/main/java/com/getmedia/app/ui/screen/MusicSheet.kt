@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -50,6 +51,14 @@ internal fun MusicSheet(
     confirmText: String = "完成",
     confirmEnabled: Boolean = true,
     scroll: Boolean = true,
+    /**
+     * 内容多时用更高的浮层。
+     *
+     * 默认浮层高度是 wrap content，内容一多就整块超出屏幕：超出的部分既看不见、
+     * 也滚不到（滚动区按内容高度算，它以为自己不需要滚）。列表详情要列十几个成员，
+     * 必须给一个确定高度，`weight(1f)` 才拿得到剩余空间、滚动才真的生效。
+     */
+    tall: Boolean = false,
     onConfirm: () -> Unit = onDismiss,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -57,8 +66,13 @@ internal fun MusicSheet(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
+        // Dialog 的窗口高度是 wrap content，`fillMaxHeight` 拿不到屏幕高度（参照物就是自己），
+        // 所以 tall 只能用屏幕高度算出明确值。
+        val tallHeight = (LocalConfiguration.current.screenHeightDp * 0.86f).dp
         Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 24.dp),
+            modifier = Modifier.fillMaxWidth()
+                .then(if (tall) Modifier.height(tallHeight) else Modifier)
+                .padding(horizontal = 14.dp, vertical = 24.dp),
             shape = RoundedCornerShape(26.dp),
             color = uiCardColor(),
             // uiCardColor() 不在配色方案里，contentColorFor 会给 Unspecified，正文会退回黑色——
@@ -122,7 +136,15 @@ internal fun MusicSheet(
                     Box(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) { header() }
                     Spacer(Modifier.height(10.dp))
                 }
-                Box(Modifier.weight(1f, fill = false).heightIn(max = 560.dp)) {
+                // `fill = tall`：只有给足高度（tall）时才把剩余空间吃掉，滚动容器才有
+                // 明确高度、滚动才真的生效；普通浮层继续按内容收缩，不留空白。
+                // tall 时高度已由外层固定，这里不能再加 560dp 上限，否则剩余空间被截掉、
+                // 滚动区又变成"刚好装下内容"，还是会滚不动。
+                Box(
+                    Modifier.weight(1f, fill = tall).then(
+                        if (tall) Modifier else Modifier.heightIn(max = 560.dp),
+                    ),
+                ) {
                     Column(
                         Modifier
                             .fillMaxWidth()
