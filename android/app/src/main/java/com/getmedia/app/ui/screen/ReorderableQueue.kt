@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -219,6 +220,7 @@ internal fun ReorderableQueue(
                             title = item.track.title,
                             uploader = item.track.uploader,
                             durationSec = item.track.durationSec,
+                            playable = item.playable,
                             current = current,
                             playing = current && playing,
                             lifted = false,
@@ -257,6 +259,7 @@ internal fun ReorderableQueue(
                     title = dragged.track.title,
                     uploader = dragged.track.uploader,
                     durationSec = dragged.track.durationSec,
+                    playable = dragged.playable,
                     current = dragged.track.id == currentId,
                     playing = false,
                     lifted = true,
@@ -285,6 +288,7 @@ private fun QueueRow(
     title: String,
     uploader: String?,
     durationSec: Double?,
+    playable: Boolean,
     current: Boolean,
     playing: Boolean,
     lifted: Boolean,
@@ -332,6 +336,7 @@ private fun QueueRow(
                 val sub = listOfNotNull(
                     uploader?.takeIf { it.isNotBlank() },
                     durationSec?.takeIf { it > 0 }?.let { formatDuration(it) },
+                    "未下载，播到会跳过".takeIf { !playable },
                 ).joinToString("  ·  ")
                 if (sub.isNotBlank()) {
                     Spacer(Modifier.height(2.dp))
@@ -341,14 +346,23 @@ private fun QueueRow(
             Box(
                 Modifier.size(36.dp).clip(CircleShape)
                     .background(if (current) colors.primary else colors.surfaceVariant.copy(alpha = 0.55f))
-                    .clickable(enabled = enabled, onClick = onPlay),
+                    .clickable(enabled = enabled && playable, onClick = onPlay),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    if (playing) "暂停第${index + 1}项" else "播放第${index + 1}项",
+                    when {
+                        !playable -> Icons.Default.CloudDownload
+                        playing -> Icons.Default.Pause
+                        else -> Icons.Default.PlayArrow
+                    },
+                    when {
+                        !playable -> "第${index + 1}项未下载，播放时会跳过"
+                        playing -> "暂停第${index + 1}项"
+                        else -> "播放第${index + 1}项"
+                    },
                     Modifier.size(18.dp),
-                    tint = if (current) colors.onPrimary else colors.primary,
+                    tint = if (!playable) colors.primary.copy(alpha = 0.45f)
+                    else if (current) colors.onPrimary else colors.primary,
                 )
             }
             Box(

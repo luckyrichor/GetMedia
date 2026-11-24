@@ -42,6 +42,9 @@ fun QueueBar() {
     var showVideo by remember { mutableStateOf(false) }
     val current = queue.getOrNull(index)?.track
     val isVideo = current?.mediaType == MediaKind.VIDEO.name
+    val missingCount = queue.count { !it.playable }
+    // 队列跟随来源列表：另一台设备加/删/调序后，正在播放的这一份最多一分钟内对齐。
+    LaunchedEffect(sourceId) { sourceId?.let { PlayerHolder.follow(context, it) } }
     // 全局「显示画面」开关：关闭时即使选中视频也不出画面，只有声音。
     val videoDisplayEnabled by com.getmedia.app.data.repo.VideoDisplayPrefs.showVideo.collectAsState()
     LaunchedEffect(current?.id) { showVideo = isVideo }
@@ -77,7 +80,11 @@ fun QueueBar() {
     if (showQueue) MusicSheet(
         title = listName,
         onDismiss = { showQueue = false },
-        subtitle = if (timer != null) "定时停止：$timer" else "长按拖动调整播放顺序",
+        subtitle = when {
+            timer != null -> "定时停止：$timer"
+            missingCount > 0 -> "$missingCount 首本机未下载，播放时会跳过"
+            else -> "长按拖动调整播放顺序"
+        },
         badge = if (queue.size == 1) "1 首" else "${queue.size} 首",
         scroll = false,
         confirmText = "完成",

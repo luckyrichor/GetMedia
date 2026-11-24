@@ -69,4 +69,27 @@ class QueueRulesTest {
         }
         assertTrue(failure.exceptionOrNull() is CancellationException)
     }
+
+    // ---------- 未下载条目跳过（0.1.34：队列条数要跟列表一致） ----------
+
+    @Test fun skipsConsecutiveMissingItemsInOneStep() {
+        // 第 1 条有文件，2/3 没有 → 从 1 往后第一次能播的是 4。
+        assertEquals(3, nextPlayableIndex(listOf(true, false, false, true), 0))
+    }
+
+    @Test fun wrapsAroundWhenMissingItemsAreAtTheEnd() {
+        // 最后两条没有文件，循环回第一首，而不是停在那里。
+        assertEquals(0, nextPlayableIndex(listOf(true, true, false, false), 1))
+    }
+
+    @Test fun returnsNullWhenNothingIsPlayable() {
+        // 全都没下载：调用方要暂停，不能无限 seek。
+        assertEquals(null, nextPlayableIndex(listOf(false, false), 0))
+        assertEquals(null, nextPlayableIndex(emptyList(), 0))
+    }
+
+    @Test fun startingBeforeZeroFindsTheFirstPlayable() {
+        // -1 表示"还没开始播"，用来给新队列挑起点：跳过开头的占位项。
+        assertEquals(2, nextPlayableIndex(listOf(false, false, true), -1))
+    }
 }

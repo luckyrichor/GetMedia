@@ -23,6 +23,22 @@ internal fun queueRemovalIndices(ids: List<Long>, deletedIds: Set<Long>): List<I
     ids.indices.filter { ids[it] in deletedIds }.reversed()
 
 /**
+ * 从 [from] 往后找第一个**有文件**的条目，找不到再从头绕一圈（默认列表是循环播放）。
+ *
+ * 返回 null 表示整条队列都没有可播的（例如全都没下载）——调用方应暂停并如实提示，
+ * 而不是继续 seek 造成死循环。
+ */
+internal fun nextPlayableIndex(playable: List<Boolean>, from: Int): Int? {
+    if (playable.isEmpty()) return null
+    val start = from.coerceIn(-1, playable.lastIndex)
+    for (step in 1..playable.size) {
+        val index = (start + step).mod(playable.size)
+        if (playable[index]) return index
+    }
+    return null
+}
+
+/**
  * 播放列表预载：逐条解析本地文件，解析不出来的**跳过**，绝不因为一条坏行拖死整批。
  *
  * 0.1.13 之前 `appendLocked` 在这里直接 `getOrThrow()`。恢复出来的空壳行（

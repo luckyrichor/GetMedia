@@ -594,29 +594,45 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
     LaunchedEffect(notice) { notice?.let { snackbar.showSnackbar(it); notice = null } }
     fun operate(block: suspend () -> Unit) { scope.launch { runCatching { DiagnosticsStore.operation("媒体库操作", block) }.onFailure { notice = ErrorText.humanMessage(it) } } }
     fun queueItems(tracks: List<TrackEntity>, play: Boolean, sourceId: Long? = null) = operate {
-        val ready = mutableListOf<PlayerHolder.QueueItem>()
-        // 缺文件的行走统一入口补下载（阶段 6）：云端行与恢复空壳都由 cloudSync 分派，
-        // 失败原因由它如实给出，这里不再自己猜。
-        if (tracks.any { it.localPath?.let { p -> File(p).exists() } != true && cloudSync.repairOptions(it).canDownload }) {
-            notice = "正在下载到本机…"
-        }
-        for (track in tracks) {
-            val local = track.localPath?.takeIf { File(it).exists() }
-            val path = local ?: if (cloudSync.repairOptions(track).canDownload) {
-                cloudSync.download(context, track).absolutePath
+        // 要点：**点播放不再把整张列表同步下载完**。
+        // 以前这里对每个缺文件的条目当场 download()，列表越长等得越久，还容易撞平台风控。
+        // 现在缺文件的条目照样入队（占位音源），播到它时播放器自动跳到下一首；
+        // 单曲播放是例外——用户点的就是这一首，下载它本身是预期动作。
+        val ready = tracks.map { track ->
+            val local = track.localPath?.takeIf { File(it).isFile && File(it).length() > 0 }
+            if (local != null) {
+                PlayerHolder.QueueItem(track, local)
             } else {
-                trackRepo.download(track).getOrThrow().absolutePath
+                val downloaded = if (tracks.size == 1) {
+                    runCatching {
+                        if (cloudSync.repairOptions(track).canDownload) {
+                            cloudSync.download(context, track).absolutePath
+                        } else trackRepo.download(track).getOrThrow().absolutePath
+                    }.getOrNull()
+                } else null
+                if (downloaded != null) PlayerHolder.QueueItem(track, downloaded)
+                else PlayerHolder.QueueItem(track, PlayerHolder.placeholder(context), playable = false)
             }
-            ready += PlayerHolder.QueueItem(track, path)
         }
-        if (ready.isEmpty()) notice = "这里还没有可播放的内容"
-        else if (play) {
-            if (sourceId == null) PlayerHolder.playSelection(context, ready)
-            else PlayerHolder.playAll(context, ready, sourceId)
-        }
-        else {
-            val count = PlayerHolder.append(context, ready)
-            notice = if (count == 0) "都已在播放列表中" else "已加入 ${MediaWording.counted(tracks.map { it.mediaType }, count)}"
+        val missing = ready.count { !it.playable }
+        when {
+            ready.isEmpty() -> notice = "这里还没有可播放的内容"
+            play && ready.none { it.playable } ->
+                notice = "这 ${ready.size} 首都没下载到本机，先在列表里点「下载缺的 ${ready.size} 项」"
+            play -> {
+                if (missing > 0) notice = "其中 $missing 首本机未下载，播放时会跳过"
+                if (sourceId == null) PlayerHolder.playSelection(context, ready)
+                else PlayerHolder.playAll(context, ready, sourceId)
+            }
+            else -> {
+                // 加入队列时**允许整批都是占位**：用户是在整理列表，不是要马上听。
+                val count = PlayerHolder.append(context, ready)
+                notice = when {
+                    count == 0 -> "都已在播放列表中"
+                    missing > 0 -> "已加入 ${MediaWording.counted(tracks.map { it.mediaType }, count)}，其中 $missing 首未下载"
+                    else -> "已加入 ${MediaWording.counted(tracks.map { it.mediaType }, count)}"
+                }
+            }
         }
     }
     fun targetTracks(item: LibraryTarget) = operate {
@@ -1298,6 +1314,9 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                                     }
                                     notice = if (failed.isEmpty()) "已补齐 $done 项"
                                     else "已补齐 $done 项，${failed.size} 项未完成：${failed.first()}"
+                                    // 队列里这些条目原本是占位（播到会跳过），文件到手后原地转成可播，
+                                    // 不用重新点一次"播放此列表"。
+                                    runCatching { PlayerHolder.refreshFiles(context) }
                                 }
                             }
                         },
