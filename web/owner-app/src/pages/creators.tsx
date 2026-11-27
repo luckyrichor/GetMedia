@@ -52,22 +52,65 @@ function writeHidden(ids: number[]) {
   }
 }
 
-/** 输入类型：只认「号码」——批量提取要的是博主，抖音号 / B 站号两种数字。
- *  主页链接那种方式已经删掉：贴一条作品链接提取单个文件是「单个提取」页的事，
- *  两页各管一件事，不在批量页里再留一个链接入口。 */
+/** 输入类型：选的是**平台**，号码和主页链接两种写法都收。
+ *
+ *  B 站号是纯数字 UID；抖音号可能是字母串（`chenling_hana`）。两边的主页链接
+ *  （`space.bilibili.com/12345`、`douyin.com/user/MS4wLjAB…`）都直接交给服务端解析——
+ *  短链展开、sec_uid 提取是 `creator_links.py` 的事，前端只负责认出是哪个平台。
+ */
 type CreatorKind = 'douyin' | 'bilibili';
 
 const KIND_LABEL: Record<CreatorKind, string> = {
-  douyin: '抖音号',
-  bilibili: 'B 站号',
+  douyin: '抖音',
+  bilibili: 'B 站',
+};
+
+/** 输入框上方那行字：把「两种写法」写在标签上，比藏在 placeholder 里显眼。 */
+const KIND_FIELD: Record<CreatorKind, string> = {
+  douyin: '抖音号 / 主页链接',
+  bilibili: 'B 站号 / 主页链接',
 };
 
 const KIND_HINT: Record<CreatorKind, string> = {
-  douyin: '例如 67194609689',
-  bilibili: '例如 12345',
+  douyin: '例如 67194609689，或粘贴 douyin.com/user/… 的主页链接',
+  bilibili: '例如 12345，或粘贴 space.bilibili.com/12345',
+};
+
+/** 校验不过时说的话：抖音号有字母号（`chenling_hana`），所以不能说「只能是数字」，
+ *  要如实讲清「数字版」这三个字，再把人指到主页链接上去。 */
+const KIND_TIP: Record<CreatorKind, string> = {
+  douyin: '只能填数字版抖音号，或粘贴抖音主页链接（douyin.com/user/…）',
+  bilibili: '只能填纯数字的 B 站号，或粘贴 space.bilibili.com/号',
 };
 
 const URL_IN_TEXT = /https?:\/\/[^\s"'<>，。；、）】」》]+/i;
+/** 没写协议的域名也当链接看：从地址栏复制常常只剩 `space.bilibili.com/12345`。 */
+const BARE_HOST = /^(?:[a-z0-9-]+\.)+(?:com|cn|tv|net)(?:\/|$)/i;
+/** 链接尾巴上的标点不算链接的一部分（中文标点紧跟在 URL 后面时很常见）。 */
+const TRAILING_PUNCT = /[.,;:!?）】」》"'”’。，、；：！？]+$/;
+
+const NUMERIC_ID = /^\d{1,20}$/;
+
+/** 链接属于哪个平台：只看域名，不看路径。
+ *
+ *  路径能不能解析出博主（作品链接 vs 主页链接）由服务端判断——那边有短链展开和
+ *  更准的话术，前端在这里猜只会猜错。认不出平台返回 null。 */
+export function platformOfLink(text: string): CreatorKind | null {
+  const hit = text.match(URL_IN_TEXT)?.[0] ?? (BARE_HOST.test(text.trim()) ? text.trim() : '');
+  if (!hit) return null;
+  let host = '';
+  try {
+    host = new URL(/^https?:\/\//i.test(hit) ? hit : `https://${hit}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  if (host === 'bilibili.com' || host.endsWith('.bilibili.com')
+    || host === 'b23.tv' || host === 'bili2233.cn') return 'bilibili';
+  if (host === 'douyin.com' || host.endsWith('.douyin.com')
+    || host === 'iesdouyin.com' || host.endsWith('.iesdouyin.com')) return 'douyin';
+  return null;
+}
+
 
 function todayISO(): string {
   const d = new Date();
@@ -75,21 +118,40 @@ function todayISO(): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
-/** 把用户粘进来的内容收成「号码」。
+/** 把用户粘进来的内容收成「要提交的东西」。
  *
- * 两种号都只认数字：`抖音号：123` 这种带前缀的照样能挑出来。
- * 贴了链接就不猜——链接里那串数字是作品号或分享埋点，不是博主的号——
- * 原样交给校验去报错，提示改成填号码。
+ * 三种写法：纯数字号、主页链接（含整段分享文案里夹着的那一条）、带前缀的号码
+ * （`抖音号：123`）。**有链接就交链接**——短链展开和 sec_uid 提取都在服务端，
+ * 前端只把它从文案里抠出来、补上协议、去掉尾随标点；截断会把链接截坏，所以不截。
  */
 export function normalizeCreatorInput(raw: string): string {
   const text = (raw || '').trim();
   if (!text) return '';
-  if (URL_IN_TEXT.test(text)) return text.slice(0, 40);
+  const url = text.match(URL_IN_TEXT)?.[0]?.replace(TRAILING_PUNCT, '');
+  if (url) return url;
+  if (BARE_HOST.test(text)) return `https://${text.replace(TRAILING_PUNCT, '')}`;
   const digits = text.match(/\d{1,20}/g);
-  return digits ? digits.sort((a, b) => b.length - a.length)[0]! : text.slice(0, 40);
+  if (digits) return digits.sort((a, b) => b.length - a.length)[0]!;
+  return text.slice(0, 80);
 }
 
-const NUMERIC_ID = /^\d{1,20}$/;
+/** 号码或主页链接都能提交；其它输入当场说清楚错在哪，不浪费一次请求。
+ *
+ * 最容易贴错的是**作品链接**（那是「单个提取」页的事），所以单独给一句能指路的话。 */
+function inputError(value: string, kind: CreatorKind): string | null {
+  if (!value) return `先填${KIND_FIELD[kind]}`;
+  if (NUMERIC_ID.test(value)) return null;
+  const linkKind = platformOfLink(value);
+  if (!linkKind) return KIND_TIP[kind];
+  if (linkKind !== kind) return `这是${KIND_LABEL[linkKind]}的链接，把上面的类型改成${KIND_LABEL[linkKind]}`;
+  if (linkKind === 'bilibili' && /\/video\/|BV[0-9A-Za-z]{10}|\/av\d+/i.test(value)) {
+    return '这是单个视频的链接；要抓整个 UP 主请贴空间主页（space.bilibili.com/号），单条视频请用「单个提取」';
+  }
+  if (linkKind === 'douyin' && /\/(?:video|note|share\/video)\//.test(value)) {
+    return '这是单个作品的链接；要抓整个博主请贴主页（douyin.com/user/…），单条作品请用「单个提取」';
+  }
+  return null;
+}
 
 /** 条数与起始序号的上限：只在输入校验和步进按钮上用，不改变服务端行为。 */
 const MAX_N = 100000;
@@ -349,11 +411,8 @@ export function CreatorsPage() {
   function validate(): boolean {
     const next: ErrMap = {};
     const value = normalizeCreatorInput(url);
-    if (!value) {
-      next.url = `先填${KIND_LABEL[kind]}`;
-    } else if (!NUMERIC_ID.test(value)) {
-      next.url = `${KIND_LABEL[kind]}只能填纯数字（1–20 位），不要带链接或昵称`;
-    }
+    const inputErr = inputError(value, kind);
+    if (inputErr) next.url = inputErr;
     if (mode === 'latest_n') {
       const v = Number(n);
       if (!/^\d+$/.test(n.trim()) || v < 1 || v > MAX_N) next.n = `条数要是 1–${MAX_N} 之间的整数`;
@@ -544,15 +603,23 @@ export function CreatorsPage() {
             />
           </div>
           <label class={errs.url ? 'field ext-url is-bad' : 'field ext-url'}>
-            <span>{KIND_LABEL[kind]}</span>
+            <span>{KIND_FIELD[kind]}</span>
             <input
               type="text"
-              maxLength={40}
-              inputMode="numeric"
+              maxLength={200}
               placeholder={KIND_HINT[kind]}
-              aria-label={KIND_LABEL[kind]}
+              aria-label={KIND_FIELD[kind]}
               value={url}
-              onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setErrs({}); clearPreview(); }}
+              onInput={(e) => {
+                const v = (e.target as HTMLInputElement).value;
+                setUrl(v);
+                setErrs({});
+                clearPreview();
+                // 贴进来的是链接时，平台由链接说了算：类型下拉跟着切过去，
+                // 免得「选了抖音却贴 B 站主页」还要人自己去改一遍。
+                const detected = platformOfLink(v);
+                if (detected && detected !== kind) setKind(detected);
+              }}
             />
             {errs.url ? <em class="field-err">{errs.url}</em> : null}
           </label>

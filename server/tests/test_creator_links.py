@@ -3,7 +3,14 @@ import pytest
 
 from getmedia import creator_rt
 from getmedia.config import testing_settings as make_settings
-from getmedia.creator_links import LinkError, Platform, find_urls, parse_creator_input, resolve_creator
+from getmedia.creator_links import (
+    LinkError,
+    Platform,
+    find_urls,
+    parse_creator_input,
+    require_numeric_or_link,
+    resolve_creator,
+)
 from getmedia.creator_service import CreatorRangeError, resolve_ref, validate_range
 
 
@@ -96,6 +103,43 @@ def test_resolve_ref_rejects_platform_conflict():
     with pytest.raises(LinkError) as err:
         resolve_ref("https://space.bilibili.com/2/video", platform="douyin")
     assert "platform 指定了" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "platform,value",
+    [
+        ("bilibili", "12345"),
+        ("douyin", "67194609689"),
+        ("bilibili", "https://space.bilibili.com/12345"),
+        ("bilibili", "https://space.bilibili.com/12345/video?spm_id_from=333"),
+        ("douyin", "https://www.douyin.com/user/MS4wLjABAAAAabcdefgh"),
+        # 分享文案里夹着主页链接也算：前端只做粗筛，抠链接是服务端的事
+        ("douyin", "看看这个博主 https://www.douyin.com/user/MS4wLjABAAAAabcdefgh 复制打开"),
+    ],
+)
+def test_require_numeric_or_link_accepts(platform, value):
+    require_numeric_or_link(platform, value)  # 不抛就算过
+
+
+@pytest.mark.parametrize(
+    "platform,value,needle",
+    [
+        ("bilibili", "碧诗", "只能填纯数字"),
+        ("douyin", "", "只能填纯数字"),
+        ("douyin", "https://space.bilibili.com/12345", "但类型选的是"),
+        ("bilibili", "https://www.douyin.com/user/MS4wLjABAAAAabcdefgh", "但类型选的是"),
+        ("bilibili", "https://example.com/12345", "不支持的站点"),
+    ],
+)
+def test_require_numeric_or_link_rejects(platform, value, needle):
+    with pytest.raises(LinkError) as err:
+        require_numeric_or_link(platform, value)
+    assert needle in str(err.value)
+
+
+def test_require_numeric_or_link_is_noop_without_platform():
+    """没选平台时交给 parse_creator_input 去猜，这一层不管。"""
+    require_numeric_or_link(None, "碧诗")
 
 
 def test_resolve_ref_requires_platform_for_bare_number():

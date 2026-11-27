@@ -137,11 +137,15 @@ def _platform_of_value(value) -> Platform | None:
 _NUMERIC_ID_RE = re.compile(r"\d{1,20}")
 
 
-def require_numeric_id(platform, value: str) -> None:
-    """显式选了「抖音号 / B 站号」时只接受纯数字。
+def require_numeric_or_link(platform, value: str) -> None:
+    """显式选了平台时，只接受「该平台的号码」或「该平台的主页链接」。
 
-    前端已经拦一道，这里再拦一道：链接（含分享文案）走「主页链接」类型，
-    号码类型不接受昵称或 URL，免得后端拿一串中文去平台搜人。
+    前端已经拦一道，这里再拦一道：**昵称仍然不收**，免得后端拿一串中文去平台
+    搜人（搜出来的是谁全凭平台排序，很容易抓错博主）。
+
+    链接只判断「域名属不属于这个平台」，不在这里解析：
+    短链展开、作品链接的「请贴主页」提示都由 :func:`resolve_creator` 给，
+    那边的话术更准，这里只负责早点挡掉跨平台的输入。
     """
     if platform is None:
         return
@@ -149,8 +153,18 @@ def require_numeric_id(platform, value: str) -> None:
     if name not in ("douyin", "bilibili"):
         return
     v = (value or "").strip()
-    if not _NUMERIC_ID_RE.fullmatch(v):
-        raise LinkError("选了抖音号 / B 站号时只能填纯数字；链接请把类型改成「主页链接」")
+    if _NUMERIC_ID_RE.fullmatch(v):
+        return
+    urls = find_urls(v)
+    if not urls:
+        raise LinkError("只能填纯数字，或粘贴该平台的博主主页链接")
+    for raw in urls:
+        found = platform_of(raw)
+        if found is None:
+            raise LinkError(f"不支持的站点：{_host_of(raw)}")
+        if found.value != name:
+            raise LinkError(f"这是 {found.value} 的链接，但类型选的是 {name}")
+
 
 
 def parse_creator_input(text: str, platform=None) -> CreatorInput:

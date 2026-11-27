@@ -113,12 +113,20 @@ def create(env, **body):
     return env.client.post("/v2/creators/jobs", headers=hdr(env.token), json=payload)
 
 
-def test_create_rejects_link_when_numeric_platform_given(jenv):
-    """前端已拦一道，后端也要拦：号码类型不接受链接或昵称。"""
+def test_create_accepts_homepage_link_for_same_platform(jenv):
+    """选了平台也可以直接贴该平台的主页链接——和填号码等价。"""
     r = create(jenv, url="https://space.bilibili.com/2/video", platform="bilibili", mode="latest_n", n=3)
+    assert r.status_code == 202, r.text
+    job = jenv.client.get(f"/v2/creators/jobs/{r.json()['id']}", headers=hdr(jenv.token)).json()
+    assert job["creator_id"] == "2"
+
+
+def test_create_rejects_link_of_other_platform(jenv):
+    """跨平台链接要挡在门口：前端已拦一道，后端再拦一道。"""
+    r = create(jenv, url="https://space.bilibili.com/2/video", platform="douyin", mode="latest_n", n=3)
     assert r.status_code == 400, r.text
     assert r.json()["code"] == "creator_input"
-    assert "只能填纯数字" in r.json()["detail"]
+    assert "但类型选的是" in r.json()["detail"]
 
 
 def test_latest_n_stops_at_n(jenv):

@@ -120,7 +120,7 @@ describe('批量提取', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    await choose('输入类型', '抖音号');
+    await choose('输入类型', '抖音');
     await fillUrl('67194609689');
     await click(button('预览'));
     await until(() => text().includes('预计选取 2 条'));
@@ -141,7 +141,7 @@ describe('批量提取', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    await choose('输入类型', '抖音号');
+    await choose('输入类型', '抖音');
     await fillUrl('67194609689');
     await choose('格式', '音频');
     await click(button('预览'));
@@ -277,13 +277,13 @@ describe('批量提取：表单校验与动态字段', () => {
 
     const input = () => document.querySelector('input[type="text"]') as HTMLInputElement;
     const label = () => document.querySelector('.ext-url > span')!.textContent;
-    // 默认就是抖音号（主页链接那种方式已删掉）
-    expect(input().placeholder).toBe('例如 67194609689');
-    expect(label()).toBe('抖音号');
+    // 默认抖音：标签和占位都把「号」和「主页链接」两种写法写出来
+    expect(input().placeholder).toBe('例如 67194609689，或粘贴 douyin.com/user/… 的主页链接');
+    expect(label()).toBe('抖音号 / 主页链接');
 
-    await choose('输入类型', 'B 站号');
-    expect(input().placeholder).toBe('例如 12345');
-    expect(label()).toBe('B 站号');
+    await choose('输入类型', 'B 站');
+    expect(input().placeholder).toBe('例如 12345，或粘贴 space.bilibili.com/12345');
+    expect(label()).toBe('B 站号 / 主页链接');
   });
 
   test('指定日期的结束日期默认今天，两个日期都是日期选择器', async () => {
@@ -333,7 +333,7 @@ describe('批量提取：表单校验与动态字段', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    await choose('输入类型', '抖音号');
+    await choose('输入类型', '抖音');
     await fillUrl('67194609689');
     await click(button('预览'));
     await until(() => text().includes('预计选取 2 条'));
@@ -345,27 +345,100 @@ describe('批量提取：表单校验与动态字段', () => {
     expect(text()).toContain('还有更多');
   });
 
-  test('选「抖音号」后填非数字直接拦下，不发请求', async () => {
+  test('B 站主页链接直接提交：url 原样带上，platform=bilibili', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await choose('输入类型', 'B 站');
+    await fillUrl('https://space.bilibili.com/12345');
+    await click(button('预览'));
+    await until(() => text().includes('预计选取 2 条'));
+
+    // 链接原样交给服务端：短链展开、sec_uid 提取都在那边，前端不截也不改写
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.url).toBe('https://space.bilibili.com/12345');
+    expect(body.platform).toBe('bilibili');
+  });
+
+  test('贴抖音主页链接会把类型自动切到抖音，再提交 platform=douyin', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await choose('输入类型', 'B 站');
+    expect(document.querySelector('.ext-url > span')!.textContent).toBe('B 站号 / 主页链接');
+
+    const url = 'https://www.douyin.com/user/MS4wLjABAAAAR1Hyk5la2AbZ_a-00wgh6UnypbV35hOG_8bQvsBqDrNGzpxcHBu7ueuCbA';
+    await fillUrl(url);
+    // 平台由链接说了算，不用人再去改一遍下拉
+    expect(document.querySelector('.ext-url > span')!.textContent).toBe('抖音号 / 主页链接');
+
+    await click(button('预览'));
+    await until(() => text().includes('预计选取 2 条'));
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.url).toBe(url);
+    expect(body.platform).toBe('douyin');
+  });
+
+  test('不带协议的域名也能认出来，提交前补上 https', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await fillUrl('space.bilibili.com/12345');
+    await click(button('预览'));
+    await until(() => text().includes('预计选取 2 条'));
+
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.url).toBe('https://space.bilibili.com/12345');
+    expect(body.platform).toBe('bilibili');
+  });
+
+  test('贴作品链接被拦下：提示去「单个提取」，不发请求', async () => {
     server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    await choose('输入类型', '抖音号');
-    await fillUrl('https://space.bilibili.com/1');
+    await choose('输入类型', 'B 站');
+    await fillUrl('https://www.bilibili.com/video/BV1xx411c7mD');
     await click(button('预览'));
-    await until(() => text().includes('只能填纯数字'));
+    await until(() => text().includes('单个提取'));
+    expect(text()).toContain('要抓整个 UP 主请贴空间主页');
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
-  test('输入类型只剩抖音号与 B 站号，不再有主页链接', async () => {
+  test('填昵称被拦下：只收号码或主页链接，不发请求', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await choose('输入类型', 'B 站');
+    await fillUrl('碧诗');
+    await click(button('预览'));
+    await until(() => text().includes('只能填纯数字的 B 站号'));
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  test('输入类型是平台而不是「号」：抖音 / B 站两项', async () => {
     server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
     await click(document.querySelector('button[aria-label="输入类型"]')!);
     const opts = Array.from(document.querySelectorAll('[role="option"]')).map((o) => o.textContent?.trim());
-    expect(opts).toEqual(['抖音号', 'B 站号']);
-    expect(text()).not.toContain('主页链接');
+    expect(opts).toEqual(['抖音', 'B 站']);
+    // 两种写法都要在页面上说出来，别让人以为只能填数字
+    expect(text()).toContain('主页链接');
   });
 
   test('带前缀的号码也能挑出来：填「抖音号：67194609689」提交的是纯数字', async () => {

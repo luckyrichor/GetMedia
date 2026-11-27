@@ -179,16 +179,27 @@ def test_limits_endpoint(creator):
     assert r.json() == {"max_items": 50, "max_start": 500}
 
 
-def test_preview_rejects_link_when_numeric_platform_given(creator):
-    """选了「抖音号 / B 站号」就只能填数字，链接要走「主页链接」。"""
+def test_preview_accepts_homepage_link_for_same_platform(creator):
+    """选了平台之后，除了号码也接受**该平台的**主页链接：链接里的 id 由服务端解析。"""
     r = creator.client.post(
         "/v2/creators/preview",
-        json={"url": "https://space.bilibili.com/2", "platform": "bilibili", "mode": "latest_n", "n": 3},
+        json={"url": SPACE, "platform": "bilibili", "mode": "latest_n", "n": 3},
+        headers=hdr(_token(creator)),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["profile"]["creator_id"] == "2"
+
+
+def test_preview_rejects_link_of_other_platform(creator):
+    """跨平台的链接直接挡掉：拿 B 站链接去按抖音抓，只会报「找不到博主」。"""
+    r = creator.client.post(
+        "/v2/creators/preview",
+        json={"url": SPACE, "platform": "douyin", "mode": "latest_n", "n": 3},
         headers=hdr(_token(creator)),
     )
     assert r.status_code == 400
     assert r.json()["code"] == "creator_input"
-    assert "只能填纯数字" in r.json()["detail"]
+    assert "但类型选的是" in r.json()["detail"]
 
 
 def test_preview_rejects_non_numeric_text_even_in_window_mode(creator):
