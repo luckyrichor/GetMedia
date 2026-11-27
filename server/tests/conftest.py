@@ -70,9 +70,9 @@ def hdr(token):
 
 
 def make_owner(env, name="boss", password="correct horse 1"):
-    """注册一个账号并把它升为 owner；返回会话令牌。
+    """注册一个账号并把它升为完整版（full）；返回会话令牌。
 
-    直接改库而不是走接口：目前没有"提权"接口，也不应该有。
+    直接改库而不是走接口：目前没有"提权"接口，也不应该有（管理员授予走 admin 接口）。
     """
     from sqlalchemy import text
 
@@ -80,5 +80,17 @@ def make_owner(env, name="boss", password="correct horse 1"):
     token = r.json()["session"]["token"]
     uid = env.client.get("/account/me", headers=hdr(token)).json()["id"]
     with env.app.state.engine.begin() as c:
-        c.execute(text("UPDATE users SET tier='owner' WHERE id=:u"), {"u": uid})
+        c.execute(text("UPDATE users SET tier='full' WHERE id=:u"), {"u": uid})
+    return token
+
+
+def make_admin(env, name="root", password="correct horse 1"):
+    """注册一个账号并升为管理员（admin）；返回会话令牌。"""
+    from sqlalchemy import text
+
+    r = register(env, name=name, password=password)
+    token = r.json()["session"]["token"]
+    uid = env.client.get("/account/me", headers=hdr(token)).json()["id"]
+    with env.app.state.engine.begin() as c:
+        c.execute(text("UPDATE users SET tier='admin' WHERE id=:u"), {"u": uid})
     return token

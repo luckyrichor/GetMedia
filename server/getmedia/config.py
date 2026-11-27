@@ -96,7 +96,7 @@ class Settings:
     media_dir: Path
     cache_dir: Path
     bind: str = "127.0.0.1:8700"
-    cookie_path: str = "/getmedia/api/"
+    cookie_path: str = "/getmedia/"
     # 平台凭据（Cookie）加密：AES-256-GCM，密钥只从 GETMEDIA_CRED_KEY 读。
     # 为空表示未配置，需要凭据的接口一律 503，不静默降级成明文。
     credential_key: bytes = b""
@@ -253,6 +253,9 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         media_dir=Path(env.get("GETMEDIA_MEDIA_DIR", str(data_dir / "media"))),
         cache_dir=Path(env.get("GETMEDIA_CACHE_DIR", str(data_dir / "cache"))),
         bind=env.get("GETMEDIA_BIND", "127.0.0.1:8700"),
+        # 管理台页面在 /getmedia/owner/，Cookie 必须对整个 /getmedia/ 生效；
+        # 以前靠 nginx proxy_cookie_path 改写，现在默认值就带上，部署方式换了也不受影响。
+        cookie_path=env.get("GETMEDIA_COOKIE_PATH", "/getmedia/"),
         credential_key=decode_credential_key(env.get("GETMEDIA_CRED_KEY", "")),
         cache_ttl_seconds=_int_env(env, "GETMEDIA_CACHE_TTL_SECONDS", 86400, 60, 30 * 86400),
         cache_quota_bytes=_int_env(env, "GETMEDIA_CACHE_QUOTA_MB", 1024, 0, 51200) * 1024**2,

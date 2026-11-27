@@ -83,21 +83,52 @@ def ops_cmd(s: Settings, args, out=sys.stdout) -> int:
                 print(f"  新增 {r[0]}：{r[1]}", file=out)
         return 0
     if cmd == "create-account":
+        from .tiers import TIER_ADMIN, TIER_FREE, TIER_FULL
         norm = normalize_login_name(args.login_name)
         pw = args.password or getpass.getpass("密码：")
         p = login_name_problem(norm) or password_problem(pw, norm)
         if p:
             print(p, file=sys.stderr); return 1
+        tier = TIER_ADMIN if args.admin else (TIER_FULL if (args.full or args.owner) else TIER_FREE)
         uid, code = new_id("acct"), new_recovery_code()
         h = svc.hasher.hash(pw)
         with eng.begin() as c:
             if c.execute(text("SELECT 1 FROM users WHERE login_name_norm=:n"), {"n": norm}).first():
                 print("登录名已存在", file=sys.stderr); return 1
+            if tier == TIER_ADMIN and c.execute(text("SELECT 1 FROM users WHERE tier='admin'"), {}).first():
+                print("已存在管理员账号，全站只能有一个", file=sys.stderr); return 1
             c.execute(text("INSERT INTO users(id,login_name,login_name_norm,password_hash,tier,registered_channel,created_at) VALUES(:i,:n,:n,:p,:t,'cli',:c)"),
-                      {"i": uid, "n": norm, "p": h, "t": "owner" if args.owner else "free", "c": now})
+                      {"i": uid, "n": norm, "p": h, "t": tier, "c": now})
             c.execute(text("INSERT INTO recovery_codes(user_id,code_hmac,rotated_at) VALUES(:u,:h,:n)"), {"u": uid, "h": recovery_hmac(s.secret_key, code), "n": now})
-            svc.audit(c, "cli_create", uid, "cli", "", "owner" if args.owner else "free")
-        print(f"已创建 {norm}（{uid}），等级 {'owner' if args.owner else 'free'}\n恢复码（仅显示一次）：{code}", file=out)
+            svc.audit(c, "cli_create", uid, "cli", "", tier)
+        print(f"已创建 {norm}（{uid}），等级 {tier}\n恢复码（仅显示一次）：{code}", file=out)
+        return 0
+    if cmd == "set-tier":
+        from .tiers import TIER_ADMIN, TIER_FREE, TIER_FULL
+        from .service import add_months
+        norm = normalize_login_name(args.login_name)
+        with eng.begin() as c:
+            r = c.execute(text("SELECT id,tier FROM users WHERE login_name_norm=:n"), {"n": norm}).first()
+            if r is None:
+                print("账号不存在", file=sys.stderr); return 1
+            uid, old = r[0], r[1]
+            if args.tier == TIER_ADMIN:
+                if old != TIER_ADMIN and c.execute(text("SELECT 1 FROM users WHERE tier='admin'"), {}).first():
+                    print("已存在管理员账号，全站只能有一个", file=sys.stderr); return 1
+                exp = None
+            elif args.tier == TIER_FULL:
+                exp = add_months(now, args.months) if args.months else None
+            else:
+                exp = None
+            c.execute(text("UPDATE users SET tier=:t, tier_expires_at=:e WHERE id=:u"),
+                      {"t": args.tier, "e": exp, "u": uid})
+            c.execute(text("UPDATE sessions SET revoked_at=:n WHERE user_id=:u AND revoked_at IS NULL"), {"n": now, "u": uid})
+            svc.audit(c, f"cli_set_tier", uid, "cli", "", f"{old}->{args.tier}")
+        print(f"{norm}：{old} → {args.tier}" + (f"，有效期至 {_ts(exp)}" if exp else ""), file=out)
+        return 0
+    if cmd == "sweep-tiers":
+        n, m = svc.sweep_expired_tiers(), svc.sweep_invites()
+        print(f"到期降级 {n} 个账号，清理邀请码 {m} 条", file=out)
         return 0
     if cmd in ("disable", "enable", "revoke-sessions", "set-owner", "unset-owner", "restore-account"):
         norm = normalize_login_name(args.login_name)
@@ -113,7 +144,8 @@ def ops_cmd(s: Settings, args, out=sys.stdout) -> int:
             if cmd == "enable":
                 c.execute(text("UPDATE users SET status='active' WHERE id=:u AND status='disabled'"), {"u": uid})
             if cmd in ("set-owner", "unset-owner"):
-                c.execute(text("UPDATE users SET tier=:t, tier_expires_at=NULL WHERE id=:u"), {"t": "owner" if cmd == "set-owner" else "free", "u": uid})
+                # 旧命令保留为别名：owner 就是现在的 full
+                c.execute(text("UPDATE users SET tier=:t, tier_expires_at=NULL WHERE id=:u"), {"t": "full" if cmd == "set-owner" else "free", "u": uid})
                 c.execute(text("UPDATE sessions SET revoked_at=:n WHERE user_id=:u AND revoked_at IS NULL"), {"n": now, "u": uid})
             svc.audit(c, f"cli_{cmd}", uid, "cli", "", "ok")
         if cmd == "restore-account" and not ops.restore_account(uid):
@@ -121,7 +153,10 @@ def ops_cmd(s: Settings, args, out=sys.stdout) -> int:
         print("完成", file=out)
         return 0
     if cmd == "invite":
-        print(svc.create_invite(args.purpose, now + args.days * 86400 if args.days else None), file=out)
+        codes = svc.create_invites(args.count, args.days)
+        for code in codes:
+            print(code, file=out)
+        print(f"（{len(codes)} 个，{args.days} 天内有效；明文只显示这一次）", file=sys.stderr)
         return 0
     if cmd == "registration":
         rt = app.state.runtime.write(registration_open=args.state == "open")
@@ -196,10 +231,19 @@ def main(argv=None, settings: Settings | None = None, out=sys.stdout) -> int:
     f.add_argument("--all", action="store_true")
     f.add_argument("--limit", type=int, default=50)
     sub.add_parser("stats")
-    ca = sub.add_parser("create-account"); ca.add_argument("login_name"); ca.add_argument("--owner", action="store_true"); ca.add_argument("--password")
+    ca = sub.add_parser("create-account"); ca.add_argument("login_name")
+    ca.add_argument("--full", action="store_true", help="完整版")
+    ca.add_argument("--admin", action="store_true", help="管理员（全站唯一）")
+    ca.add_argument("--owner", action="store_true", help="--full 的旧写法")
+    ca.add_argument("--password")
+    st = sub.add_parser("set-tier"); st.add_argument("login_name"); st.add_argument("tier", choices=["free", "full", "admin"])
+    st.add_argument("--months", type=int, default=0, help="完整版有效期（自然月，0=永久）")
+    sub.add_parser("sweep-tiers")
     for name in ("disable", "enable", "revoke-sessions", "set-owner", "unset-owner", "restore-account"):
         sub.add_parser(name).add_argument("login_name")
-    iv = sub.add_parser("invite"); iv.add_argument("--purpose", default=""); iv.add_argument("--days", type=int, default=0)
+    iv = sub.add_parser("invite")
+    iv.add_argument("--count", type=int, default=1, help="生成个数（1–50，默认 1）")
+    iv.add_argument("--days", type=int, default=1, help="有效期天数（默认 1）")
     rg = sub.add_parser("registration"); rg.add_argument("state", choices=["open", "close"])
     ir = sub.add_parser("invite-required"); ir.add_argument("state", choices=["on", "off"])
     au = sub.add_parser("audit"); au.add_argument("--limit", type=int, default=50)

@@ -13,6 +13,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -32,6 +33,51 @@ _AV = re.compile(r"/video/av(\d+)", re.I)
 _DY = re.compile(r"(?:/video/|modal_id=|/note/)(\d{6,})")
 _BILI_HOST = re.compile(r"(bilibili\.com|b23\.tv)", re.I)
 _DY_HOST = re.compile(r"(douyin\.com|iesdouyin\.com)", re.I)
+_URL = re.compile(r"https?://[^\s\"'<>]+", re.I)
+_PAGE = re.compile(r"[?&]p=(\d{1,4})", re.I)
+
+# 短链展开的白名单：只有这些主机可以被服务端主动 GET。
+# b23.tv / bili2233.cn 是分享短链；跳转目标是 bilibili.com 系列。
+_SHORT_HOSTS = frozenset({"b23.tv", "bili2233.cn"})
+_REDIRECT_HOSTS = frozenset({"b23.tv", "bili2233.cn", "bilibili.com", "www.bilibili.com", "m.bilibili.com"})
+
+
+def _host_of(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower()
+
+
+def _page_of(text: str) -> int:
+    m = _PAGE.search(text or "")
+    return int(m.group(1)) if m else 1
+
+
+def expand_short_link(url: str, client_factory, *, timeout: float = 10.0, max_hops: int = 5) -> str:
+    """跟随 302 展开 b23.tv / bili2233.cn 短链，带 SSRF 防护。
+
+    限制：只允许白名单主机、只允许 http/https 且端口是 80/443、最多 5 跳；
+    任何一跳跳到白名单外都中止（不会去请求内网地址）。失败抛 ResolveError。
+    """
+    cur = url
+    for _ in range(max_hops + 1):
+        parts = urlsplit(cur)
+        host = (parts.hostname or "").lower()
+        if parts.scheme not in ("http", "https") or host not in _REDIRECT_HOSTS:
+            raise ResolveError("unsupported_link", "短链跳转到了不受信任的地址", 400)
+        if parts.port not in (None, 80, 443):
+            raise ResolveError("unsupported_link", "短链跳转到了不受信任的地址", 400)
+        if host not in _SHORT_HOSTS:
+            return cur  # 已经展开到真地址，不再真的去抓视频页
+        with client_factory(timeout=timeout, follow_redirects=False,
+                            headers={"User-Agent": _UA}) as client:
+            resp = client.get(cur)
+        loc = resp.headers.get("location")
+        if resp.status_code in (301, 302, 303, 307, 308) and loc:
+            cur = urljoin(cur, loc)
+            continue
+        if resp.status_code >= 400:
+            raise ResolveError("resolve_failed", f"短链展开失败：{resp.status_code}", 502)
+        return str(resp.url)
+    raise ResolveError("unsupported_link", "短链跳转次数过多", 400)
 
 
 class ResolveError(Exception):
@@ -122,8 +168,24 @@ class MediaResolver:
             return None
 
     # ---------- 解析 ----------
+    def expand(self, text: str) -> str:
+        """分享文案里如果带 b23.tv 短链，先展开成真地址；其他情况原样返回。"""
+        m = _URL.search(text or "")
+        if not m:
+            return text
+        raw = m.group(0).rstrip(".,;)]}")
+        if _host_of(raw) not in _SHORT_HOSTS:
+            return text
+        try:
+            final = expand_short_link(raw, self._client_factory)
+        except (ResolveError, httpx.HTTPError) as exc:
+            log.warning("短链展开失败：%s", getattr(exc, "code", type(exc).__name__))
+            return text  # 展开失败不致命：交给 sniff 报 unsupported_link
+        return text.replace(m.group(0), final, 1)
+
     def resolve(self, text: str, *, media_type: str = "video", user_id: str | None = None) -> ResolvedMedia:
-        found = self.sniff(text)
+        expanded = self.expand(text)
+        found = self.sniff(expanded)
         if found is None:
             raise ResolveError("unsupported_link", "识别不出作品链接；请传单条作品链接或 BV 号", 400)
         platform, vid = found
@@ -133,7 +195,9 @@ class MediaResolver:
                 "抖音直链需要授权 Cookie 与浏览器桥接；请在手机端提取，或先在网页端完成抖音授权",
                 503,
             )
-        return self._resolve_bilibili(vid, media_type=media_type, user_id=user_id)
+        page = _page_of(expanded)
+        return self._resolve_bilibili(vid, media_type=media_type,
+                                      target_page=page if page > 1 else None, user_id=user_id)
 
     def resolve_target(self, text: str, *, media_type: str, page: int,
                        user_id: str | None = None) -> ResolvedMedia:

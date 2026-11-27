@@ -1,8 +1,9 @@
-"""权限矩阵：匿名 / free / owner × 全部路由。
+"""权限矩阵：匿名 / free / full / admin × 全部路由。
 
 这组测试是"重型功能只在服务端判权"的证据。规矩很简单：
-- 每条路由要么登记在 FREE_ROUTES，要么挂 owner 级依赖，不存在第三种；
-- owner 路由：匿名 401、free 403、owner 至少能过鉴权；
+- 每条路由要么登记在 FREE_ROUTES，要么挂完整版级依赖，不存在第三种；
+- 完整版路由：匿名 401、free 403、full 与 admin 至少能过鉴权；
+- 管理员路由：匿名 401、free/full 403、admin 能过；
 - 免费路由不能因为等级把 free 用户挡在外面（除非业务自己要求登录）。
 """
 from __future__ import annotations
@@ -16,6 +17,8 @@ from conftest import hdr, make_owner, register
 from getmedia.tiers import FREE_ROUTES, _tiers_of, unprotected_routes, whitelisted_but_missing
 
 _PARAM = re.compile(r"\{[^}]+\}")
+FULL = {"full", "admin"}   # 完整版能力（含管理员）
+ADMIN = {"admin"}          # 仅管理员
 
 
 def _routes(app):
@@ -52,10 +55,16 @@ def test_every_free_route_actually_exists(env):
     assert missing == []
 
 
-def test_owner_routes_are_not_whitelisted(env):
-    owner = {(m, p) for m, p, r in _routes(env.app) if "owner" in (_tiers_of(r) or set())}
-    assert owner, "至少应该有一条 owner 路由"
-    assert not (owner & FREE_ROUTES), f"owner 路由被错误放进了免费白名单：{owner & FREE_ROUTES}"
+def test_full_routes_are_not_whitelisted(env):
+    owner = {(m, p) for m, p, r in _routes(env.app) if (_tiers_of(r) or set()) & FULL}
+    assert owner, "至少应该有一条完整版路由"
+    assert not (owner & FREE_ROUTES), f"完整版路由被错误放进了免费白名单：{owner & FREE_ROUTES}"
+
+
+def test_admin_routes_exist_and_are_not_free(env):
+    admin = {(m, p) for m, p, r in _routes(env.app) if (_tiers_of(r) or set()) == ADMIN}
+    assert admin, "至少应该有一条管理员路由"
+    assert not (admin & FREE_ROUTES)
 
 
 def test_creator_batch_is_owner_only(open_reg):
@@ -67,19 +76,20 @@ def test_creator_batch_is_owner_only(open_reg):
     assert r.json()["code"] == "forbidden_tier"
 
 
-@pytest.mark.parametrize("role", ["anonymous", "free", "owner"])
-def test_matrix_owner_routes(open_reg, role):
-    """三条身份走一遍全部 owner 路由，只验证鉴权层，不关心业务结果。"""
+@pytest.mark.parametrize("role", ["anonymous", "free", "full"])
+def test_matrix_full_routes(open_reg, role):
+    """三条身份走一遍全部完整版路由，只验证鉴权层，不关心业务结果。"""
     token = None
     if role == "free":
         token = register(open_reg).json()["session"]["token"]
-    elif role == "owner":
+    elif role == "full":
         token = make_owner(open_reg, name="boss")
 
-    owner_routes = [(m, p) for m, p, r in _routes(open_reg.app) if "owner" in (_tiers_of(r) or set())]
-    assert owner_routes
+    full_routes = [(m, p) for m, p, r in _routes(open_reg.app) if (_tiers_of(r) or set()) & FULL
+                   and not (_tiers_of(r) or set()) == ADMIN]
+    assert full_routes
 
-    for method, path in owner_routes:
+    for method, path in full_routes:
         r = _call(open_reg, method, path, token)
         if role == "anonymous":
             assert r.status_code == 401, f"{method} {path} 匿名应 401，实际 {r.status_code}"
@@ -87,7 +97,26 @@ def test_matrix_owner_routes(open_reg, role):
             assert r.status_code == 403, f"{method} {path} free 应 403，实际 {r.status_code}"
             assert r.json()["code"] == "forbidden_tier"
         else:
-            assert r.status_code not in (401, 403), f"{method} {path} owner 被挡：{r.status_code}"
+            assert r.status_code not in (401, 403), f"{method} {path} full 被挡：{r.status_code}"
+
+
+@pytest.mark.parametrize("role", ["anonymous", "free", "full"])
+def test_matrix_admin_routes(open_reg, role):
+    """管理员路由：匿名 401、free/full 403。admin 的行为由 test_admin_api 覆盖。"""
+    token = None
+    if role == "free":
+        token = register(open_reg).json()["session"]["token"]
+    elif role == "full":
+        token = make_owner(open_reg, name="boss")
+
+    admin_routes = [(m, p) for m, p, r in _routes(open_reg.app) if (_tiers_of(r) or set()) == ADMIN]
+    assert admin_routes
+    for method, path in admin_routes:
+        r = _call(open_reg, method, path, token)
+        if role == "anonymous":
+            assert r.status_code == 401, f"{method} {path} 匿名应 401，实际 {r.status_code}"
+        else:
+            assert r.status_code == 403, f"{method} {path} {role} 应 403，实际 {r.status_code}"
 
 
 def test_free_routes_usable_by_free_account(open_reg):

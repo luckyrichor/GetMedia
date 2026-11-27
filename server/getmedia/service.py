@@ -17,7 +17,9 @@ from .names import login_name_problem, normalize_login_name, password_problem
 from .runtime import RuntimeStore
 from .security import (PasswordHasher, invite_hash, new_id, new_recovery_code, new_token, recovery_hmac,
                        token_hash)
+from .tiers import TIER_ADMIN, TIER_FREE, TIER_FULL
 
+import calendar
 import hmac as _hmac
 from datetime import datetime, timedelta, timezone
 
@@ -25,6 +27,8 @@ log = logging.getLogger("getmedia.service")
 
 INVALID_CREDENTIALS = ApiError(401, "invalid_credentials", "登录名或密码不正确")
 _TOUCH_AFTER = 60  # 秒；会话"最近使用"的写入节流
+_CN = timezone(timedelta(hours=8))  # 自然月按北京时间算（无夏令时）
+FULL_MONTHS = 6  # 邀请码 / 管理员授予"完整版"的默认时长
 
 
 @dataclass(frozen=True)
@@ -42,7 +46,16 @@ def stat_day(now: int) -> str:
 
 
 def effective_tier(tier: str, expires_at: int | None, now: int) -> str:
-    return "free" if expires_at is not None and expires_at <= now else tier
+    return TIER_FREE if expires_at is not None and expires_at <= now else tier
+
+
+def add_months(ts: int, months: int) -> int:
+    """按北京时间加自然月；日号超出目标月天数时收敛到月末（8-31 +6 → 2-28/29）。"""
+    dt = datetime.fromtimestamp(ts, _CN)
+    y = dt.year + (dt.month - 1 + months) // 12
+    m = (dt.month - 1 + months) % 12 + 1
+    d = min(dt.day, calendar.monthrange(y, m)[1])
+    return int(dt.replace(year=y, month=m, day=d).timestamp())
 
 
 class AccountService:
@@ -156,13 +169,15 @@ class AccountService:
 
         ihash = invite_hash(self.s.secret_key, req.invite_code) if req.invite_code else None
         invite_id = None
-        if need_invite:
+        # 注册关闸时必须带码；注册开放时带了码也要校验——否则用户以为升级了其实没有
+        if need_invite or req.invite_code:
             with self.engine.begin() as c:
                 r = c.execute(text("SELECT id FROM invites WHERE code_hash=:h AND used_by IS NULL AND (expires_at IS NULL OR expires_at>:n)"),
                               {"h": ihash or "", "n": now}).first()
             if r is None:
                 raise closed_err if not rt.registration_open else ApiError(403, "invite_invalid", "邀请码无效或已使用")
             invite_id = r[0]
+        upgrade_exp = add_months(now, FULL_MONTHS) if invite_id is not None else None
 
         if not req.age_confirmed:
             raise ApiError(422, "age_not_confirmed", "需确认已年满 18 周岁")
@@ -182,9 +197,11 @@ class AccountService:
         uid, code = new_id("acct"), new_recovery_code()
         try:
             with self.engine.begin() as c:
-                c.execute(text("INSERT INTO users(id,login_name,login_name_norm,password_hash,registered_channel,registered_version,created_at) "
-                               "VALUES(:i,:n,:nn,:p,:ch,:v,:t)"),
-                          {"i": uid, "n": norm, "nn": norm, "p": pw_hash, "ch": req.client.channel, "v": req.client.app_version, "t": now})
+                c.execute(text("INSERT INTO users(id,login_name,login_name_norm,password_hash,tier,tier_expires_at,registered_channel,registered_version,created_at) "
+                               "VALUES(:i,:n,:nn,:p,:t,:e,:ch,:v,:ts)"),
+                          {"i": uid, "n": norm, "nn": norm, "p": pw_hash,
+                           "t": TIER_FULL if invite_id is not None else TIER_FREE, "e": upgrade_exp,
+                           "ch": req.client.channel, "v": req.client.app_version, "ts": now})
                 c.execute(text("INSERT INTO recovery_codes(user_id,code_hmac,rotated_at) VALUES(:u,:h,:t)"),
                           {"u": uid, "h": recovery_hmac(self.s.secret_key, code), "t": now})
                 self._insert_consent(c, uid, req.consent, now)
@@ -199,7 +216,11 @@ class AccountService:
                 self.audit(c, "register", uid, ip, path, "ok")
         except IntegrityError:
             raise ApiError(409, "name_taken", "该登录名已被使用") from None
-        return {"session": sess, "account": {"id": uid, "login_name": norm, "tier": "free"}, "recovery_code": code}
+        return {"session": sess,
+                "account": {"id": uid, "login_name": norm,
+                            "tier": TIER_FULL if invite_id is not None else TIER_FREE,
+                            "tier_expires_at": upgrade_exp},
+                "recovery_code": code}
 
     # ---------- 登录 ----------
     def login(self, req, ip: str, path: str = "/account/login") -> dict:
@@ -215,13 +236,20 @@ class AccountService:
         with self.engine.begin() as c:
             u = c.execute(text("SELECT id,password_hash,status,tier,tier_expires_at,recovery_confirmed_at FROM users WHERE login_name_norm=:n"),
                           {"n": norm}).first()
-        usable = u is not None and u[2] == "active"
-        valid = self.hasher.verify(u[1] if usable else self.hasher.fake_hash, req.password)  # 恒定做一次哈希
-        if not (usable and valid):
+        found = u is not None
+        valid = self.hasher.verify(u[1] if found else self.hasher.fake_hash, req.password)  # 恒定做一次哈希
+        if not (found and valid):
             with self.engine.begin() as c:
                 ratelimit.hit(c, fail_key, flimit, fwin, self.now())
                 self.audit(c, "login_fail", u[0] if u else None, ip, path, "bad_credentials")
             raise INVALID_CREDENTIALS
+        if u[2] != "active":
+            # 只有密码校验通过才会走到这里：对知道密码的人说明原因，不知道密码的人探不到账号状态
+            with self.engine.begin() as c:
+                self.audit(c, "login_blocked", u[0], ip, path, u[2])
+            if u[2] == "disabled":
+                raise ApiError(403, "account_disabled", "该账号已被停用")
+            raise ApiError(403, "account_pending_deletion", "该账号正在注销中")
 
         now = self.now()
         cur_legal = self.legal.current()
@@ -229,8 +257,10 @@ class AccountService:
             sess = self._create_session(c, u[0], req.client, ip, now, req.evict_device_id)
             required, versions = self._consent_state(c, u[0], cur_legal)
             self.audit(c, "login_ok", u[0], ip, path, req.client.channel)
+        effective = effective_tier(u[3], u[4], now)
         return {"session": sess,
-                "account": {"id": u[0], "login_name": norm, "tier": effective_tier(u[3], u[4], now)},
+                "account": {"id": u[0], "login_name": norm, "tier": effective,
+                            "tier_expires_at": u[4] if effective != TIER_FREE else None},
                 "consent_required": required, "legal_versions": versions,
                 "recovery_confirmed": u[5] is not None}
 
@@ -353,11 +383,61 @@ class AccountService:
             if n and not seen_user:
                 c.execute(text("INSERT INTO daily_stats(day,active) VALUES(:d,1) ON CONFLICT(day) DO UPDATE SET active=active+1"), {"d": day})
 
-    # ---------- 邀请码（管理 CLI 在 WP4 调用） ----------
-    def create_invite(self, purpose: str = "", expires_at: int | None = None) -> str:
+    # ---------- 邀请码：只有一种用途，把 free 升级为 full（6 个自然月） ----------
+    def create_invites(self, count: int = 1, days: int = 1) -> list[str]:
+        """批量生成升级券（默认 1 个、1 天有效）。明文只在返回里出现一次，库里只有 HMAC。"""
         from .security import new_invite_code
-        code = new_invite_code()
+        now = self.now()
+        codes = [new_invite_code() for _ in range(max(1, min(int(count), 50)))]
+        exp = now + max(1, int(days)) * 86400
         with self.engine.begin() as c:
-            c.execute(text("INSERT INTO invites(code_hash,purpose,created_at,expires_at) VALUES(:h,:p,:n,:e)"),
-                      {"h": invite_hash(self.s.secret_key, code), "p": purpose[:64], "n": self.now(), "e": expires_at})
-        return code
+            for code in codes:
+                c.execute(text("INSERT INTO invites(code_hash,purpose,created_at,expires_at) VALUES(:h,:p,:n,:e)"),
+                          {"h": invite_hash(self.s.secret_key, code), "p": TIER_FULL, "n": now, "e": exp})
+        return codes
+
+    def redeem_invite(self, ctx: AuthCtx, code: str, ip: str, path: str = "/account/redeem-invite") -> dict:
+        """已登录账号兑换升级券；一码一人，已到期/已升级的按现有到期日叠加。"""
+        self._hit(f"invite:acct:{ctx.user_id}", (20, 3600))
+        if ctx.tier == TIER_ADMIN:
+            raise ApiError(409, "already_admin", "管理员账号无需兑换邀请码")
+        now = self.now()
+        ih = invite_hash(self.s.secret_key, code.strip())
+        with self.engine.begin() as c:
+            row = c.execute(text("SELECT id FROM invites WHERE code_hash=:h AND used_by IS NULL "
+                                 "AND (expires_at IS NULL OR expires_at>:n)"), {"h": ih, "n": now}).first()
+        if row is None:
+            self._audit_own("invite_redeem", ctx.user_id, ip, path, "invalid")
+            raise ApiError(404, "invite_invalid", "邀请码无效或已使用")
+        with self.engine.begin() as c:
+            u = c.execute(text("SELECT tier,tier_expires_at FROM users WHERE id=:u"), {"u": ctx.user_id}).first()
+            base = u[1] if (u[0] == TIER_FULL and u[1] and u[1] > now) else now
+            exp = add_months(base, FULL_MONTHS)
+            n = c.execute(text("UPDATE invites SET used_by=:u, used_at=:t WHERE id=:i AND used_by IS NULL"),
+                          {"u": ctx.user_id, "t": now, "i": row[0]}).rowcount
+            if n != 1:  # 并发抢用：另一个请求先消费掉了
+                raise ApiError(409, "invite_used", "邀请码已被使用")
+            c.execute(text("UPDATE users SET tier=:f, tier_expires_at=:e WHERE id=:u"),
+                      {"f": TIER_FULL, "e": exp, "u": ctx.user_id})
+            self.audit(c, "invite_redeem", ctx.user_id, ip, path, "ok")
+        return {"tier": TIER_FULL, "tier_expires_at": exp}
+
+    def sweep_expired_tiers(self) -> int:
+        """把已过期的 full 刷成 free（admin 不动）。读路径本来就会即时降级，这里只是让库里账实一致。"""
+        now = self.now()
+        with self.engine.begin() as c:
+            rows = c.execute(text("SELECT id,tier_expires_at FROM users WHERE tier=:f AND tier_expires_at IS NOT NULL "
+                                  "AND tier_expires_at<=:n"), {"f": TIER_FULL, "n": now}).all()
+            for uid, exp in rows:
+                c.execute(text("UPDATE users SET tier='free', tier_expires_at=NULL WHERE id=:u AND tier='full'"),
+                          {"u": uid})
+                self.audit(c, "tier_expired", uid, "ops", "", str(exp))
+        return len(rows)
+
+    def sweep_invites(self) -> int:
+        """过期 1 天/已使用 1 天以上的邀请码物理删除（不保留使用记录）。"""
+        cut = self.now() - 86400
+        with self.engine.begin() as c:
+            return c.execute(text(
+                "DELETE FROM invites WHERE (used_by IS NULL AND expires_at IS NOT NULL AND expires_at<:c) "
+                "OR (used_by IS NOT NULL AND used_at IS NOT NULL AND used_at<:c)"), {"c": cut}).rowcount

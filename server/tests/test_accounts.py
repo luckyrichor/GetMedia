@@ -22,28 +22,28 @@ def test_registration_closed_by_default(env):
 
 
 def test_closed_registration_hides_name_taken(env):
-    code = env.svc.create_invite()
+    code = env.svc.create_invites()[0]
     assert register(env, invite_code=code).status_code == 201
     r = register(env, name="alice")  # 已存在，且注册关闭、无邀请码
     assert r.json()["code"] == "registration_closed"
 
 
 def test_invite_single_use_and_open_with_invite_required(env):
-    code = env.svc.create_invite("t")
+    code = env.svc.create_invites()[0]
     assert register(env, name="bob1", invite_code=code).status_code == 201
     r = register(env, name="bob2", invite_code=code)
     assert r.status_code == 403
     env.app.state.runtime.write(registration_open=True, invite_required=True)
     r = register(env, name="bob3", invite_code="WRONG-WRONG-WRONG")
     assert r.json()["code"] == "invite_invalid"
-    assert register(env, name="bob4", invite_code=env.svc.create_invite()).status_code == 201
+    assert register(env, name="bob4", invite_code=env.svc.create_invites()[0]).status_code == 201
 
 
 def test_invite_not_consumed_when_name_taken(open_reg):
     env = open_reg
     register(env, name="carol")
     env.app.state.runtime.write(registration_open=False)
-    code = env.svc.create_invite()
+    code = env.svc.create_invites()[0]
     assert register(env, name="carol", invite_code=code).status_code == 409
     assert register(env, name="carol2", invite_code=code).status_code == 201
 
@@ -110,9 +110,22 @@ def test_login_always_hashes_once(open_reg, monkeypatch):
 def test_deactivated_user_cannot_login_and_session_dies(open_reg):
     j = register(open_reg).json()
     with open_reg.app.state.engine.begin() as c:
-        c.exec_driver_sql("UPDATE users SET status='deactivated'")
-    assert login(open_reg).status_code == 401
+        c.exec_driver_sql("UPDATE users SET status='disabled'")
+    r = login(open_reg)
+    # 密码正确但账号被停用：明确告诉本人原因（不知道密码的人仍只会拿到 401）
+    assert r.status_code == 403 and r.json()["code"] == "account_disabled"
+    assert "停用" in r.json()["detail"]
     assert open_reg.client.get("/account/me", headers=hdr(j["session"]["token"])).status_code == 401
+    # 密码错时不泄露状态
+    assert login(open_reg, password="wrong password 1").status_code == 401
+
+
+def test_disabled_user_with_bad_password_gets_generic_error(open_reg):
+    register(open_reg)
+    with open_reg.app.state.engine.begin() as c:
+        c.exec_driver_sql("UPDATE users SET status='disabled'")
+    r = login(open_reg, password="wrong password 1")
+    assert r.status_code == 401 and r.json()["code"] == "invalid_credentials"
 
 
 def test_logout_revokes_immediately(open_reg):
@@ -279,7 +292,7 @@ def test_web_cookie_attributes_and_no_token_in_body(open_reg):
     assert "token" not in r.json()["session"]
     sc = r.headers["set-cookie"]
     assert sc.startswith("__Secure-gm_session=")
-    for part in ("Secure", "HttpOnly", "SameSite=strict", "Path=/getmedia/api/"):
+    for part in ("Secure", "HttpOnly", "SameSite=strict", "Path=/getmedia/"):
         assert part.lower() in sc.lower(), part
 
 

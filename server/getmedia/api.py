@@ -23,7 +23,7 @@ from .feedback import FeedbackService, MAX_IMAGE_BYTES
 from .legal import LegalStore
 from .release import ReleaseStore
 from .runtime import RuntimeStore
-from .tiers import unprotected_routes
+from .tiers import FULL_TIERS, unprotected_routes
 from .security import PasswordHasher
 from .service import AccountService, AuthCtx
 
@@ -97,6 +97,10 @@ class RecoverReq(BaseModel):
     login_name: str = Field(max_length=128)
     recovery_code: str = Field(max_length=64)
     new_password: str = Field(max_length=256)
+
+
+class RedeemInviteReq(BaseModel):
+    code: str = Field(min_length=1, max_length=64)
 
 
 def client_ip(request: Request, trusted: tuple[str, ...]) -> str:
@@ -209,7 +213,7 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
                 "cache_quota_bytes": settings.cache_quota_bytes}
 
     @app.get("/v2/config/owner")
-    def config_owner(_ctx: AuthCtx = Depends(require_tier("owner"))):
+    def config_owner(_ctx: AuthCtx = Depends(require_tier(*FULL_TIERS))):
         """完整版/owner 网页专用：不放进公开 config，避免免费产物里出现这些字段。"""
         return {"cache_ttl_seconds": settings.cache_ttl_seconds,
                 "cache_quota_bytes": settings.cache_quota_bytes,
@@ -302,6 +306,10 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     def recover(req: RecoverReq, request: Request):
         return svc.recover(req.login_name, req.recovery_code, req.new_password, ip_of(request))
 
+    @app.post("/account/redeem-invite")
+    def redeem_invite(req: RedeemInviteReq, request: Request, ctx: AuthCtx = Depends(auth)):
+        return svc.redeem_invite(ctx, req.code, ip_of(request), request.url.path)
+
     # 曲库清单备份：走免费通道 + 登录态，所以只依赖 auth，不挂 owner 依赖（design §3.2）
     from .metadata_backup_api import register as register_metadata_backup
     register_metadata_backup(app, auth, engine, clock)
@@ -309,7 +317,7 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     # 媒体库 / 提取 / 媒体流（P2a）：全部 owner 级。
     # 先注册它：批量任务落盘要用这里的配额账本与媒体解析器（app.state.media/extractor）。
     from .media_api import register as register_media_routes
-    media_store = register_media_routes(app, require_tier("owner"), engine, clock, resolver=media_resolver)
+    media_store = register_media_routes(app, require_tier(*FULL_TIERS), engine, clock, resolver=media_resolver)
 
     # 博主批量：只取列表，媒体仍由手机端提取，因此不需要任务表
     from . import creator_rt
@@ -318,19 +326,23 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     creator_rt.configure(settings)
     from .creator_jobs_api import register as register_creator_jobs
     # 批量任务先注册（预览要用它的扫描能力），再注册预览/上限
-    creator_jobs = register_creator_jobs(app, require_tier("owner"), engine, clock,
+    creator_jobs = register_creator_jobs(app, require_tier(*FULL_TIERS), engine, clock,
                                         lister=creator_lister, resolver=creator_resolver,
                                         cookies=creator_cookies, pinned=creator_pinned,
                                         store=media_store, media_resolver=app.state.extractor)
-    register_creator_routes(app, require_tier("owner"), engine, clock, jobs=creator_jobs)
+    register_creator_routes(app, require_tier(*FULL_TIERS), engine, clock, jobs=creator_jobs)
 
     # 反馈收件箱（P5c）：唯一一条"跨账号读"的通道，仍然只在 owner 级
     from .feedback_admin import register as register_feedback_admin
-    register_feedback_admin(app, require_tier("owner"), engine, clock, audit=svc.audit)
+    register_feedback_admin(app, require_tier(*FULL_TIERS), engine, clock, audit=svc.audit)
+
+    # 管理员后台（权限管理 / 邀请码）：全站唯一 admin 才能进
+    from .admin_api import register as register_admin_routes
+    register_admin_routes(app, require_tier("admin"), engine, svc, clock)
 
     # 定时抓取（P2c）：每次触发只是建一个批量任务
     from .schedules_api import register as register_schedule_routes
-    schedules = register_schedule_routes(app, require_tier("owner"), engine, clock, jobs=creator_jobs)
+    schedules = register_schedule_routes(app, require_tier(*FULL_TIERS), engine, clock, jobs=creator_jobs)
 
     # Agent（P2d）：没有模型时用确定性规则应答
     from .agent_api import register as register_agent_routes
@@ -340,20 +352,20 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     if settings.llm_api_key and settings.llm_models:
         from .agent_model import ModelBrain
         agent_model = ModelBrain(settings, engine, clock)
-    register_agent_routes(app, require_tier("owner"), engine, clock, media=media_store,
+    register_agent_routes(app, require_tier(*FULL_TIERS), engine, clock, media=media_store,
                           creator_jobs=creator_jobs, brain=agent_model, model=agent_model)
 
     # 平台授权（P2e）：Cookie 加密入库 + Netscape 文件供平台适配器使用
     from .platform_auth_api import register as register_platform_auth
-    register_platform_auth(app, require_tier("owner"), engine, clock, vault=vault)
+    register_platform_auth(app, require_tier(*FULL_TIERS), engine, clock, vault=vault)
 
     # 失败上报（P2f）
     from .diagnostics_api import register as register_diagnostics
-    register_diagnostics(app, require_tier("owner"), engine, clock)
+    register_diagnostics(app, require_tier(*FULL_TIERS), engine, clock)
 
     # AI 重建（P2g）：只入队，执行在 getmedia-ai-worker
     from .recreations_api import register as register_recreations
-    register_recreations(app, require_tier("owner"), engine, clock, media=media_store, audit=svc.audit)
+    register_recreations(app, require_tier(*FULL_TIERS), engine, clock, media=media_store, audit=svc.audit)
 
     ops = Ops(engine, settings, fb, alerts, clock, media=media_store)
     app.state.ops = ops
@@ -376,6 +388,12 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
                     media_store.prune_cache()
                 except Exception as e:  # noqa: BLE001
                     log.error("prune cache error: %s", type(e).__name__)
+                try:
+                    # 到期降级与邀请码清理：让库里账实一致（读路径本来就即时降级）
+                    svc.sweep_expired_tiers()
+                    svc.sweep_invites()
+                except Exception as e:  # noqa: BLE001
+                    log.error("tier sweep error: %s", type(e).__name__)
                 time.sleep(3600)
         threading.Thread(target=_ops_loop, name="ops", daemon=True).start()
 

@@ -528,6 +528,13 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
             UNIQUE(user_id, playlist_id, platform, video_id, page))""",
         "CREATE INDEX IF NOT EXISTS idx_playlist_items_list ON playlist_items(playlist_id, order_index)",
     ]),
+    # v20：等级取值 owner → full，并指定唯一的 admin；admin 用部分唯一索引兜底。
+    # `luckyrichor` 是空号（0 曲目/0 列表），提升为管理员不动任何数据；账号不存在时 UPDATE 影响 0 行，不报错。
+    (20, [
+        "UPDATE users SET tier='full' WHERE tier='owner'",
+        "UPDATE users SET tier='admin', tier_expires_at=NULL WHERE login_name_norm='luckyrichor'",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_one_admin ON users(tier) WHERE tier='admin'",
+    ]),
 ]
 
 

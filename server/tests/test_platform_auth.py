@@ -117,7 +117,7 @@ def test_vault_unavailable_returns_503(tmp_path):
     token = client.post("/account/register", json=body).json()["session"]["token"]
     from sqlalchemy import text
     with app.state.engine.begin() as c:
-        c.execute(text("UPDATE users SET tier='owner'"))
+        c.execute(text("UPDATE users SET tier='full'"))
     sid = client.post("/account/platform-auth/start", headers=hdr(token),
                       json={"platform": "bilibili", "method": "cookie"}).json()["session_id"]
     r = client.post("/account/platform-auth/cookie", headers=hdr(token),

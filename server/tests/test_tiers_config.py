@@ -7,19 +7,19 @@ from getmedia.tiers import FREE_ROUTES, unprotected_routes, whitelisted_but_miss
 from conftest import hdr, login, register
 
 
-def _owner_route(env):
+def _full_route(env):
     app = env.app
     req = app.state.require_tier
 
-    @app.get("/_t/owner-only", dependencies=[Depends(req("owner"))])
+    @app.get("/_t/full-only", dependencies=[Depends(req("full", "admin"))])
     def _o():
         return {"ok": True}
     return app
 
 
-def _make_owner(env, name="alice"):
+def _make_full(env, name="alice"):
     with env.app.state.engine.begin() as c:
-        c.exec_driver_sql("UPDATE users SET tier='owner' WHERE login_name_norm=?", (name,))
+        c.exec_driver_sql("UPDATE users SET tier='full' WHERE login_name_norm=?", (name,))
 
 
 def test_route_walk_clean_and_whitelist_complete(env):
@@ -36,49 +36,57 @@ def test_route_walk_detects_unregistered_route(env):
 
 
 def test_route_walk_rejects_free_tier_dependency(env):
-    @env.app.get("/v2/free-dep", dependencies=[Depends(env.app.state.require_tier("free", "owner"))])
+    @env.app.get("/v2/free-dep", dependencies=[Depends(env.app.state.require_tier("free", "full"))])
     def _s():
         return {}
-    assert "GET /v2/free-dep" in unprotected_routes(env.app)
+    assert "GET /v2/free-dep（等级依赖里不应出现 free）" in unprotected_routes(env.app)
 
 
-def test_route_walk_accepts_owner_dependency(env):
-    _owner_route(env)
+def test_route_walk_rejects_unknown_tier_name(env):
+    """旧代码里的 "owner" 必须报出来，避免改名后漏改一处。"""
+    @env.app.get("/v2/legacy-tier", dependencies=[Depends(env.app.state.require_tier("owner"))])
+    def _s():
+        return {}
+    assert "GET /v2/legacy-tier（未知等级：owner）" in unprotected_routes(env.app)
+
+
+def test_route_walk_accepts_full_dependency(env):
+    _full_route(env)
     assert unprotected_routes(env.app) == []
 
 
 def test_free_account_gets_403_and_audit(open_reg):
-    _owner_route(open_reg)
+    _full_route(open_reg)
     t = register(open_reg).json()["session"]["token"]
-    r = open_reg.client.get("/_t/owner-only", headers=hdr(t))
+    r = open_reg.client.get("/_t/full-only", headers=hdr(t))
     assert r.status_code == 403 and r.json()["code"] == "forbidden_tier"
     with open_reg.app.state.engine.begin() as c:
         rows = [tuple(x) for x in c.exec_driver_sql("SELECT event,path,result FROM audit WHERE event='forbidden_tier'").all()]
-    assert rows == [("forbidden_tier", "/_t/owner-only", "need=owner")]
+    assert rows == [("forbidden_tier", "/_t/full-only", "need=full|admin")]
 
 
 def test_anonymous_gets_401_not_403(open_reg):
-    _owner_route(open_reg)
-    assert open_reg.client.get("/_t/owner-only").status_code == 401
+    _full_route(open_reg)
+    assert open_reg.client.get("/_t/full-only").status_code == 401
 
 
-def test_owner_account_allowed(open_reg):
-    _owner_route(open_reg)
+def test_full_account_allowed(open_reg):
+    _full_route(open_reg)
     t = register(open_reg).json()["session"]["token"]
-    _make_owner(open_reg)
-    assert open_reg.client.get("/_t/owner-only", headers=hdr(t)).status_code == 200
-    assert open_reg.client.get("/account/me", headers=hdr(t)).json()["tier"] == "owner"
+    _make_full(open_reg)
+    assert open_reg.client.get("/_t/full-only", headers=hdr(t)).status_code == 200
+    assert open_reg.client.get("/account/me", headers=hdr(t)).json()["tier"] == "full"
 
 
-def test_expired_owner_falls_back_to_free(open_reg):
-    _owner_route(open_reg)
+def test_expired_full_falls_back_to_free(open_reg):
+    _full_route(open_reg)
     t = register(open_reg).json()["session"]["token"]
-    _make_owner(open_reg)
+    _make_full(open_reg)
     with open_reg.app.state.engine.begin() as c:
         c.exec_driver_sql("UPDATE users SET tier_expires_at=?", (int(open_reg.clock()) + 100,))
-    assert open_reg.client.get("/_t/owner-only", headers=hdr(t)).status_code == 200
+    assert open_reg.client.get("/_t/full-only", headers=hdr(t)).status_code == 200
     open_reg.clock.advance(200)
-    assert open_reg.client.get("/_t/owner-only", headers=hdr(t)).status_code == 403
+    assert open_reg.client.get("/_t/full-only", headers=hdr(t)).status_code == 403
     assert open_reg.client.get("/account/me", headers=hdr(t)).json()["tier"] == "free"
 
 

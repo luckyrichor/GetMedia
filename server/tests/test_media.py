@@ -473,7 +473,8 @@ def test_targeted_mismatch_leaves_original_row_and_disk_untouched(menv, video, p
     assert not list((menv.tmp / "cache").glob("*"))
 
 
-def test_legacy_owner_submit_with_p3_query_still_uses_default_cid(tmp_path, monkeypatch):
+def test_submit_with_p3_query_uses_that_page(tmp_path, monkeypatch):
+    """带 ?p=3 的单条提取：下的是第 3 集（以前一律取第 1 集）。"""
     import httpx
     from getmedia.extractor import API_PLAYURL, API_VIEW, MediaResolver
 
@@ -500,8 +501,8 @@ def test_legacy_owner_submit_with_p3_query_still_uses_default_cid(tmp_path, monk
         reply = extract(env, text=P3_URL)
         assert reply.status_code == 202
     tracks = env.client.get("/v2/tracks", headers=hdr(env.token)).json()["items"]
-    assert len(tracks) == 1 and tracks[0]["video_id"] == P3_BV and tracks[0]["page"] == 1
-    assert cids == ["101", "101"]
+    assert len(tracks) == 1 and tracks[0]["video_id"] == P3_BV and tracks[0]["page"] == 3
+    assert cids == ["303", "303"]
     targeted = resolver.resolve_target(P3_URL, media_type="audio", page=3)
     assert (targeted.video_id, targeted.page, targeted.duration_sec, cids[-1]) == (P3_BV, 3, 37, "303")
 

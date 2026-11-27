@@ -36,7 +36,9 @@ def test_delete_requires_password_and_revokes(u):
     r = env.client.request("DELETE", "/account/me", json={"password": PW}, headers=hdr(tok))
     assert r.status_code == 200 and r.json()["delete_at"] == int(env.clock()) + 7 * 86400
     assert env.client.get("/account/me", headers=hdr(tok)).status_code == 401
-    assert login(env).status_code == 401
+    # 冷静期内：密码对但账号在注销中，明确告知（不知道密码的人仍只拿到 401）
+    r = login(env)
+    assert r.status_code == 403 and r.json()["code"] == "account_pending_deletion"
 
 
 def test_cooldown_then_physical_delete_with_ledger(u):
@@ -172,18 +174,20 @@ def test_cli_accounts_owner_invite_registration(open_reg):
     env = open_reg
     rc, out = run(env, "create-account", "boss", "--owner", "--password", PW)
     assert rc == 0 and "恢复码" in out
-    assert login(env, "boss").json()["account"]["tier"] == "owner"
+    assert login(env, "boss").json()["account"]["tier"] == "full"
     tok = login(env, "boss").json()["session"]["token"]
     assert run(env, "disable", "boss")[0] == 0
     assert env.client.get("/account/me", headers=hdr(tok)).status_code == 401
-    assert login(env, "boss").status_code == 401
+    r = login(env, "boss")
+    assert r.status_code == 403 and r.json()["code"] == "account_disabled"
     run(env, "enable", "boss")
     assert login(env, "boss").status_code == 200
     run(env, "unset-owner", "boss")
     assert login(env, "boss").json()["account"]["tier"] == "free"
     assert run(env, "create-account", "boss", "--password", PW)[0] == 1
     assert run(env, "registration", "close")[0] == 0 and register(env, "newbie").status_code == 403
-    code = run(env, "invite")[1].strip()
+    # 测试时钟固定在 1.8e9，CLI 用的是真实时间；给足天数，免得码在"未来"的测试时钟里已过期
+    code = run(env, "invite", "--days", "400")[1].strip()
     assert register(env, "newbie", invite_code=code).status_code == 201
     rc, out = run(env, "stats")
     assert "注册总数：2" in out
@@ -275,7 +279,7 @@ def test_cli_invite_required_toggle_while_registration_open(open_reg):
     rc, out = run(env, "invite-required", "on")
     assert rc == 0 and "开启" in out and "注册开放" in out
     assert register(env, "pub2").status_code == 403                    # 开放但要求邀请码：无码被拒
-    code = run(env, "invite")[1].strip()
+    code = run(env, "invite", "--days", "400")[1].strip()  # 测试时钟在未来，给足天数
     assert register(env, "pub2", invite_code=code).status_code == 201
     assert register(env, "pub3", invite_code=code).status_code == 403  # 邀请码一次性
     assert run(env, "invite-required", "off")[0] == 0
