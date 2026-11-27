@@ -512,14 +512,21 @@ describe('权限管理 · 表格列与操作列', () => {
       '登录名', '等级', '有效期', '状态', '创建时间', '最近活跃', '音频', '视频', '列表数', '占用', '操作',
     ]);
 
-    // 四个数字列：表头与单元格都带 num（右对齐），且不再有「音频 30 · 视频 6」这种混排
-    const numTh = Array.from(document.querySelectorAll('.accounts-table thead th.num'))
+    // 四个数字列：表头与单元格都带 mid（居中），且不再有「音频 30 · 视频 6」这种混排
+    const numTh = Array.from(document.querySelectorAll('.accounts-table thead th.mid'))
       .map((th) => (th.textContent ?? '').trim());
     expect(numTh).toEqual(['音频', '视频', '列表数', '占用']);
-    const nums = Array.from(document.querySelectorAll('tbody td.num')).map((td) => (td.textContent ?? '').trim());
+    const nums = Array.from(document.querySelectorAll('tbody td.mid')).map((td) => (td.textContent ?? '').trim());
     expect(nums).toEqual(['30', '6', '1', '1.1GB']);
     expect(text()).not.toContain('音频 30');
     expect(text()).not.toContain('个 ·');
+  });
+
+  test('数字列用 mid 而不是 center（.center 是门页的 display:grid，撞上会把表格撑坏）', async () => {
+    await mountRows([ACCOUNT]);
+    expect(document.querySelectorAll('.accounts-table .center').length).toBe(0);
+    expect(document.querySelectorAll('.accounts-table th.mid').length).toBe(4);
+    expect(document.querySelectorAll('.accounts-table tbody td.mid').length).toBe(4);
   });
 
   test('有效期与创建时间都精确到秒（改有效期按秒设，只到分钟看不出差别）', async () => {
@@ -533,17 +540,21 @@ describe('权限管理 · 表格列与操作列', () => {
     }
   });
 
-  test('占用列：数字与单位是两个 span，单位单独占一栏', async () => {
+  test('占用列：数字与单位是两个 span，包在一个 inline-grid 里整体居中', async () => {
     await mountRows([ACCOUNT]);
-    const bytes = document.querySelectorAll('tbody td.num')[3] as HTMLElement;
-    const spans = Array.from(bytes.children) as HTMLElement[];
+    const td = document.querySelectorAll('tbody td.mid')[3] as HTMLElement;
+    const box = td.firstElementChild as HTMLElement;
+    expect(box.className).toBe('bytes');
+    const spans = Array.from(box.children) as HTMLElement[];
     expect(spans.map((s) => s.textContent)).toEqual(['1.1', 'GB']);
-    expect(spans[1]?.className).toBe('unit');
+    // 左格数字、右格单位：靠这两个类名拿右对齐 / 固定宽度
+    expect(spans[0]?.className).toBe('bytes-n');
+    expect(spans[1]?.className).toBe('bytes-u');
   });
 
   test('全 0 的行：数字仍是 0，只是标了 zero（淡灰）', async () => {
     await mountRows([{ ...ACCOUNT, audio: 0, video: 0, playlists: 0, bytes: 0 }]);
-    const cells = Array.from(document.querySelectorAll('tbody td.num'));
+    const cells = Array.from(document.querySelectorAll('tbody td.mid'));
     expect(cells.map((td) => (td.textContent ?? '').trim())).toEqual(['0', '0', '0', '0B']);
     expect(cells.every((td) => td.classList.contains('zero'))).toBe(true);
   });

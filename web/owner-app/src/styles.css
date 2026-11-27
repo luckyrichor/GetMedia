@@ -852,7 +852,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 /* 固定槽位 [改有效期] [重置密码] [⋯]：管理员行用隐藏的同字按钮占位，
    三种行的「重置密码」落在同一条竖线上 */
 .row-ops { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
-.row-ops .text-btn { padding: 4px 3px; }
+.row-ops .text-btn { padding: 4px 2px; }
 /* 看不见但占位：字一样宽就一样，不写死 px */
 .op-ph { visibility: hidden; }
 .op-ph-icon { display: inline-block; width: 32px; height: 32px; }
@@ -911,40 +911,64 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .empty-state { padding: 48px 20px; text-align: center; }
 .empty-state p { margin: 0 0 12px; color: var(--muted); }
 
-/* 列宽由 <colgroup> 固定；整行单行、行高一致，内容再长也不折。
-   正文字号比全局小一号（0.9rem）、左右内边距 6px：11 列才塞得进 1280 屏的可视宽度
-   （min-width 1002px ≈ 1280 − 侧栏 210 − 内边距 32 − 滚动条 15，留了 20px 余量）。 */
-.accounts-table { min-width: 1033px; table-layout: fixed; border: 0; border-radius: 0; background: none; }
+/* 列宽由 `--c-*` 变量给，`<col style="width: var(--c-*)">` 引用（见 accounts.tsx）。
+   合计就是 min-width：再窄就横向滚，不折行。整行单行、行高一致。
+   1280 屏用窄档（数字列 48px），≥1440px 放宽到 80px（见本段末尾的 media query）。 */
+.accounts-table {
+  --c-name: 84px; --c-tier: 68px; --c-exp: 144px; --c-status: 110px; --c-created: 144px;
+  --c-active: 64px; --c-num: 48px; --c-bytes: 82px; --c-ops: 195px;
+  min-width: 1035px; table-layout: fixed; border: 0; border-radius: 0; background: none;
+}
 .accounts-table th, .accounts-table td {
   padding: 8px 6px; vertical-align: middle; white-space: nowrap; height: 56px;
 }
 .accounts-table td { font-size: 0.82rem; }
 .accounts-table th { background: var(--bg); font-size: 0.78rem; }
-/* 表头与单元格用同一套对齐：左边一列列左对齐，四个数字列右对齐 */
-.accounts-table th.num, .accounts-table td.num { text-align: right; }
+/* 表头与单元格用同一套对齐：文本列左对齐，四个数字列居中（左右内边距也完全一致）。
+   类名用 `mid` 而不是 `center`——门页的 `.center` 是 `display:grid; min-height:76vh`，
+   `td.center` 一旦命中它，单元格就不再是 table-cell，整张表会崩（列宽塌陷、行高被撑到几千 px）。 */
+.accounts-table th.mid, .accounts-table td.mid { text-align: center; }
+.accounts-table .mid { font-variant-numeric: tabular-nums; }
 .accounts-table tbody tr:hover { background: var(--bg); }
 .accounts-table .cell-name { padding-left: 12px; }
 .accounts-table .cell-name .name {
   font-weight: 650; line-height: 1.4; overflow: hidden; text-overflow: ellipsis;
 }
 .accounts-table .cell-name .sub { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
-.accounts-table .num { font-variant-numeric: tabular-nums; }
 /* 0 值淡灰：一片 0 的账号一眼就能跳过，不用逐个读数字 */
 .accounts-table td.zero { color: var(--muted); }
-.accounts-table td.zero .unit { color: inherit; }
-/* 占用列：数字右对齐，单位固定 2.5em 左对齐——不固定单位宽度，
-   「1.2 GB」和「980 MB」的单位就会左右跳，数字的右边缘也就对不齐了 */
-.accounts-table .unit {
-  display: inline-block; width: 2.5em; text-align: left;
-  font-size: 0.86em; color: var(--muted); margin-left: 3px;
+/* 占用列：数字和单位是**一个整体**，在列里居中。
+   容器是固定宽度的两格 inline-grid——左格数字右对齐（4.5ch 放得下 4 位数）、
+   右格单位左对齐（2em 固定宽，够放 KB/MB/GB）。这样「229 MB」和「0 B」的数字右边缘在同一条竖线上，
+   而整体又居中，不会像右对齐那样贴着单元格右边缘。
+   宽度必须小于单元格内容宽（1280 屏占用列 82px − 左右 12px 内边距 = 70px）：
+   一旦超了，居中就失效——Chrome 会把溢出的 inline 盒子贴到左边，整列看起来偏右 2px。 */
+.accounts-table .bytes {
+  display: inline-grid; grid-template-columns: 4.5ch 2em; column-gap: 4px;
+  align-items: baseline;
 }
+.accounts-table .bytes-n { text-align: right; font-variant-numeric: tabular-nums; }
+.accounts-table .bytes-u { text-align: left; font-size: 0.86em; color: var(--muted); }
+.accounts-table td.zero .bytes-u { color: inherit; }
 /* 日期时间两段式：日期正常色，时分秒淡灰再小一号（精确到秒，见 accounts.tsx 的 dtCell） */
 .dt { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dt-t { margin-left: 3px; font-size: 0.84em; color: var(--muted); }
 .text-warn .dt-t, .text-bad .dt-t { color: inherit; opacity: 0.78; }
 .perm { color: var(--text); }
 .accounts-table .cell-active { overflow: hidden; text-overflow: ellipsis; }
-.accounts-table .cell-ops { padding-left: 4px; padding-right: 8px; }
+/* 操作列：和占用列之间留 24px，两个表头才不至于挤成一块 */
+.accounts-table .cell-ops { padding-left: 24px; padding-right: 8px; }
+/* 表头「操作」和第一个按钮的文字左边缘对齐（按钮自带 2px 内边距） */
+.accounts-table th.cell-ops { padding-left: 26px; }
+
+/* 宽屏：数字列放宽到 80px（用户要求的三列等宽），占用 110px。
+   1280 屏放不下这一档（可视只有 1036px），所以窄屏自动用上面的 48px。 */
+@media (min-width: 1440px) {
+  .accounts-table {
+    --c-name: 100px; --c-num: 80px; --c-bytes: 110px;
+    min-width: 1175px;
+  }
+}
 
 /* ---- 等级徽章：柔和底色，不用高饱和实心 ---- */
 .badge {

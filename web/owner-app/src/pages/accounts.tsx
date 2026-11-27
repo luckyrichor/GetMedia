@@ -20,25 +20,28 @@ import {
 
 const TIER_LABEL: Record<Tier, string> = { free: '免费版', full: '完整版', admin: '管理员' };
 
-/** 表格列。带 `sort` 的列点击表头排序；`w` 是固定列宽（`table-layout: fixed`），
- *  各列加起来就是表格的最小宽度，再窄就横向滚，不折行。
+/** 表格列。带 `sort` 的列点击表头排序。
  *
- *  `w` 缺省的那一列吃掉剩余宽度（登录名——它最需要弹性）。
+ *  列宽由 styles.css 里的 `--c-xxx` 变量给，`<col style="width: var(--c-xxx)">` 引用它：
+ *  这样 1440 屏和 1280 屏能有两套（数字列宽屏 80px、窄屏 48px）。
+ *  （试过 `<col class>` + `col.c-xxx{width}`：Chrome 把后面几列都塌到同一个 x 上，不能用；
+ *   只给 `<th>` 设宽度也不稳，表格会整块崩掉。）
+ *
  *  四个数字列不排序：服务端只有 `tracks`（媒体总数）一个键，拆成音频/视频/列表数/占用之后
  *  没有哪一列对得上它，挂上去反而会误导。
  */
-const COLS: { label: string; sort?: string; w?: number; right?: boolean }[] = [
-  { label: '登录名', sort: 'login_name', w: 114 },
-  { label: '等级', w: 68 },
-  { label: '有效期', sort: 'expires_at', w: 144 },
-  { label: '状态', w: 110 },
-  { label: '创建时间', sort: 'created_at', w: 144 },
-  { label: '最近活跃', sort: 'last_seen_at', w: 64 },
-  { label: '音频', w: 46, right: true },
-  { label: '视频', w: 44, right: true },
-  { label: '列表数', w: 51, right: true },
-  { label: '占用', w: 70, right: true },
-  { label: '操作', w: 178 },
+const COLS: { label: string; sort?: string; cls: string; mid?: boolean }[] = [
+  { label: '登录名', sort: 'login_name', cls: 'c-name' },
+  { label: '等级', cls: 'c-tier' },
+  { label: '有效期', sort: 'expires_at', cls: 'c-exp' },
+  { label: '状态', cls: 'c-status' },
+  { label: '创建时间', sort: 'created_at', cls: 'c-created' },
+  { label: '最近活跃', sort: 'last_seen_at', cls: 'c-active' },
+  { label: '音频', cls: 'c-num', mid: true },
+  { label: '视频', cls: 'c-num', mid: true },
+  { label: '列表数', cls: 'c-num', mid: true },
+  { label: '占用', cls: 'c-bytes', mid: true },
+  { label: '操作', cls: 'c-ops' },
 ];
 
 function dayStart(s: string): number | undefined {
@@ -138,14 +141,19 @@ function activeText(unix: number | null): string {
   return days >= 30 ? `${days} 天前` : relTime(unix);
 }
 
-/** 占用：数字与单位拆成两个 span，单位固定宽度左对齐——不这么拆，
- *  「1.2 GB」和「980 MB」的右边缘就对不齐（数字宽度不同，单位会被顶来顶去）。 */
+/** 占用：数字和单位作为**一个整体**在列里居中。
+ *
+ *  外面这层是固定宽度的 inline-grid：左格数字右对齐、右格单位左对齐且宽度固定——
+ *  不这么拆，「229 MB」和「0 B」的数字右边缘就对不齐（数字位数不同，单位会被顶来顶去）。
+ *  容器本身居中，所以整列的视觉中心落在"数字+单位"这个整体上，而不是贴着单元格右边缘。
+ */
 function byteCell(n: number) {
   const p = fmtBytesParts(n);
   return (
-    <>
-      <span>{p.num}</span><span class="unit">{p.unit}</span>
-    </>
+    <span class="bytes">
+      <span class="bytes-n">{p.num}</span>
+      <span class="bytes-u">{p.unit}</span>
+    </span>
   );
 }
 
@@ -610,13 +618,16 @@ export function AccountsPage() {
         {data && data.items.length ? (
           <div class={refreshing ? 'table-wrap is-refreshing' : 'table-wrap'}>
             <table class="table accounts-table">
+              {/* 列宽 = colgroup 里每列的 CSS 变量；变量在 styles.css 按屏宽切换
+                  （1280 屏数字列 48px、≥1440px 80px）。直接用 `<col style={{width:'48px'}}>`
+                  就没法被 media query 覆盖了。 */}
               <colgroup>
-                {COLS.map((c) => <col style={c.w ? { width: `${c.w}px` } : undefined} />)}
+                {COLS.map((c) => <col style={{ width: `var(--${c.cls})` }} />)}
               </colgroup>
               <thead>
                 <tr>
                   {COLS.map((c) => (
-                    <th class={c.right ? 'num' : ''}>
+                    <th class={[c.cls, c.mid ? 'mid' : '', c.cls === 'c-ops' ? 'cell-ops' : ''].filter(Boolean).join(' ')}>
                       {c.sort ? (
                         <button type="button" class="th-sort" aria-pressed={sort === c.sort} onClick={() => sortBy(c.sort!)}>
                           {c.label}{sort === c.sort ? (order === 'asc' ? ' ↑' : ' ↓') : ''}
@@ -640,10 +651,10 @@ export function AccountsPage() {
                     <td class="cell-active" title={a.last_seen_at ? fmtDateTime(a.last_seen_at) : undefined}>
                       {activeText(a.last_seen_at)}
                     </td>
-                    <td class={a.audio ? 'num' : 'num zero'}>{a.audio}</td>
-                    <td class={a.video ? 'num' : 'num zero'}>{a.video}</td>
-                    <td class={a.playlists ? 'num' : 'num zero'}>{a.playlists}</td>
-                    <td class={a.bytes ? 'num' : 'num zero'}>{byteCell(a.bytes)}</td>
+                    <td class={a.audio ? 'mid' : 'mid zero'}>{a.audio}</td>
+                    <td class={a.video ? 'mid' : 'mid zero'}>{a.video}</td>
+                    <td class={a.playlists ? 'mid' : 'mid zero'}>{a.playlists}</td>
+                    <td class={a.bytes ? 'mid' : 'mid zero'}>{byteCell(a.bytes)}</td>
                     <td class="cell-ops">{rowOps(a)}</td>
                   </tr>
                 ))}
