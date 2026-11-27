@@ -56,6 +56,8 @@ export function FeedbackPage() {
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [phase, setPhase] = useState<'loading' | 'ok' | 'error'>('loading');
+  /** 正在按新筛选重取：旧列表留在原位，只淡出，避免高度跳变把页面顶回最上方。 */
+  const [switching, setSwitching] = useState(false);
   const [err, setErr] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -79,20 +81,24 @@ export function FeedbackPage() {
     setHasMore(out.has_more);
   }
 
-  async function reload() {
-    setPhase('loading');
+  /** 换筛选时保留旧列表、只做淡出（silent）：抽掉列表换骨架会让页面高度一塌，滚动位置被夹回顶部。 */
+  async function reload(silent = false) {
+    if (silent) setSwitching(true);
+    else setPhase('loading');
     try {
       await fetchPage(0, true);
       setPhase('ok');
     } catch (e) {
       setErr(messageFor(e));
       setPhase('error');
+    } finally {
+      setSwitching(false);
     }
   }
 
   useEffect(() => {
     setOpenId(null);
-    void reload();
+    void reload(phase === 'ok');
     // 只在筛选变化时重取；reload 内部不依赖其他外部状态
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, category, mailState, hasImage, hasContact, dates.from, dates.to, userPrefix]);
@@ -240,7 +246,7 @@ export function FeedbackPage() {
       )}
 
       {phase === 'ok' && items.length > 0 && (
-        <ul class="feed">
+        <ul class={switching ? 'feed is-refreshing' : 'feed'}>
           {items.map((it) => (
             <li class={openId === it.id ? 'feed-row open' : 'feed-row'}>
               <button

@@ -3,29 +3,52 @@
  * 只放"没有业务含义"的东西——各页自己决定怎么用，不在这里藏接口调用。
  */
 import type { ComponentChildren } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { Link } from './router';
 
 export type Loaded<T> = { k: 'loading' } | { k: 'error'; message: string } | { k: 'ok'; data: T };
 
-/** 取一次数据；`deps` 变了就重取（换筛选条件时用）。 */
-export function useLoad<T>(fn: () => Promise<T>, deps: unknown[] = []): { state: Loaded<T>; reload: () => void } {
+/** 取一次数据；`deps` 变了就重取（换筛选条件时用）。
+ *
+ * `keep: true` 时保留上一次成功的数据，只把 `refreshing` 置真——换筛选/翻页时不要把
+ * 列表抽掉换成骨架：高度一塌，浏览器会把滚动位置夹回顶部，看起来就是"页面跳了"。
+ * 首次加载仍然给 loading（那时本来就没有内容可留）。
+ */
+export function useLoad<T>(
+  fn: () => Promise<T>,
+  deps: unknown[] = [],
+  opts: { keep?: boolean } = {},
+): { state: Loaded<T>; reload: () => void; refreshing: boolean } {
   const [state, setState] = useState<Loaded<T>>({ k: 'loading' });
+  const [refreshing, setRefreshing] = useState(false);
   const [tick, setTick] = useState(0);
+  /** 手上是否已经有成功数据：有才值得"保留旧内容"，没有就只能给骨架。 */
+  const hasData = useRef(false);
   useEffect(() => {
     let alive = true;
-    setState({ k: 'loading' });
+    if (opts.keep && hasData.current) setRefreshing(true);
+    else setState({ k: 'loading' });
     fn().then(
-      (data) => alive && setState({ k: 'ok', data }),
-      (e) => alive && setState({ k: 'error', message: messageFor(e) }),
+      (data) => {
+        if (!alive) return;
+        hasData.current = true;
+        setState({ k: 'ok', data });
+        setRefreshing(false);
+      },
+      (e) => {
+        if (!alive) return;
+        hasData.current = false;
+        setState({ k: 'error', message: messageFor(e) });
+        setRefreshing(false);
+      },
     );
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick, ...deps]);
-  return { state, reload: () => setTick((n) => n + 1) };
+  return { state, reload: () => setTick((n) => n + 1), refreshing };
 }
 
 export function Loading({ what = '数据' }: { what?: string }) {

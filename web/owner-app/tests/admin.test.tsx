@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act } from 'preact/test-utils';
-import { ADMIN_ME, button, calls, cleanup, click, mount, ownerRoutes, server, text, until } from './harness';
+import { ADMIN_ME, button, calls, choose, cleanup, click, mount, ownerRoutes, server, text, until } from './harness';
 
 /** 往普通 input 里塞值：直接在 act 里派发，否则随后的 click 会拿到上一轮的 state。 */
 async function setInput(sel: string, value: string) {
@@ -142,6 +142,34 @@ describe('权限管理', () => {
     const post = calls.find((c) => c.method === 'POST')!;
     expect(post.body).toEqual({ tier: 'free', duration: '6m' });
   });
+
+  test('换等级筛选：旧表格留在原位（只淡出），不闪骨架、行数不变', async () => {
+    // 第二次请求先挂住，好在"还没回来"这一刻检查页面
+    let release!: (v: unknown) => void;
+    const gate = new Promise((r) => { release = r; });
+    let first = true;
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': () => {
+        if (first) { first = false; return accountsPage([ADMIN_ROW, ACCOUNT, PENDING_ROW]); }
+        return gate as never;
+      },
+    }));
+    mount('/accounts');
+    await until(() => text().includes('alice'));
+    const rows = document.querySelectorAll('tbody tr').length;
+    expect(rows).toBe(3);
+
+    await click(button('免费版')); // 取消勾选「免费版」→ 触发重取
+
+    // 请求未完成：不能出现骨架（骨架一出现，页面高度就塌，滚动位置会被夹回顶部）
+    expect(document.querySelector('.skeleton')).toBeNull();
+    expect(document.querySelectorAll('tbody tr').length).toBe(rows);
+    expect(document.querySelector('.is-refreshing')).not.toBeNull();
+
+    release(accountsPage([]));
+    await until(() => text().includes('没有符合条件的账号'));
+  });
 });
 
 describe('邀请码', () => {
@@ -205,5 +233,34 @@ describe('邀请码', () => {
     expect(document.querySelectorAll('.tag.used').length).toBe(1);
     // 列表只有元数据，没有码明文
     expect(text()).not.toMatch(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
+  });
+  test('换状态筛选：旧列表留在原位（只淡出），不闪骨架', async () => {
+    let release!: (v: unknown) => void;
+    const gate = new Promise((r) => { release = r; });
+    const page1 = {
+      json: {
+        total: 1, page: 1, size: 50,
+        items: [{ id: 'i1', state: 'used', created_at: NOW - 7200, expires_at: NOW - 3600, used_at: NOW - 4000, used_by: 'alice' }],
+      },
+    };
+    let first = true;
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/invites': () => {
+        if (first) { first = false; return page1; }
+        return gate as never;
+      },
+    }));
+    mount('/invites');
+    await until(() => text().includes('alice'));
+
+    await choose('按状态筛选', '已使用');
+
+    expect(document.querySelector('.skeleton')).toBeNull();
+    expect(document.querySelectorAll('tbody tr').length).toBe(1);
+    expect(document.querySelector('.is-refreshing')).not.toBeNull();
+
+    release(page1);
+    await until(() => text().includes('alice'));
   });
 });

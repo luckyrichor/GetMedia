@@ -124,6 +124,11 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 @keyframes sk { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
 @media (prefers-reduced-motion: reduce) { .skeleton > div { animation: none; } }
 
+/* 换筛选/翻页：旧内容留在原位，只淡出一下。
+   不能抽掉列表换骨架——高度一塌，浏览器会把滚动位置夹回顶部，看起来就是"页面跳了"。 */
+.is-refreshing { opacity: 0.55; transition: opacity 0.12s ease; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .is-refreshing { transition: none; } }
+
 .empty {
   border: 1px dashed var(--line); border-radius: var(--radius); background: var(--surface);
   padding: 26px 20px; text-align: center; margin: 14px 0;

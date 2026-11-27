@@ -43,7 +43,8 @@ export function InvitesPage() {
   const [hint, setHint] = useState('');
   const [status, setStatus] = useState('');
   const [page, setPage] = useState(1);
-  const list = useLoad(() => ownerApi.adminInvites(status, page), [status, page]);
+  // 换筛选/翻页保留旧列表（keep）：不抽掉表格换骨架，页面高度不变、不会跳回顶部
+  const list = useLoad(() => ownerApi.adminInvites(status, page), [status, page], { keep: true });
 
   const n = Number(count);
   const bad = !Number.isInteger(n) || n < MIN || n > MAX;
@@ -92,11 +93,6 @@ export function InvitesPage() {
   return (
     <>
       <h1>邀请码</h1>
-      <p class="muted">
-        邀请码只有一种用途：把免费账号升级为完整版，6 个自然月。码本身 1 天内有效、一码一人、可叠加；
-        已使用的码 1 天后与未使用就过期的码一起被物理删除。
-      </p>
-
       <div class="card">
         <div class="filter-row">
           <label class="small muted" for="inv-count">生成数量</label>
@@ -142,7 +138,7 @@ export function InvitesPage() {
       ) : null}
 
       {data && data.items.length ? (
-        <div class="table-wrap">
+        <div class={list.refreshing ? 'table-wrap is-refreshing' : 'table-wrap'}>
           <table class="table">
             <thead>
               <tr><th>状态</th><th>创建时间</th><th>到期时间</th><th>使用人</th><th>使用时间</th></tr>

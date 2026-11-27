@@ -29,7 +29,7 @@ export const ADMIN_ME = { ...ME, id: 'acct_admin', login_name: 'luckyrichor', ti
 export const calls: Call[] = [];
 let container: HTMLElement | null = null;
 
-export function server(routes: Record<string, Reply | (() => Reply)>) {
+export function server(routes: Record<string, Reply | (() => Reply | Promise<Reply>)>) {
   const fn = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = new URL(String(input), 'https://gm.test');
     const path = url.pathname.replace(/^\/api/, '');
@@ -39,7 +39,7 @@ export function server(routes: Record<string, Reply | (() => Reply)>) {
     calls.push({ method, path, search, body: raw ? JSON.parse(raw) : undefined });
     const h = routes[`${method} ${path}${search}`] ?? routes[`${method} ${path}`];
     if (!h) throw new Error(`未登记的请求：${method} ${path}${search}`);
-    const r = typeof h === 'function' ? h() : h;
+    const r = typeof h === 'function' ? await h() : h;
     const status = r.status ?? (r.json === undefined ? 204 : 200);
     return new Response(r.json === undefined ? null : JSON.stringify(r.json), {
       status,

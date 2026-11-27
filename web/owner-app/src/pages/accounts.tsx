@@ -120,7 +120,10 @@ export function AccountsPage() {
     history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
   }, [debounced, tiers, status, expiry, from, to, hasData, sort, order, page]);
 
-  const { state, reload } = useLoad(() => ownerApi.adminAccounts(query), [JSON.stringify(query)]);
+  // 换筛选/翻页时保留旧表格（keep），否则列表被骨架替掉、页面高度一塌就会跳回顶部
+  const { state, reload, refreshing } = useLoad(
+    () => ownerApi.adminAccounts(query), [JSON.stringify(query)], { keep: true },
+  );
 
   if (me.state.k === 'ok' && me.state.data.tier !== 'admin') return <NoAccess what="权限管理" />;
 
@@ -230,9 +233,6 @@ export function AccountsPage() {
   return (
     <>
       <h1>权限管理</h1>
-      <p class="muted">
-        等级：免费版 / 完整版（6 个月或永久）/ 管理员（全站唯一、永久）。改等级、重置密码、停用都会让该账号的所有设备退出登录。
-      </p>
 
       {s ? (
         <div class="cards">
@@ -320,7 +320,7 @@ export function AccountsPage() {
       {data && data.items.length === 0 ? <Empty>没有符合条件的账号。</Empty> : null}
 
       {data && data.items.length ? (
-        <div class="table-wrap">
+        <div class={refreshing ? 'table-wrap is-refreshing' : 'table-wrap'}>
           <table class="table">
             <thead>
               <tr>

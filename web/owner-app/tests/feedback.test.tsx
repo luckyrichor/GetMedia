@@ -164,4 +164,28 @@ describe('反馈收件箱', () => {
     await until(() => callKeys().includes(filtered));
     expect(text()).toContain('第 2 条反馈');
   });
+  test('换筛选：旧列表留在原位（只淡出），不闪骨架', async () => {
+    let release!: (v: unknown) => void;
+    const gate = new Promise((r) => { release = r; });
+    let first = true;
+    server(ownerRoutes({
+      'GET /v2/feedback': () => {
+        if (first) { first = false; return page([item(1)]); }
+        return gate as never;
+      },
+    }));
+    mount('/feedback');
+    await until(() => text().includes('第 1 条反馈'));
+
+    await click(document.querySelector('[aria-label="筛选：类别"]')!);
+    await click(Array.from(document.querySelectorAll('.select-opt')).find((o) => o.textContent?.includes('建议'))!);
+
+    // 请求还没回来：旧列表不能消失（否则高度一塌，滚动位置被夹回顶部）
+    expect(document.querySelector('.skeleton')).toBeNull();
+    expect(text()).toContain('第 1 条反馈');
+    expect(document.querySelector('.is-refreshing')).not.toBeNull();
+
+    release(page([item(2)]));
+    await until(() => text().includes('第 2 条反馈'));
+  });
 });
