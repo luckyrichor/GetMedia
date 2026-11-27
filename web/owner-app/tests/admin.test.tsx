@@ -522,6 +522,17 @@ describe('权限管理 · 表格列与操作列', () => {
     expect(text()).not.toContain('个 ·');
   });
 
+  test('有效期与创建时间都精确到秒（改有效期按秒设，只到分钟看不出差别）', async () => {
+    await mountRows([ACCOUNT]);
+    // 一行里只有这两个 .dt：日期一段、时分秒一段
+    const dts = Array.from(document.querySelectorAll('tbody tr .dt'));
+    expect(dts.length).toBe(2);
+    for (const dt of dts) {
+      expect(dt.children[0]?.textContent).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(dt.querySelector('.dt-t')?.textContent).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    }
+  });
+
   test('占用列：数字与单位是两个 span，单位单独占一栏', async () => {
     await mountRows([ACCOUNT]);
     const bytes = document.querySelectorAll('tbody td.num')[3] as HTMLElement;

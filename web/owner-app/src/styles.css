@@ -914,11 +914,11 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 /* 列宽由 <colgroup> 固定；整行单行、行高一致，内容再长也不折。
    正文字号比全局小一号（0.9rem）、左右内边距 6px：11 列才塞得进 1280 屏的可视宽度
    （min-width 1002px ≈ 1280 − 侧栏 210 − 内边距 32 − 滚动条 15，留了 20px 余量）。 */
-.accounts-table { min-width: 1032px; table-layout: fixed; border: 0; border-radius: 0; background: none; }
+.accounts-table { min-width: 1033px; table-layout: fixed; border: 0; border-radius: 0; background: none; }
 .accounts-table th, .accounts-table td {
   padding: 8px 6px; vertical-align: middle; white-space: nowrap; height: 56px;
 }
-.accounts-table td { font-size: 0.86rem; }
+.accounts-table td { font-size: 0.82rem; }
 .accounts-table th { background: var(--bg); font-size: 0.78rem; }
 /* 表头与单元格用同一套对齐：左边一列列左对齐，四个数字列右对齐 */
 .accounts-table th.num, .accounts-table td.num { text-align: right; }
@@ -938,9 +938,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   display: inline-block; width: 2.5em; text-align: left;
   font-size: 0.86em; color: var(--muted); margin-left: 3px;
 }
-/* 日期时间两段式：日期正常色，时分淡灰小一号 */
+/* 日期时间两段式：日期正常色，时分秒淡灰再小一号（精确到秒，见 accounts.tsx 的 dtCell） */
 .dt { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.dt-t { margin-left: 4px; font-size: 0.86em; color: var(--muted); }
+.dt-t { margin-left: 3px; font-size: 0.84em; color: var(--muted); }
 .text-warn .dt-t, .text-bad .dt-t { color: inherit; opacity: 0.78; }
 .perm { color: var(--text); }
 .accounts-table .cell-active { overflow: hidden; text-overflow: ellipsis; }

@@ -28,17 +28,17 @@ const TIER_LABEL: Record<Tier, string> = { free: '免费版', full: '完整版',
  *  没有哪一列对得上它，挂上去反而会误导。
  */
 const COLS: { label: string; sort?: string; w?: number; right?: boolean }[] = [
-  { label: '登录名', sort: 'login_name', w: 116 },
+  { label: '登录名', sort: 'login_name', w: 114 },
   { label: '等级', w: 68 },
-  { label: '有效期', sort: 'expires_at', w: 132 },
-  { label: '状态', w: 112 },
-  { label: '创建时间', sort: 'created_at', w: 132 },
-  { label: '最近活跃', sort: 'last_seen_at', w: 72 },
-  { label: '音频', w: 48, right: true },
-  { label: '视频', w: 48, right: true },
-  { label: '列表数', w: 52, right: true },
-  { label: '占用', w: 76, right: true },
-  { label: '操作', w: 176 },
+  { label: '有效期', sort: 'expires_at', w: 144 },
+  { label: '状态', w: 110 },
+  { label: '创建时间', sort: 'created_at', w: 144 },
+  { label: '最近活跃', sort: 'last_seen_at', w: 64 },
+  { label: '音频', w: 46, right: true },
+  { label: '视频', w: 44, right: true },
+  { label: '列表数', w: 51, right: true },
+  { label: '占用', w: 70, right: true },
+  { label: '操作', w: 178 },
 ];
 
 function dayStart(s: string): number | undefined {
@@ -90,13 +90,16 @@ function addMonthsTs(unix: number, months: number): number {
   return Math.floor(c.getTime() / 1000);
 }
 
-/** 日期时间两段式：日期正常色、时分淡灰小一号。有效期和创建时间共用同一套，
- *  两列的视觉重量才一致；`tabular-nums` 让上下行的数字竖着对齐。 */
+/** 日期时间两段式：日期正常色、时分秒淡灰小一号。有效期和创建时间共用同一套，
+ *  两列的视觉重量才一致；`tabular-nums` 让上下行的数字竖着对齐。
+ *
+ *  **精确到秒**：改有效期本来就是按秒设的，只显示到分钟的话，设完再改一次都看不出差别
+ *  （同一分钟内两次设置会长得一模一样）。秒用更小的字号，不跟日期抢视线。 */
 function dtCell(unix: number, cls = '') {
-  const [d, t] = fmtTime(unix).split(' ');
+  const s = fmtDateTime(unix);        // 2026-11-27 08:09:15
   return (
     <span class={cls ? `dt ${cls}` : 'dt'}>
-      <span>{d}</span><span class="dt-t">{t}</span>
+      <span>{s.slice(0, 10)}</span><span class="dt-t">{s.slice(11)}</span>
     </span>
   );
 }
@@ -109,12 +112,7 @@ function expiryCell(a: AdminAccount) {
   const now = Math.floor(Date.now() / 1000);
   if (a.tier_expires_at <= now) return <span class="text-bad">已过期</span>;
   const soon = a.tier_expires_at - now <= 30 * 86400;
-  // 列里只到分钟；鼠标停上去看秒（改有效期是精确到秒的）
-  return (
-    <span title={fmtDateTime(a.tier_expires_at)}>
-      {dtCell(a.tier_expires_at, soon ? 'text-warn' : '')}
-    </span>
-  );
+  return dtCell(a.tier_expires_at, soon ? 'text-warn' : '');
 }
 
 function statusCell(a: AdminAccount) {
