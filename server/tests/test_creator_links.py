@@ -8,7 +8,7 @@ from getmedia.creator_links import (
     Platform,
     find_urls,
     parse_creator_input,
-    require_numeric_or_link,
+    require_id_or_link,
     resolve_creator,
 )
 from getmedia.creator_service import CreatorRangeError, resolve_ref, validate_range
@@ -110,6 +110,10 @@ def test_resolve_ref_rejects_platform_conflict():
     [
         ("bilibili", "12345"),
         ("douyin", "67194609689"),
+        # 抖音号可以是字母——和数字号一样按号查，不该被挡
+        ("douyin", "luoyonghao"),
+        ("douyin", "chenling_hana"),
+        ("douyin", "chenling.hana-2024"),
         ("bilibili", "https://space.bilibili.com/12345"),
         ("bilibili", "https://space.bilibili.com/12345/video?spm_id_from=333"),
         ("douyin", "https://www.douyin.com/user/MS4wLjABAAAAabcdefgh"),
@@ -117,29 +121,33 @@ def test_resolve_ref_rejects_platform_conflict():
         ("douyin", "看看这个博主 https://www.douyin.com/user/MS4wLjABAAAAabcdefgh 复制打开"),
     ],
 )
-def test_require_numeric_or_link_accepts(platform, value):
-    require_numeric_or_link(platform, value)  # 不抛就算过
+def test_require_id_or_link_accepts(platform, value):
+    require_id_or_link(platform, value)  # 不抛就算过
 
 
 @pytest.mark.parametrize(
     "platform,value,needle",
     [
-        ("bilibili", "碧诗", "只能填纯数字"),
-        ("douyin", "", "只能填纯数字"),
+        ("bilibili", "碧诗", "只能填纯数字的 B 站号"),
+        # B 站 UID 只能是数字，字母串不是号
+        ("bilibili", "luoyonghao", "只能填纯数字的 B 站号"),
+        # 昵称（含中文/空格）两个平台都不收
+        ("douyin", "罗永浩的十字路口", "只能填抖音号"),
+        ("douyin", "", "只能填抖音号"),
         ("douyin", "https://space.bilibili.com/12345", "但类型选的是"),
         ("bilibili", "https://www.douyin.com/user/MS4wLjABAAAAabcdefgh", "但类型选的是"),
         ("bilibili", "https://example.com/12345", "不支持的站点"),
     ],
 )
-def test_require_numeric_or_link_rejects(platform, value, needle):
+def test_require_id_or_link_rejects(platform, value, needle):
     with pytest.raises(LinkError) as err:
-        require_numeric_or_link(platform, value)
+        require_id_or_link(platform, value)
     assert needle in str(err.value)
 
 
-def test_require_numeric_or_link_is_noop_without_platform():
+def test_require_id_or_link_is_noop_without_platform():
     """没选平台时交给 parse_creator_input 去猜，这一层不管。"""
-    require_numeric_or_link(None, "碧诗")
+    require_id_or_link(None, "碧诗")
 
 
 def test_resolve_ref_requires_platform_for_bare_number():

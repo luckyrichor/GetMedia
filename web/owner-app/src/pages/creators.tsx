@@ -72,15 +72,22 @@ const KIND_FIELD: Record<CreatorKind, string> = {
 };
 
 const KIND_HINT: Record<CreatorKind, string> = {
-  douyin: '例如 67194609689，或粘贴 douyin.com/user/… 的主页链接',
+  douyin: '例如 67194609689、luoyonghao，或粘贴 douyin.com/user/… 的主页链接',
   bilibili: '例如 12345，或粘贴 space.bilibili.com/12345',
 };
 
-/** 校验不过时说的话：抖音号有字母号（`chenling_hana`），所以不能说「只能是数字」，
- *  要如实讲清「数字版」这三个字，再把人指到主页链接上去。 */
+/** 校验不过时说的话。两个平台的「号」不是一回事：B 站 UID 只能是数字，
+ *  抖音号可以是字母（`luoyonghao`）——**字母号也是号，照常按号查**，
+ *  不能因为不是数字就说人「只能填数字」。 */
 const KIND_TIP: Record<CreatorKind, string> = {
-  douyin: '只能填数字版抖音号，或粘贴抖音主页链接（douyin.com/user/…）',
+  douyin: '只能填抖音号（数字或字母），或粘贴抖音主页链接（douyin.com/user/…）',
   bilibili: '只能填纯数字的 B 站号，或粘贴 space.bilibili.com/号',
+};
+
+/** 两个平台「号」的字符集：B 站是纯数字 UID，抖音号允许字母/下划线/点/短横线。 */
+const ID_PATTERN: Record<CreatorKind, RegExp> = {
+  douyin: /^[A-Za-z0-9_.-]{1,30}$/,
+  bilibili: /^\d{1,20}$/,
 };
 
 const URL_IN_TEXT = /https?:\/\/[^\s"'<>，。；、）】」》]+/i;
@@ -130,6 +137,9 @@ export function normalizeCreatorInput(raw: string): string {
   const url = text.match(URL_IN_TEXT)?.[0]?.replace(TRAILING_PUNCT, '');
   if (url) return url;
   if (BARE_HOST.test(text)) return `https://${text.replace(TRAILING_PUNCT, '')}`;
+  // 整段就是一个号（含字母号 `luoyonghao`）就原样收：先挑数字会把
+  // `chenling2024` 这类号截成 `2024`，号就变了。
+  if (ID_PATTERN.douyin.test(text) || ID_PATTERN.bilibili.test(text)) return text;
   const digits = text.match(/\d{1,20}/g);
   if (digits) return digits.sort((a, b) => b.length - a.length)[0]!;
   return text.slice(0, 80);
@@ -140,7 +150,7 @@ export function normalizeCreatorInput(raw: string): string {
  * 最容易贴错的是**作品链接**（那是「单个提取」页的事），所以单独给一句能指路的话。 */
 function inputError(value: string, kind: CreatorKind): string | null {
   if (!value) return `先填${KIND_FIELD[kind]}`;
-  if (NUMERIC_ID.test(value)) return null;
+  if (ID_PATTERN[kind].test(value)) return null;
   const linkKind = platformOfLink(value);
   if (!linkKind) return KIND_TIP[kind];
   if (linkKind !== kind) return `这是${KIND_LABEL[linkKind]}的链接，把上面的类型改成${KIND_LABEL[linkKind]}`;
@@ -166,7 +176,8 @@ function nickName(j: CreatorJob): string {
  *  填的是链接时回退用后端解析出的平台号（creator_id）。返回空串表示没有可显示的号码。 */
 function creatorId(j: CreatorJob): string {
   const raw = (j.source_input || '').trim();
-  if (NUMERIC_ID.test(raw)) return raw;
+  // 用户填的是号（数字或字母都算）就原样亮出来；填的是链接才回退到平台解析出的 id
+  if (raw && !URL_IN_TEXT.test(raw) && !BARE_HOST.test(raw)) return raw;
   const id = (j.creator_id || '').trim();
   return NUMERIC_ID.test(id) ? id : '';
 }

@@ -135,10 +135,23 @@ def _platform_of_value(value) -> Platform | None:
 
 
 _NUMERIC_ID_RE = re.compile(r"\d{1,20}")
+# 抖音号是字母/数字/下划线/点/短横线的组合（`luoyonghao`、`chenling_hana`），
+# 也有一批老号全是数字。**不含中文和空格**——那是昵称，不是号。
+_DOUYIN_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,30}")
+
+# 号码格式与对应的提示语：两个平台的「号」不是一回事，B 站 UID 只能是数字。
+_ID_PATTERN = {"bilibili": _NUMERIC_ID_RE, "douyin": _DOUYIN_ID_RE}
+_ID_HINT = {
+    "bilibili": "只能填纯数字的 B 站号，或粘贴 space.bilibili.com/号 的主页链接",
+    "douyin": "只能填抖音号（数字或字母），或粘贴 douyin.com/user/… 的主页链接",
+}
 
 
-def require_numeric_or_link(platform, value: str) -> None:
-    """显式选了平台时，只接受「该平台的号码」或「该平台的主页链接」。
+def require_id_or_link(platform, value: str) -> None:
+    """显式选了平台时，只接受「该平台的号」或「该平台的主页链接」。
+
+    「号」按平台各自判：B 站是纯数字 UID，抖音号允许字母（`luoyonghao`）——
+    抖音号是不是数字跟能不能按号查到没有关系，两种都由平台按 ``unique_id`` 查。
 
     前端已经拦一道，这里再拦一道：**昵称仍然不收**，免得后端拿一串中文去平台
     搜人（搜出来的是谁全凭平台排序，很容易抓错博主）。
@@ -150,14 +163,15 @@ def require_numeric_or_link(platform, value: str) -> None:
     if platform is None:
         return
     name = getattr(platform, "value", platform)
-    if name not in ("douyin", "bilibili"):
+    pattern = _ID_PATTERN.get(name)
+    if pattern is None:
         return
     v = (value or "").strip()
-    if _NUMERIC_ID_RE.fullmatch(v):
+    if pattern.fullmatch(v):
         return
     urls = find_urls(v)
     if not urls:
-        raise LinkError("只能填纯数字，或粘贴该平台的博主主页链接")
+        raise LinkError(_ID_HINT[name])
     for raw in urls:
         found = platform_of(raw)
         if found is None:

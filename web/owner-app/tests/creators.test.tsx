@@ -278,7 +278,7 @@ describe('批量提取：表单校验与动态字段', () => {
     const input = () => document.querySelector('input[type="text"]') as HTMLInputElement;
     const label = () => document.querySelector('.ext-url > span')!.textContent;
     // 默认抖音：标签和占位都把「号」和「主页链接」两种写法写出来
-    expect(input().placeholder).toBe('例如 67194609689，或粘贴 douyin.com/user/… 的主页链接');
+    expect(input().placeholder).toBe('例如 67194609689、luoyonghao，或粘贴 douyin.com/user/… 的主页链接');
     expect(label()).toBe('抖音号 / 主页链接');
 
     await choose('输入类型', 'B 站');
@@ -385,6 +385,52 @@ describe('批量提取：表单校验与动态字段', () => {
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
     expect(body.url).toBe(url);
     expect(body.platform).toBe('douyin');
+  });
+
+  test('字母型抖音号也按号提交：不当昵称，也不用先贴链接', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    // `luoyonghao` 这种字母号过去被「只能填纯数字」挡在门外，只能贴链接
+    await fillUrl('luoyonghao');
+    await click(button('预览'));
+    await until(() => text().includes('预计选取 2 条'));
+
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.url).toBe('luoyonghao');
+    expect(body.platform).toBe('douyin');
+  });
+
+  test('号里带数字的字母号不被截成数字（`chenling2024` 不是 `2024`）', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await fillUrl('chenling2024');
+    await click(button('预览'));
+    await until(() => text().includes('预计选取 2 条'));
+
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.url).toBe('chenling2024');
+  });
+
+  test('B 站号只能是数字：填字母串被拦下，不发请求', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await choose('输入类型', 'B 站');
+    await fillUrl('luoyonghao');
+    await click(button('预览'));
+    await until(() => text().includes('只能填纯数字的 B 站号'));
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
   test('不带协议的域名也能认出来，提交前补上 https', async () => {

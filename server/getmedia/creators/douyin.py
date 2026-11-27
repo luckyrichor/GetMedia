@@ -153,6 +153,9 @@ def play_urls(raw: dict) -> tuple[str, ...]:
 
 
 _SEC_UID_RE = re.compile(r"^MS4wLjAB[A-Za-z0-9_-]{8,}$")
+# 抖音号（unique_id）：字母、数字、下划线、点、短横线，4–24 位是官方规则，
+# 这里放宽到 2–30 免得把老号或短号挡在外面。**不含中文和空格**——那是昵称，不是号。
+_UNIQUE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,30}$")
 
 # 浏览器桥接单次抓取的硬上限。max_items 跟着 need 长（否则「全部作品」翻不深），
 # scrolls 也按 need 反推，但两者都要封顶：滚得越多越慢、越容易触发验证码。
@@ -554,21 +557,46 @@ class DouyinCreatorProvider:
         value = (value or "").strip()
         if _SEC_UID_RE.match(value):
             return CreatorRef(Platform.DOUYIN, value, f"https://www.douyin.com/user/{value}", value)
-        if value.isdigit():
-            try:
-                return self._resolve_unique_id(value, cookie_file)
-            except CreatorNotFound:
-                pass
-            except CreatorUnavailable:
-                if not settings.douyin_browser:
-                    raise
+        # 抖音号可以是字母（`luoyonghao`），也可以全是数字（`67194609689`）——
+        # 两者都是「号」，都按号查，不能因为不是数字就退化成搜昵称。
+        if _UNIQUE_ID_RE.match(value):
+            return self._resolve_by_unique_id(value, cookie_file)
+        # 走到这里只剩「带中文或空格的名字」，那不是号，是昵称，只能靠搜索。
         if not settings.douyin_browser:
-            raise CreatorUnavailable("抖音按抖音号/昵称搜索需要启用浏览器桥接：" + _BROWSER_INSTALL_HINT)
+            raise CreatorUnavailable("抖音按昵称搜索需要启用浏览器桥接：" + _BROWSER_INSTALL_HINT)
         user = self._bridge_factory().resolve_user(value, cookie_file=cookie_file)
         sec = user.get("sec_uid") or user.get("sec_user_id")
         if not isinstance(sec, str) or not _SEC_UID_RE.match(sec):
             raise CreatorNotFound(f"抖音没有返回「{value}」的主页标识")
         return CreatorRef(Platform.DOUYIN, sec, f"https://www.douyin.com/user/{sec}", value)
+
+    def _resolve_by_unique_id(self, unique_id: str, cookie_file: Path | None) -> CreatorRef:
+        """按抖音号查人：查不到就报查不到，**不退回搜索**。
+
+        公开的 ``user/info?unique_id=`` 对字母号同样有效（实测 ``unique_id=luoyonghao``
+        直接返回罗永浩），所以「字母号只能靠搜昵称猜」不成立——那只是这里过去用
+        ``isdigit()`` 把字母号挡在门外造成的。查不到就是输入错了，不拿名字去猜一个人回来。
+
+        只有接口本身不可用（出口被挡、接口挂了）时，才退回浏览器搜索兜底；
+        而且要求搜到的人**号对得上**，对不上宁可报错，也不抓错博主。
+        """
+        try:
+            return self._resolve_unique_id(unique_id, cookie_file)
+        except CreatorUnavailable:
+            if not settings.douyin_browser:
+                raise
+        user = self._bridge_factory().resolve_user(unique_id, cookie_file=cookie_file)
+        sec = user.get("sec_uid") or user.get("sec_user_id")
+        if not isinstance(sec, str) or not _SEC_UID_RE.match(sec):
+            raise CreatorNotFound(f"抖音没有返回「{unique_id}」的主页标识")
+        got = str(user.get("unique_id") or user.get("short_id") or "").strip()
+        if got and got.casefold() != unique_id.casefold():
+            raise CreatorNotFound(
+                f"按抖音号没查到「{unique_id}」，搜索只找到「{user.get('nickname') or '?'}」；"
+                "请核对抖音号，或直接贴主页链接"
+            )
+        return CreatorRef(Platform.DOUYIN, sec, f"https://www.douyin.com/user/{sec}", unique_id)
+
 
     def _resolve_unique_id(self, unique_id: str, cookie_file: Path | None) -> CreatorRef:
         """抖音号先在公开 user/info 接口换成 sec_uid；这条路不需要登录。"""

@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import creator_formats
 from .creator_jobs import CreatorJobService, JobError, Selection, StoreError, parse_day
-from .creator_links import LinkError, require_numeric_or_link
+from .creator_links import LinkError, require_id_or_link
 from .errors import ApiError
 from .media_api import _file_response, attachment_disposition, attachment_name
 from .service import AuthCtx
@@ -111,7 +111,7 @@ def register(app, guard, engine, clock, *, service: CreatorJobService | None = N
     @app.post("/v2/creators/jobs", status_code=202)
     def create_job(body: JobCreateBody, background: BackgroundTasks, ctx: AuthCtx = Depends(guard)):
         try:
-            require_numeric_or_link(body.platform, body.url)
+            require_id_or_link(body.platform, body.url)
             selection = Selection(
                 mode=body.mode,
                 since=parse_day(body.since) if body.since else None,

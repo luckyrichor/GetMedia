@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,8 @@ import pytest
 from getmedia import creator_rt
 from getmedia.config import testing_settings as make_settings
 from getmedia.creator_links import CreatorRef, Platform
-from getmedia.creators.base import CreatorNotFound
+from getmedia.creators import douyin as douyin_mod
+from getmedia.creators.base import CreatorNotFound, CreatorUnavailable
 from getmedia.creators.douyin import DouyinCreatorProvider, _ck
 
 
@@ -118,3 +120,86 @@ def test_direct_request_without_those_keys_sends_empty(tmp_path):
     assert params["uifid"] == ""
     assert params["msToken"] == ""
     assert params["webid"] == ""
+
+
+# ---------- 按抖音号查人：字母号也走「按号查」，不退回搜昵称 ----------
+
+
+def _settings_with(tmp_path, **over):
+    """一份改了指定字段的设置（douyin.py 读的是模块级 ``settings`` 名字，要打在模块上）。"""
+    return dataclasses.replace(make_settings(tmp_path), **over)
+
+
+class _Recorder:
+    """替身：既当「按号查」的函数用，也当浏览器桥接用；记下调用，返回预设结果或抛预设异常。"""
+
+    def __init__(self, *, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls: list[str] = []
+
+    def _run(self, value):
+        self.calls.append(value)
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+    def __call__(self, value, cookie_file=None):  # 替身 _resolve_unique_id
+        return self._run(value)
+
+    def resolve_user(self, value, *, cookie_file=None):  # 替身浏览器桥接
+        return self._run(value)
+
+
+def _provider(monkeypatch, *, lookup, bridge=None):
+    provider = DouyinCreatorProvider(bridge_factory=lambda: bridge)
+    monkeypatch.setattr(provider, "_resolve_unique_id", lookup)
+    return provider
+
+
+def test_letter_unique_id_is_looked_up_as_id(monkeypatch, tmp_path):
+    """字母抖音号按 unique_id 查，不需要浏览器桥接（`isdigit()` 那道门已经拆了）。"""
+    monkeypatch.setattr(douyin_mod, "settings", _settings_with(tmp_path, douyin_browser=False))
+    want = CreatorRef(Platform.DOUYIN, "MS4wLjABAAAAabcdefgh", "https://www.douyin.com/user/MS4wLjABAAAAabcdefgh", "luoyonghao")
+    lookup = _Recorder(result=want)
+    ref = _provider(monkeypatch, lookup=lookup).resolve("luoyonghao", cookie_file=None)
+    assert ref.creator_id == "MS4wLjABAAAAabcdefgh"
+    assert lookup.calls == ["luoyonghao"]
+
+
+def test_not_found_does_not_fall_back_to_search(monkeypatch, tmp_path):
+    """按号查不到就是查不到：不拿这个名字去搜索里猜一个人回来。"""
+    monkeypatch.setattr(douyin_mod, "settings", _settings_with(tmp_path, douyin_browser=True))
+    lookup = _Recorder(error=CreatorNotFound("没有找到抖音号 nosuchuser 对应的博主"))
+    bridge = _Recorder(result={"sec_uid": "MS4wLjABAAAAsomeonexx", "unique_id": "someone_else"})
+    provider = _provider(monkeypatch, lookup=lookup, bridge=bridge)
+    with pytest.raises(CreatorNotFound) as err:
+        provider.resolve("nosuchuser", cookie_file=None)
+    assert "nosuchuser" in str(err.value)
+    assert bridge.calls == [], "查不到时不许退回搜索"
+
+
+def test_search_fallback_only_when_lookup_unavailable(monkeypatch, tmp_path):
+    """接口不可用才退回搜索，且必须号对得上；对不上宁可报错。"""
+    monkeypatch.setattr(douyin_mod, "settings", _settings_with(tmp_path, douyin_browser=True))
+    ok = _Recorder(result={"sec_uid": "MS4wLjABAAAAabcdefgh", "unique_id": "luoyonghao", "nickname": "罗永浩"})
+    ref = _provider(monkeypatch, lookup=_Recorder(error=CreatorUnavailable("接口被挡")), bridge=ok).resolve(
+        "luoyonghao", cookie_file=None
+    )
+    assert ref.creator_id == "MS4wLjABAAAAabcdefgh"
+
+    wrong = _Recorder(result={"sec_uid": "MS4wLjABAAAAsomeonexx", "unique_id": "someone_else", "nickname": "另一个人"})
+    provider = _provider(monkeypatch, lookup=_Recorder(error=CreatorUnavailable("接口被挡")), bridge=wrong)
+    with pytest.raises(CreatorNotFound) as err:
+        provider.resolve("luoyonghao", cookie_file=None)
+    assert "没查到" in str(err.value)
+
+
+def test_nickname_still_goes_through_search(monkeypatch, tmp_path):
+    """带中文的名字不是号，只能走搜索——这条老路要留着。"""
+    monkeypatch.setattr(douyin_mod, "settings", _settings_with(tmp_path, douyin_browser=True))
+    lookup = _Recorder(result=CreatorRef(Platform.DOUYIN, "x", "x", "x"))
+    bridge = _Recorder(result={"sec_uid": "MS4wLjABAAAAnickxxxx", "unique_id": "whoever"})
+    ref = _provider(monkeypatch, lookup=lookup, bridge=bridge).resolve("罗永浩", cookie_file=None)
+    assert ref.creator_id == "MS4wLjABAAAAnickxxxx"
+    assert lookup.calls == [], "昵称不该拿去按号查"
