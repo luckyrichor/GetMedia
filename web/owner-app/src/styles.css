@@ -237,7 +237,12 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 }
 /* 五种颜色固定跟着语义走，不跟着位置轮换：换个排序也不会"这条的时间变成蓝色"。
    顺序恰好是 平台→时长→时间→存放→大小，相邻三格颜色天然不同。 */
-.meta-tag.t-plat { --tag-bg: #eaf1fe; --tag-line: #c6d7f8; --tag-ink: #1c47b0; }
+/* 平台这一格按最长的「手机导入」（4 个字）定宽：两个字时居中、两边留白，
+   这样每行的平台列等宽，后面几个标签的起点才对得齐。em 跟着标签字号走，不用写死 px。 */
+.meta-tag.t-plat {
+  --tag-bg: #eaf1fe; --tag-line: #c6d7f8; --tag-ink: #1c47b0;
+  min-width: calc(4em + 16px); text-align: center;   /* 4 字 + 左右 padding 14px + 边框 2px */
+}
 .meta-tag.t-dur { --tag-bg: #f4f0fe; --tag-line: #dcd2fb; --tag-ink: #6535c9; }
 .meta-tag.t-time { --tag-bg: #e8f7f8; --tag-line: #bcebef; --tag-ink: #0d6d77; }
 .meta-tag.t-store { --tag-bg: #fdf4e6; --tag-line: #f5ddb3; --tag-ink: #96601a; }
