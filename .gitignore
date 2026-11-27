@@ -87,3 +87,5 @@ __pycache__/
 /docs/stage6-download-design.md
 # 退役计划：含服务器 systemd/nginx/certbot 实际路径、续期单元 ExecStart 与旧服务盘点，只留本地
 /docs/retirement-plan.md
+# 等级体系与管理员后台实施计划：含生产账号名、内网路径与执行顺序，只留本地
+/docs/PLAN-tier-admin.local.md
