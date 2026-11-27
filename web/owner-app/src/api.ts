@@ -564,6 +564,10 @@ export const ownerApi = {
   adminSetTier: (id: string, tier: 'free' | 'full', duration: '6m' | 'permanent' = '6m') =>
     api.request<{ ok: boolean; tier: Tier; tier_expires_at: number | null; revoked_sessions: number }>(
       'POST', `/v2/admin/accounts/${encodeURIComponent(id)}/tier`, { tier, duration }),
+  /** 只改有效期（精确到秒）：`null` = 永久。不吊销会话，下一个请求就按新有效期算等级。 */
+  adminSetExpiry: (id: string, expiresAt: number | null) =>
+    api.request<{ ok: boolean; tier: Tier; tier_expires_at: number | null }>(
+      'POST', `/v2/admin/accounts/${encodeURIComponent(id)}/expiry`, { expires_at: expiresAt }),
   adminResetPassword: (id: string, password: string) =>
     api.request<{ ok: boolean; revoked_sessions: number }>(
       'POST', `/v2/admin/accounts/${encodeURIComponent(id)}/password`, { password }),

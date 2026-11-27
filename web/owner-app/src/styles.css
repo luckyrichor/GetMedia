@@ -367,10 +367,12 @@ audio.player-media { background: none; }
 .field-row .field { flex: 1 1 10rem; margin-bottom: 10px; }
 /* 单独成列的复选框不是 .field，底部对齐才能和 input 同一基线 */
 .field-row .check { align-self: flex-end; }
-input[type="text"], input[type="number"], input[type="date"], textarea, select {
+input[type="text"], input[type="number"], input[type="date"], input[type="datetime-local"], textarea, select {
   font: inherit; color: var(--text); background: var(--bg);
   border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%;
 }
+/* 精确到秒的到期时间（权限管理「改有效期」）：宽度跟着原生控件内容走，别撑满整行把按钮挤下去 */
+.filter-row input[type="datetime-local"] { flex: none; width: auto; min-width: 0; }
 /* 日期框：浏览器给空值自造的占位语言跟系统走（中文「年/月/日」、英文「yyyy/mm/dd」），
    而这些框旁边本来就有「从 / 到 / 提交时间」这类说明，占位纯属噪音。
    外面包一层 .date-wrap 只是为了能在同一位置换一行自己的中文占位。 */

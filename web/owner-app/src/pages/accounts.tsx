@@ -1,9 +1,12 @@
-/** 权限管理（仅管理员）：账号列表、改等级、重置密码、停用/恢复、撤销注销。
+/** 权限管理（仅管理员）：账号列表、改等级、改有效期、重置密码、停用/恢复、撤销注销。
  *
  * 三条硬规则在界面上也要体现：
- * - 管理员行没有「设为…」「停用」，只有重置密码；
+ * - 管理员行没有「设为…」「停用」「改有效期」，只有重置密码；
  * - 改等级 / 重置密码 / 停用都要吊销对方全部会话，确认文案里写明；
  * - 待注销行显示「还剩 N 天」与到秒的截止时间，方便判断来不来得及撤销。
+ *
+ * 「改有效期」是唯一不踢人的操作：等级每次请求都按库里的 `tier + tier_expires_at` 实时算，
+ * 改完立即生效，所以保存后设备不用重新登录。
  */
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
@@ -37,6 +40,32 @@ function dayEnd(s: string): number | undefined {
   return Number.isFinite(t) ? Math.floor(t / 1000) : undefined;
 }
 
+/** epoch 秒 → `<input type="datetime-local" step="1">` 认的字符串（本地时间，不带时区）。 */
+function toLocalInput(unix: number): string {
+  const d = new Date(unix * 1000);
+  const two = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`
+    + `T${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+}
+
+/** datetime-local 的字符串按本地时区解析（不带时区的日期时间就是本地时间），再换成 epoch 秒。 */
+function fromLocalInput(s: string): number | undefined {
+  if (!s) return undefined;
+  const t = new Date(s).getTime();
+  return Number.isFinite(t) ? Math.floor(t / 1000) : undefined;
+}
+
+/** 加自然月，日号超出目标月天数时收敛到月末（8-31 +6 → 2-28）——与服务端 `add_months` 一致。 */
+function addMonthsTs(unix: number, months: number): number {
+  const d = new Date(unix * 1000);
+  const y = d.getFullYear() + Math.floor((d.getMonth() + months) / 12);
+  const m = ((d.getMonth() + months) % 12 + 12) % 12;
+  const last = new Date(y, m + 1, 0).getDate();
+  const c = new Date(d);
+  c.setFullYear(y, m, Math.min(d.getDate(), last));
+  return Math.floor(c.getTime() / 1000);
+}
+
 function expiryCell(a: AdminAccount) {
   if (a.admin) return <span class="muted">永久</span>;
   if (a.tier === 'free') return <span class="muted">—</span>;
@@ -44,7 +73,8 @@ function expiryCell(a: AdminAccount) {
   const now = Math.floor(Date.now() / 1000);
   if (a.tier_expires_at <= now) return <span class="tag bad">已过期</span>;
   const soon = a.tier_expires_at - now <= 30 * 86400;
-  return <span class={soon ? 'tag warn' : ''}>{fmtTime(a.tier_expires_at)}</span>;
+  // 表格里只到分钟；鼠标停上去看秒（改有效期是精确到秒的）
+  return <span class={soon ? 'tag warn' : ''} title={fmtDateTime(a.tier_expires_at)}>{fmtTime(a.tier_expires_at)}</span>;
 }
 
 function statusCell(a: AdminAccount) {
@@ -76,6 +106,10 @@ export function AccountsPage() {
   const [flash, setFlash] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [tierFor, setTierFor] = useState<AdminAccount | null>(null);
   const [tierMonths, setTierMonths] = useState<'6m' | 'permanent'>('6m');
+  const [expFor, setExpFor] = useState<AdminAccount | null>(null);
+  /** 输入框里的本地时间串（`YYYY-MM-DDTHH:mm:ss`）；换算成 epoch 再发给服务端 */
+  const [expValue, setExpValue] = useState('');
+  const [expPermanent, setExpPermanent] = useState(false);
   const [pwFor, setPwFor] = useState<AdminAccount | null>(null);
   const [pw1, setPw1] = useState('');
   const [pw2, setPw2] = useState('');
@@ -169,6 +203,42 @@ export function AccountsPage() {
     }
   }
 
+  /** 打开「改有效期」：预填当前到期时间；本来就是永久就先把输入框填成 6 个月后，方便直接改。 */
+  function openExpiry(a: AdminAccount) {
+    const now = Math.floor(Date.now() / 1000);
+    setExpFor(a);
+    setExpPermanent(a.tier_expires_at == null);
+    setExpValue(toLocalInput(a.tier_expires_at ?? addMonthsTs(now, 6)));
+    setFlash(null);
+  }
+
+  async function doExpiry() {
+    if (!expFor) return;
+    const now = Math.floor(Date.now() / 1000);
+    const ts = expPermanent ? null : (fromLocalInput(expValue) ?? null);
+    if (!expPermanent && ts == null) {
+      return setFlash({ kind: 'err', text: '请先选择到期时间（精确到秒）' });
+    }
+    if (ts != null && ts <= now) {
+      return setFlash({ kind: 'err', text: '有效期必须晚于当前时间；要让账号立即失效，请用「设为免费」' });
+    }
+    setBusy(true);
+    try {
+      const r = await ownerApi.adminSetExpiry(expFor.id, ts);
+      setFlash({
+        kind: 'ok',
+        text: `${expFor.login_name} 的有效期已改为 ${r.tier_expires_at ? fmtDateTime(r.tier_expires_at) : '永久'}`
+          + '；立即生效，该账号不需要重新登录',
+      });
+      setExpFor(null);
+      reload();
+    } catch (e) {
+      setFlash({ kind: 'err', text: messageFor(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function doStatus(a: AdminAccount, next: 'disabled' | 'active') {
     const msg = next === 'disabled'
       ? `停用「${a.login_name}」？\n\n该账号立即无法登录（登录时会看到"该账号已被停用"），${a.active_sessions} 个登录设备全部退出；数据保留，可随时恢复。`
@@ -229,6 +299,13 @@ export function AccountsPage() {
 
   const data: AdminAccountPage | null = state.k === 'ok' ? state.data : null;
   const s = data?.summary;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expTs = fromLocalInput(expValue);
+  const expPreview = expPermanent
+    ? '永久有效，不会到期。'
+    : expTs == null
+      ? '还没选时间。'
+      : `将设为 ${fmtDateTime(expTs)}（还剩 ${Math.max(0, Math.ceil((expTs - nowSec) / 86400))} 天）。`;
 
   return (
     <>
@@ -299,6 +376,51 @@ export function AccountsPage() {
         </div>
       ) : null}
 
+      {expFor ? (
+        <div class="card">
+          <h2>设置「{expFor.login_name}」的有效期</h2>
+          <p class="muted">
+            当前：
+            {expFor.tier_expires_at
+              ? `${fmtDateTime(expFor.tier_expires_at)}（${expFor.tier_expires_at > nowSec ? '还剩 ' + Math.ceil((expFor.tier_expires_at - nowSec) / 86400) + ' 天' : '已过期'}）`
+              : '永久'}
+            。改成更晚的时间就是延长，改成更早的时间就是缩短；原本永久的也能改成有期限。
+          </p>
+          <div class="filter-row">
+            <label><input type="radio" name="expmode" checked={!expPermanent} onChange={() => setExpPermanent(false)} /> 指定到期时间</label>
+            <label><input type="radio" name="expmode" checked={expPermanent} onChange={() => setExpPermanent(true)} /> 永久</label>
+          </div>
+          {expPermanent ? null : (
+            <>
+              <div class="filter-row">
+                <input
+                  type="datetime-local"
+                  step="1"
+                  aria-label="新的到期时间（精确到秒）"
+                  value={expValue}
+                  disabled={busy}
+                  onInput={(e) => setExpValue(e.currentTarget.value)}
+                />
+                <button type="button" class="btn btn-ghost small" disabled={busy}
+                        onClick={() => setExpValue(toLocalInput(addMonthsTs(expTs ?? nowSec, 6)))}>
+                  +6 个月
+                </button>
+                <button type="button" class="btn btn-ghost small" disabled={busy}
+                        onClick={() => setExpValue(toLocalInput(addMonthsTs(expTs ?? nowSec, 12)))}>
+                  +1 年
+                </button>
+              </div>
+              <p class="small muted">{expPreview}</p>
+            </>
+          )}
+          <p class="muted">保存后立即生效（等级每次请求都按库里的到期时间算），该账号不需要重新登录。</p>
+          <div class="filter-row">
+            <button type="button" class="btn" disabled={busy} onClick={() => void doExpiry()}>保存</button>
+            <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => setExpFor(null)}>取消</button>
+          </div>
+        </div>
+      ) : null}
+
       {pwFor ? (
         <div class="card">
           <h2>重置「{pwFor.login_name}」的密码</h2>
@@ -352,7 +474,12 @@ export function AccountsPage() {
                   <td>
                     <div class="row-actions">
                       {a.admin ? null : a.status === 'disabled' ? (
-                        <button type="button" class="btn small" disabled={busy} onClick={() => void doStatus(a, 'active')}>恢复</button>
+                        <>
+                          {a.tier === 'full' ? (
+                            <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => openExpiry(a)}>改有效期</button>
+                          ) : null}
+                          <button type="button" class="btn small" disabled={busy} onClick={() => void doStatus(a, 'active')}>恢复</button>
+                        </>
                       ) : a.status === 'pending_deletion' ? (
                         <>
                           <button type="button" class="btn small" disabled={busy} onClick={() => void doRestore(a)}>撤销注销</button>
@@ -364,6 +491,9 @@ export function AccountsPage() {
                                   onClick={() => { setTierFor(a); setTierMonths('6m'); }}>
                             {a.tier === 'full' ? '设为免费' : '设为完整版'}
                           </button>
+                          {a.tier === 'full' ? (
+                            <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => openExpiry(a)}>改有效期</button>
+                          ) : null}
                           <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => void doStatus(a, 'disabled')}>停用</button>
                         </>
                       )}

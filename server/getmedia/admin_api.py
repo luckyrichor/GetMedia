@@ -5,7 +5,8 @@
 
 几条硬规则（见 docs/PLAN-tier-admin.local.md）：
 - 不能把任何账号改成 admin，也不能降级/停用 admin；
-- 改等级、重置密码、停用都必须吊销目标账号全部会话；
+- 改等级、重置密码、停用都必须吊销目标账号全部会话；改有效期**不**吊销
+  （等级每次请求都按库里的 `tier + tier_expires_at` 实时算，改完立即生效）；
 - 邀请码明文只在生成响应里出现一次，库里只有 HMAC。
 """
 from __future__ import annotations
@@ -57,6 +58,11 @@ SELECT u.id AS id, u.login_name AS login_name, u.tier AS tier,
 class TierChangeReq(BaseModel):
     tier: Literal["free", "full"]
     duration: Literal["6m", "permanent"] = "6m"
+
+
+class ExpiryReq(BaseModel):
+    """`expires_at` 必须显式给出：`null` 表示永久。不写这个字段会被拒（避免误把账号设成永久）。"""
+    expires_at: Optional[int]
 
 
 class PasswordResetReq(BaseModel):
@@ -183,6 +189,34 @@ def register(app: FastAPI, require_admin, engine: Engine, svc: AccountService, c
             svc.audit(c, "admin_tier_change", uid, ip_of(request), request.url.path,
                       f"{u.tier}->{req.tier}" + ("/permanent" if req.duration == "permanent" else ""))
         return {"ok": True, "tier": req.tier, "tier_expires_at": exp, "revoked_sessions": revoked}
+
+    # ---------- 改有效期（精确到秒） ----------
+    @app.post("/v2/admin/accounts/{uid}/expiry")
+    def set_expiry(uid: str, req: ExpiryReq, request: Request, ctx=Depends(require_admin)):
+        """把完整版的到期时间改成指定时刻（`null` = 永久）。
+
+        永久 → 有期限、有期限 → 延长/缩短到某个时刻，都走这里。只改 `tier_expires_at`，
+        **不吊销会话**：`authenticate` 每次都按库里的 `tier + tier_expires_at` 实时算等级
+        （`effective_tier`），改完下一个请求就生效，没必要把人踢下线。
+        """
+        now = svc.now()
+        if req.expires_at is not None:
+            if req.expires_at <= now:
+                raise ApiError(422, "invalid_expires_at", "有效期必须晚于当前时间；要让账号立即失效请改为免费版")
+            if req.expires_at > now + 50 * 366 * 86400:
+                raise ApiError(422, "invalid_expires_at", "有效期过远，请检查年份")
+        with engine.begin() as c:
+            u = _user(c, uid)
+            if u is None:
+                raise ApiError(404, "not_found", "未找到该账号")
+            if u.tier == TIER_ADMIN:
+                raise ApiError(409, "cannot_change_admin", "管理员账号本来就是永久，不能改有效期")
+            if u.tier != TIER_FULL:
+                raise ApiError(409, "not_full", "该账号当前不是完整版，请先设为完整版再改有效期")
+            c.execute(text("UPDATE users SET tier_expires_at=:e WHERE id=:u"), {"e": req.expires_at, "u": uid})
+            svc.audit(c, "admin_expiry_set", uid, ip_of(request), request.url.path,
+                      f"{u.tier_expires_at or 'permanent'}->{req.expires_at or 'permanent'}")
+        return {"ok": True, "tier": TIER_FULL, "tier_expires_at": req.expires_at}
 
     # ---------- 重置密码 ----------
     @app.post("/v2/admin/accounts/{uid}/password")

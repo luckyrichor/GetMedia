@@ -102,6 +102,75 @@ def test_tier_change_rejects_admin_target_and_admin_value(open_reg):
                                json={"tier": "admin"}, headers=hdr(admin)).status_code == 422
 
 
+def test_admin_sets_exact_expiry_on_permanent_account(open_reg):
+    """永久完整版 → 指定到秒的到期时间；不吊销会话，下一个请求就按新时间算。"""
+    admin = make_admin(open_reg)
+    tok = register(open_reg, name="bob").json()["session"]["token"]
+    uid = _uid(open_reg, tok)
+    open_reg.client.post(f"/v2/admin/accounts/{uid}/tier",
+                         json={"tier": "full", "duration": "permanent"}, headers=hdr(admin))
+    tok = login(open_reg, name="bob").json()["session"]["token"]     # 改等级把旧会话踢了
+    exp = int(open_reg.clock()) + 100 * 86400 + 12 * 3600 + 34 * 60 + 56
+    r = open_reg.client.post(f"/v2/admin/accounts/{uid}/expiry", json={"expires_at": exp}, headers=hdr(admin))
+    assert r.status_code == 200
+    assert r.json()["tier_expires_at"] == exp
+    # 不踢人：原会话仍有效，且立刻看到秒级的新到期时间
+    me = open_reg.client.get("/account/me", headers=hdr(tok))
+    assert me.status_code == 200
+    assert me.json()["tier"] == "full" and me.json()["tier_expires_at"] == exp
+
+
+def test_admin_extends_and_shortens_timed_expiry(open_reg):
+    admin = make_admin(open_reg)
+    tok = register(open_reg, name="bob").json()["session"]["token"]
+    uid = _uid(open_reg, tok)
+    open_reg.client.post(f"/v2/admin/accounts/{uid}/tier", json={"tier": "full"}, headers=hdr(admin))
+    first = int(open_reg.clock()) + 60 * 86400 + 7
+    assert open_reg.client.post(f"/v2/admin/accounts/{uid}/expiry", json={"expires_at": first},
+                                headers=hdr(admin)).json()["tier_expires_at"] == first
+    # 延长到一年后
+    later = first + 365 * 86400
+    r = open_reg.client.post(f"/v2/admin/accounts/{uid}/expiry", json={"expires_at": later}, headers=hdr(admin))
+    assert r.json()["tier_expires_at"] == later
+    # 缩短（仍晚于现在）
+    shorter = int(open_reg.clock()) + 10 * 86400
+    r = open_reg.client.post(f"/v2/admin/accounts/{uid}/expiry", json={"expires_at": shorter}, headers=hdr(admin))
+    assert r.json()["tier_expires_at"] == shorter
+    assert login(open_reg, name="bob").json()["account"]["tier_expires_at"] == shorter
+
+
+def test_admin_expiry_back_to_permanent(open_reg):
+    admin = make_admin(open_reg)
+    tok = register(open_reg, name="bob").json()["session"]["token"]
+    uid = _uid(open_reg, tok)
+    open_reg.client.post(f"/v2/admin/accounts/{uid}/tier", json={"tier": "full"}, headers=hdr(admin))
+    r = open_reg.client.post(f"/v2/admin/accounts/{uid}/expiry", json={"expires_at": None}, headers=hdr(admin))
+    assert r.status_code == 200 and r.json()["tier_expires_at"] is None
+    me = login(open_reg, name="bob").json()["account"]
+    assert me["tier"] == "full" and me["tier_expires_at"] is None
+
+
+def test_admin_expiry_validation(open_reg):
+    admin = make_admin(open_reg)
+    now = int(open_reg.clock())
+    root_id = _uid(open_reg, admin)
+    # 管理员本来就是永久，不给改
+    r = open_reg.client.post(f"/v2/admin/accounts/{root_id}/expiry", json={"expires_at": now + 86400},
+                             headers=hdr(admin))
+    assert r.status_code == 409 and r.json()["code"] == "cannot_change_admin"
+    # 免费版没有"有效期"这回事，先设为完整版
+    tok = register(open_reg, name="bob").json()["session"]["token"]
+    uid = _uid(open_reg, tok)
+    r = open_reg.client.post(f"/v2/admin/accounts/{uid}/expiry", json={"expires_at": now + 86400},
+                             headers=hdr(admin))
+    assert r.status_code == 409 and r.json()["code"] == "not_full"
+    open_reg.client.post(f"/v2/admin/accounts/{uid}/tier", json={"tier": "full"}, headers=hdr(admin))
+    # 过去的时间 / 没给字段 / 远得离谱
+    for body in ({"expires_at": now}, {"expires_at": now - 1}, {}, {"expires_at": now + 60 * 366 * 86400}):
+        r = open_reg.client.post(f"/v2/admin/accounts/{uid}/expiry", json=body, headers=hdr(admin))
+        assert r.status_code == 422, body
+
+
 def test_password_reset_revokes_all_sessions(open_reg):
     admin = make_admin(open_reg)
     tok = register(open_reg, name="bob").json()["session"]["token"]

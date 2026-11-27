@@ -16,6 +16,14 @@ async function setInput(sel: string, value: string) {
   });
 }
 
+/** epoch 秒 → datetime-local 认的本地串，和页面里的换算保持一致，用来断言预填值。 */
+function localInput(unix: number): string {
+  const d = new Date(unix * 1000);
+  const two = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`
+    + `T${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+}
+
 const NOW = Math.floor(Date.now() / 1000);
 
 const ACCOUNT = {
@@ -169,6 +177,59 @@ describe('权限管理', () => {
 
     release(accountsPage([]));
     await until(() => text().includes('没有符合条件的账号'));
+  });
+
+  test('改有效期：预填当前到期时间，改完按秒提交，并说明不会踢人下线', async () => {
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage([ACCOUNT]),
+      'POST /v2/admin/accounts/acct_2/expiry': {
+        json: { ok: true, tier: 'full', tier_expires_at: 1_900_000_000 },
+      },
+    }));
+    mount('/accounts');
+    await until(() => text().includes('改有效期'));
+    await click(button('改有效期'));
+    await until(() => text().includes('设置「alice」的有效期'));
+
+    const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+    expect(input.value).toBe(localInput(ACCOUNT.tier_expires_at));   // 预填 = 现在的到期时间
+    expect(text()).toContain('改成更晚的时间就是延长');
+
+    await setInput('input[type="datetime-local"]', '2027-03-15T09:08:07');
+    await click(button('保存'));
+
+    const post = calls.find((c) => c.method === 'POST')!;
+    expect(post.body).toEqual({
+      expires_at: Math.floor(new Date('2027-03-15T09:08:07').getTime() / 1000),
+    });
+    await until(() => text().includes('有效期已改为'));
+    expect(text()).toContain('不需要重新登录');
+  });
+
+  test('改有效期：选「永久」时发 null；免费版行没有这个按钮', async () => {
+    const freeRow = { ...ACCOUNT, id: 'acct_4', login_name: 'carol', tier: 'free', tier_expires_at: null };
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage([ACCOUNT, freeRow]),
+      'POST /v2/admin/accounts/acct_2/expiry': { json: { ok: true, tier: 'full', tier_expires_at: null } },
+    }));
+    mount('/accounts');
+    await until(() => text().includes('carol'));
+
+    // 只有完整版那一行有「改有效期」
+    expect(Array.from(document.querySelectorAll('button')).filter((b) => b.textContent === '改有效期').length).toBe(1);
+
+    await click(button('改有效期'));
+    await until(() => text().includes('设置「alice」的有效期'));
+    const perm = Array.from(document.querySelectorAll('input[type="radio"]'))
+      .find((el) => (el.parentElement?.textContent ?? '').includes('永久'))!;
+    await click(perm);
+    expect(document.querySelector('input[type="datetime-local"]')).toBeNull();   // 选永久就不再要时间
+    await click(button('保存'));
+
+    const post = calls.find((c) => c.method === 'POST')!;
+    expect(post.body).toEqual({ expires_at: null });
   });
 });
 
