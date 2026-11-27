@@ -8,7 +8,7 @@ import { messageFor } from '@shared/errors';
 import { ownerApi, type JobStorage, type MediaType, type Schedule, type ScheduleRun, type SelectionMode } from '../api';
 import { SELECTION, STORAGE, intervalText, platformName } from '../labels';
 import { Select } from '../select';
-import { Empty, ErrorBox, fmtTime, Loading, relTime } from '../ui';
+import { DateInput, Empty, ErrorBox, fmtTime, Loading, relTime } from '../ui';
 
 const INTERVALS = [60, 360, 720, 1440, 4320, 10080];
 
@@ -183,11 +183,11 @@ export function SchedulesPage() {
             <>
               <label class="field">
                 <span>开始日期</span>
-                <input type="date" value={since} onInput={(e) => setSince((e.target as HTMLInputElement).value)} />
+                <DateInput label="开始日期" value={since} onInput={setSince} />
               </label>
               <label class="field">
                 <span>结束日期（可空）</span>
-                <input type="date" value={until} onInput={(e) => setUntil((e.target as HTMLInputElement).value)} />
+                <DateInput label="结束日期（可空）" value={until} onInput={setUntil} />
               </label>
             </>
           )}

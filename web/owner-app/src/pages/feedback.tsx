@@ -15,7 +15,7 @@ import {
   type FeedbackItem,
   type FeedbackStatus,
 } from '../api';
-import { Chips, ErrorBox, Field, fmtBytes, fmtTime, Loading, Empty, relTime } from '../ui';
+import { Chips, DateInput, ErrorBox, Field, fmtBytes, fmtTime, Loading, Empty, relTime } from '../ui';
 import { Select } from '../select';
 
 type Filter = FeedbackStatus | 'all';
@@ -204,18 +204,16 @@ export function FeedbackPage() {
         <div class="filter filter-wide">
           <span>提交时间</span>
           <div class="filter-range">
-            <input
-              type="date"
-              aria-label="提交时间开始"
+            <DateInput
+              label="提交时间开始"
               value={dates.from}
-              onInput={(e) => setDates((d) => ({ ...d, from: (e.target as HTMLInputElement).value }))}
+              onInput={(v) => setDates((d) => ({ ...d, from: v }))}
             />
             <span class="muted">至</span>
-            <input
-              type="date"
-              aria-label="提交时间截止"
+            <DateInput
+              label="提交时间截止"
               value={dates.to}
-              onInput={(e) => setDates((d) => ({ ...d, to: (e.target as HTMLInputElement).value }))}
+              onInput={(v) => setDates((d) => ({ ...d, to: v }))}
             />
             {(dates.from || dates.to) && (
               <button

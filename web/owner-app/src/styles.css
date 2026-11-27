@@ -366,6 +366,17 @@ input[type="text"], input[type="number"], input[type="date"], textarea, select {
   font: inherit; color: var(--text); background: var(--bg);
   border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%;
 }
+/* 空着的日期框：浏览器会自己画一段占位（Chrome「年/月/日」、Safari「yyyy/mm/dd」），
+   旁边本来就有「从 / 到 / 提交时间」这类说明，占位纯属噪音。把内部字段涂透明，
+   框就真的空着；聚焦编辑或已经有值时照常显示。日历小图标不在这个伪元素里，不受影响。 */
+input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit,
+input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-fields-wrapper,
+input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-text,
+input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-month-field,
+input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-day-field,
+input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-year-field {
+  color: transparent;
+}
 textarea { resize: vertical; }
 input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 3px solid var(--accent); outline-offset: 1px;

@@ -16,7 +16,7 @@ import {
 } from '../labels';
 import { MultiSelect, Select } from '../select';
 import {
-  Empty, ErrorBox, fmtBytes, fmtDateTime, fmtDuration, fmtTime, Loading, relTime,
+  DateInput, Empty, ErrorBox, fmtBytes, fmtDateTime, fmtDuration, fmtTime, Loading, relTime,
 } from '../ui';
 
 /** 三种存放方式（旧的 phone 已并入「只记清单」，不再出现在选项里）。 */
@@ -100,16 +100,6 @@ export function normalizeCreatorInput(raw: string, kind: CreatorKind): string {
 }
 
 const NUMERIC_ID = /^\d{1,20}$/;
-
-/** 点日期框直接弹日历，省得用户手敲 2026-11-21 这种格式。 */
-function showDatePicker(el: HTMLInputElement) {
-  const picker = (el as HTMLInputElement & { showPicker?: () => void }).showPicker;
-  try {
-    picker?.call(el);
-  } catch {
-    // 浏览器不支持或不在用户手势里时忽略，退回原生输入
-  }
-}
 
 /** 任务抓的是谁：昵称取不到就说「昵称未知」，不猜也不空着。 */
 function nickName(j: CreatorJob): string {
@@ -528,21 +518,11 @@ export function CreatorsPage() {
             <>
               <label class="field">
                 <span>开始日期</span>
-                <input
-                  type="date"
-                  value={since}
-                  onInput={(e) => setSince((e.target as HTMLInputElement).value)}
-                  onClick={(e) => showDatePicker(e.currentTarget as HTMLInputElement)}
-                />
+                <DateInput label="开始日期" value={since} onInput={setSince} />
               </label>
               <label class="field">
                 <span>结束日期</span>
-                <input
-                  type="date"
-                  value={until}
-                  onInput={(e) => setUntil((e.target as HTMLInputElement).value)}
-                  onClick={(e) => showDatePicker(e.currentTarget as HTMLInputElement)}
-                />
+                <DateInput label="结束日期" value={until} onInput={setUntil} />
               </label>
             </>
           )}
@@ -697,20 +677,16 @@ export function CreatorsPage() {
         <div class="filter filter-wide">
           <span>发起时间</span>
           <div class="filter-range">
-            <input
-              type="date"
-              aria-label="发起时间开始"
+            <DateInput
+              label="发起时间开始"
               value={fSince}
-              onInput={(e) => setFSince((e.target as HTMLInputElement).value)}
-              onClick={(e) => showDatePicker(e.currentTarget as HTMLInputElement)}
+              onInput={setFSince}
             />
             <span class="muted">至</span>
-            <input
-              type="date"
-              aria-label="发起时间截止"
+            <DateInput
+              label="发起时间截止"
               value={fUntil}
-              onInput={(e) => setFUntil((e.target as HTMLInputElement).value)}
-              onClick={(e) => showDatePicker(e.currentTarget as HTMLInputElement)}
+              onInput={setFUntil}
             />
             {(fSince || fUntil !== todayISO()) && (
               <button

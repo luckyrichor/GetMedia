@@ -131,6 +131,40 @@ export function relTime(unix: number | null | undefined, now = Date.now()): stri
   return fmtTime(unix);
 }
 
+/** 日期选择框。
+ *
+ * 浏览器会给空着的 `input[type=date]` 自造一段占位：Chrome 画「年/月/日」、Safari 画
+ * 「yyyy/mm/dd」。这些筛选框旁边本来就有「从 / 到 / 提交时间」之类的说明，那串占位只是
+ * 噪音。所以这里按「有没有值」打 `has-value`，具体隐藏规则在 styles.css 的
+ * `input.date-input`：没值时内部字段涂成透明，选完日期再正常显示。
+ *
+ * 点一下直接弹日历——空着时框里什么都看不见，不去瞄右下角的小图标也能用。
+ */
+export function DateInput({ value, onInput, label, class: cls }: {
+  value: string;
+  onInput: (v: string) => void;
+  label: string;
+  class?: string;
+}) {
+  return (
+    <input
+      type="date"
+      class={`date-input${value ? ' has-value' : ''}${cls ? ` ${cls}` : ''}`}
+      value={value}
+      aria-label={label}
+      onInput={(e) => onInput(e.currentTarget.value)}
+      onClick={(e) => {
+        const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+        try {
+          el.showPicker?.();
+        } catch {
+          // 浏览器不支持或不在用户手势里：退回键盘输入，不影响使用
+        }
+      }}
+    />
+  );
+}
+
 export function Field({ label, value, mono }: { label: string; value: ComponentChildren; mono?: boolean }) {
   return (
     <div class="kv">

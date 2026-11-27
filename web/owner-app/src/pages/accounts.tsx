@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { ownerApi, type AdminAccount, type AdminAccountPage, type Tier } from '../api';
 import { Select } from '../select';
-import { Empty, ErrorBox, Loading, NoAccess, fmtBytes, fmtDateTime, fmtTime, relTime, useLoad } from '../ui';
+import { DateInput, Empty, ErrorBox, Loading, NoAccess, fmtBytes, fmtDateTime, fmtTime, relTime, useLoad } from '../ui';
 
 const TIER_LABEL: Record<Tier, string> = { free: '免费版', full: '完整版', admin: '管理员' };
 const ALL_TIERS: Tier[] = ['free', 'full', 'admin'];
@@ -271,9 +271,9 @@ export function AccountsPage() {
         </div>
         <div class="filter-row">
           <label class="small muted">创建时间</label>
-          <input type="date" value={from} onInput={(e) => { setFrom(e.currentTarget.value); setPage(1); }} />
+          <DateInput label="创建时间开始" value={from} onInput={(v) => { setFrom(v); setPage(1); }} />
           <span class="muted">至</span>
-          <input type="date" value={to} onInput={(e) => { setTo(e.currentTarget.value); setPage(1); }} />
+          <DateInput label="创建时间截止" value={to} onInput={(v) => { setTo(v); setPage(1); }} />
         </div>
       </div>
 

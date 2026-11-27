@@ -22,7 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { downloadUrl, mediaUrl, ownerApi, type MediaType, type Track } from '../api';
 import { Select } from '../select';
-import { Chips, Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading } from '../ui';
+import { Chips, DateInput, Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading } from '../ui';
 
 const STORAGE_LABEL: Record<Track['storage'], string> = {
   archive: '存储',
@@ -407,13 +407,11 @@ export function LibraryPage() {
             <div class="filter-row dates">
               <label class="small muted date-field">
                 从
-                <input class="search date" type="date" value={from} aria-label="起始日期"
-                       onInput={(e) => setFrom((e.target as HTMLInputElement).value)} />
+                <DateInput class="search date" label="起始日期" value={from} onInput={setFrom} />
               </label>
               <label class="small muted date-field">
                 到
-                <input class="search date" type="date" value={to} aria-label="结束日期"
-                       onInput={(e) => setTo((e.target as HTMLInputElement).value)} />
+                <DateInput class="search date" label="结束日期" value={to} onInput={setTo} />
               </label>
               <label class="small muted check-field">
                 <input type="checkbox" checked={onlyFile} aria-label="只看服务器有文件的"
