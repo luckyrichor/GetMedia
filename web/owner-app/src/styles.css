@@ -1179,7 +1179,6 @@ td.zero .bytes-u { color: inherit; }
    表格固定列宽单行。自上而下：标题 + 一行提示 → 提取表单 → 批量任务标题 →
    筛选栏（两行）→ 任务表格卡片 + 底部「共 N 条」。
    ========================================================================== */
-.page-sub { margin: 4px 0 0; font-size: 0.875rem; color: var(--muted); }
 /* 区块标题 + 右侧总数（批量任务 / 表格底部共用这一行的节奏） */
 .sec-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 12px; }
 .sec-head h2 { margin: 0; font-size: 1.05rem; }

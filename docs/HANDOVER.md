@@ -19,7 +19,7 @@
 | 服务端 | release `20261127-7`，SQLite schema **21**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
-| 线上管理台 | `index-DAjhUJg5.js` / `style-B8iHrlST.css`（权限管理、邀请码、批量提取、单个提取四页已按同一套规范重做） |
+| 线上管理台 | `index-C9Tfi2GA.js` / `style-D4lMQTrw.css`（权限管理、邀请码、批量提取、单个提取四页已按同一套规范重做） |
 | 线上公开站 | `index-CHhgq2uv.js` / `style-D1jGOt3t.css` |
 | 用户 | 一个人在用（admin），手机 1 / 手机 2 两台 |
 
@@ -47,7 +47,7 @@ export ANDROID_HOME=/Users/lc/Library/Android/sdk
 
 # 网页（在 web/ 下，npm 依赖已装好）
 cd web && npm run typecheck          # tsc --noEmit
-npm test                             # vitest，基线 223 项
+npm test                             # vitest，基线 224 项
 npm run build:owner                  # 产物 web/owner-app/dist/
 
 # 服务端（在仓库根）

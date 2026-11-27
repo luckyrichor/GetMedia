@@ -97,7 +97,7 @@ describe('批量提取', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    await fillUrl('https://space.bilibili.com/12345');
+    await fillUrl('12345');
     await click(button('预览'));
     await until(() => text().includes('预计选取 2 条'));
 
@@ -160,7 +160,7 @@ describe('批量提取', () => {
     }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
-    await fillUrl('抖音号');
+    await fillUrl('67194609689');
     await click(button('预览'));
     await until(() => text().includes('平台拒绝了这次请求'));
 
@@ -175,7 +175,7 @@ describe('批量提取', () => {
     }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
-    await fillUrl('https://space.bilibili.com/12345');
+    await fillUrl('12345');
     await click(button('预览'));
     await until(() => text().includes('预计选取 2 条'));
 
@@ -214,13 +214,12 @@ describe('批量提取', () => {
     }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
-    await fillUrl('https://space.bilibili.com/12345');
+    await fillUrl('12345');
     await click(button('开始提取'));
     await until(() => text().includes('这个博主已经有一批任务在跑'));
 
     expect(document.querySelector('.toast')).not.toBeNull();
-    expect((document.querySelector('input[type="text"]') as HTMLInputElement).value)
-      .toBe('https://space.bilibili.com/12345');
+    expect((document.querySelector('input[type="text"]') as HTMLInputElement).value).toBe('12345');
   });
 });
 
@@ -229,7 +228,7 @@ describe('批量提取：表单校验与动态字段', () => {
     server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
-    await fillUrl('https://space.bilibili.com/12345');
+    await fillUrl('12345');
 
     const nInput = () => document.querySelector('input[aria-label="条数"]') as HTMLInputElement;
     const setN = async (v: string) => {
@@ -277,15 +276,14 @@ describe('批量提取：表单校验与动态字段', () => {
     await until(() => text().includes('还没有批量任务'));
 
     const input = () => document.querySelector('input[type="text"]') as HTMLInputElement;
-    expect(input().placeholder).toBe('https://space.bilibili.com/12345');
-
-    await choose('输入类型', '抖音号');
+    const label = () => document.querySelector('.ext-url > span')!.textContent;
+    // 默认就是抖音号（主页链接那种方式已删掉）
     expect(input().placeholder).toBe('例如 67194609689');
-    expect(document.querySelector('.ext-url > span')!.textContent).toBe('抖音号');
+    expect(label()).toBe('抖音号');
 
     await choose('输入类型', 'B 站号');
     expect(input().placeholder).toBe('例如 12345');
-    expect(document.querySelector('.ext-url > span')!.textContent).toBe('B 站号');
+    expect(label()).toBe('B 站号');
   });
 
   test('指定日期的结束日期默认今天，两个日期都是日期选择器', async () => {
@@ -359,7 +357,18 @@ describe('批量提取：表单校验与动态字段', () => {
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
-  test('粘贴整段分享文案，只把核心主页链接交给后端', async () => {
+  test('输入类型只剩抖音号与 B 站号，不再有主页链接', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await click(document.querySelector('button[aria-label="输入类型"]')!);
+    const opts = Array.from(document.querySelectorAll('[role="option"]')).map((o) => o.textContent?.trim());
+    expect(opts).toEqual(['抖音号', 'B 站号']);
+    expect(text()).not.toContain('主页链接');
+  });
+
+  test('带前缀的号码也能挑出来：填「抖音号：67194609689」提交的是纯数字', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [] } },
       'POST /v2/creators/preview': { json: PREVIEW },
@@ -367,15 +376,13 @@ describe('批量提取：表单校验与动态字段', () => {
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    await fillUrl('7.53 复制打开抖音，看看【某某】的主页 https://www.douyin.com/user/MS4wLjABAAAAxxxx?from_tab_name=main 复制此链接');
+    await fillUrl('抖音号：67194609689');
     await click(button('预览'));
     await until(() => text().includes('预计选取 2 条'));
 
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
-    expect(body.url).toBe('https://www.douyin.com/user/MS4wLjABAAAAxxxx');
-    // 输入框也被收回核心链接，用户看得到实际提交的是什么
-    const input = document.querySelector('input[type="text"]') as HTMLInputElement;
-    expect(input.value).toBe('https://www.douyin.com/user/MS4wLjABAAAAxxxx');
+    expect(body.url).toBe('67194609689');
+    expect(body.platform).toBe('douyin');
   });
 });
 
@@ -773,7 +780,7 @@ describe('批量提取：多格式与任务行信息', () => {
     await click(opts[1]!);
     expect(document.querySelector('button[aria-label="输出格式"]')!.textContent).toContain('.m4a、.mp3');
 
-    await fillUrl('https://space.bilibili.com/12345');
+    await fillUrl('12345');
     await click(button('开始提取'));
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
     expect(body.media_type).toBe('audio');

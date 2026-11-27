@@ -215,10 +215,7 @@ export function ExtractPage() {
       {toastNode}
 
       <div class="page-head">
-        <div>
-          <h1>单个提取</h1>
-          <p class="page-sub">粘贴一条作品链接或整段分享文案；可选输出格式与存放方式。</p>
-        </div>
+        <h1>单个提取</h1>
       </div>
 
       {/* ---- 提取表单 ---- */}

@@ -52,24 +52,22 @@ function writeHidden(ids: number[]) {
   }
 }
 
-/** 输入类型：显式告诉后端这是链接、抖音号还是 B 站 UID，不再让它猜。 */
-type CreatorKind = 'url' | 'douyin' | 'bilibili';
+/** 输入类型：只认「号码」——批量提取要的是博主，抖音号 / B 站号两种数字。
+ *  主页链接那种方式已经删掉：贴一条作品链接提取单个文件是「单个提取」页的事，
+ *  两页各管一件事，不在批量页里再留一个链接入口。 */
+type CreatorKind = 'douyin' | 'bilibili';
 
 const KIND_LABEL: Record<CreatorKind, string> = {
-  url: '主页链接',
   douyin: '抖音号',
   bilibili: 'B 站号',
 };
 
 const KIND_HINT: Record<CreatorKind, string> = {
-  url: 'https://space.bilibili.com/12345',
   douyin: '例如 67194609689',
   bilibili: '例如 12345',
 };
 
 const URL_IN_TEXT = /https?:\/\/[^\s"'<>，。；、）】」》]+/i;
-/** 只写了域名、没写 https:// 的情况（手机分享里常见）。 */
-const BARE_HOST = /^(?:space\.bilibili\.com|www\.bilibili\.com|b23\.tv|www\.douyin\.com|v\.douyin\.com)\/\S*/i;
 
 function todayISO(): string {
   const d = new Date();
@@ -77,32 +75,16 @@ function todayISO(): string {
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
-/** 把用户粘进来的整段内容收成「核心标识」。
+/** 把用户粘进来的内容收成「号码」。
  *
- * 抖音分享文案长这样：`7.53 复制打开抖音，看看… https://v.douyin.com/iRxxx/ 复制此链接…`，
- * 整段丢给后端既超长又容易带进中文标点；这里只留第一个链接，并去掉 ?/# 尾巴
- * （B 站空间、抖音主页都靠路径定位，查询串是分享埋点）。
- * 选「抖音号 / B 站号」时只认数字：先把「抖音号：123」里的数字挑出来，贴了链接就不猜，原样交给校验报错。
+ * 两种号都只认数字：`抖音号：123` 这种带前缀的照样能挑出来。
+ * 贴了链接就不猜——链接里那串数字是作品号或分享埋点，不是博主的号——
+ * 原样交给校验去报错，提示改成填号码。
  */
-export function normalizeCreatorInput(raw: string, kind: CreatorKind): string {
+export function normalizeCreatorInput(raw: string): string {
   const text = (raw || '').trim();
   if (!text) return '';
-  if (kind === 'url') {
-    const found = text.match(URL_IN_TEXT)?.[0].replace(/[.,;:!?)\]}>'"”’]+$/, '');
-    if (!found) {
-      const bare = text.match(BARE_HOST)?.[0];
-      return bare ? normalizeCreatorInput(`https://${bare}`, 'url') : text.slice(0, 2000);
-    }
-    try {
-      const u = new URL(found);
-      u.search = '';
-      u.hash = '';
-      return u.toString();
-    } catch {
-      return found;
-    }
-  }
-  if (URL_IN_TEXT.test(text)) return text.slice(0, 40);   // 贴了链接就别猜数字，交给校验
+  if (URL_IN_TEXT.test(text)) return text.slice(0, 40);
   const digits = text.match(/\d{1,20}/g);
   return digits ? digits.sort((a, b) => b.length - a.length)[0]! : text.slice(0, 40);
 }
@@ -201,7 +183,7 @@ export function CreatorsPage() {
   const { show: toast, node: toastNode } = useToast();
 
   // —— 提取表单 ——
-  const [kind, setKind] = useState<CreatorKind>('url');
+  const [kind, setKind] = useState<CreatorKind>('douyin');
   const [url, setUrl] = useState('');
   const [mode, setMode] = useState<SelectionMode>('latest_n');
   const [n, setN] = useState('20');
@@ -325,10 +307,9 @@ export function CreatorsPage() {
   /** 选取条件：预览与建任务共用。 */
   function selectBody() {
     return {
-      url: normalizeCreatorInput(url, kind),
-      // 链接走 resolve（由后端按域名判平台）；选「抖音号 / B 站号」时把平台显式带上，
-      // 纯数字就不会被默认当成抖音号。
-      platform: kind === 'url' ? null : kind,
+      url: normalizeCreatorInput(url),
+      // 平台显式带上：纯数字本身看不出是抖音号还是 B 站号。
+      platform: kind,
       mode,
       n: mode === 'latest_n' ? Number(n) || null : null,
       since: mode === 'date_range' ? since || null : null,
@@ -367,10 +348,10 @@ export function CreatorsPage() {
   /** 校验：所有错误一起标出来（只报第一条会让人来回试），有错就一个请求都不发。 */
   function validate(): boolean {
     const next: ErrMap = {};
-    const value = normalizeCreatorInput(url, kind);
+    const value = normalizeCreatorInput(url);
     if (!value) {
-      next.url = kind === 'url' ? '先填博主主页链接' : `先填${KIND_LABEL[kind]}`;
-    } else if (kind !== 'url' && !NUMERIC_ID.test(value)) {
+      next.url = `先填${KIND_LABEL[kind]}`;
+    } else if (!NUMERIC_ID.test(value)) {
       next.url = `${KIND_LABEL[kind]}只能填纯数字（1–20 位），不要带链接或昵称`;
     }
     if (mode === 'latest_n') {
@@ -394,7 +375,7 @@ export function CreatorsPage() {
   async function doPreview() {
     if (!validate()) return;
     // 粘贴的整段文案只留核心部分，并回填到输入框，让用户看到实际提交的是什么
-    const value = normalizeCreatorInput(url, kind);
+    const value = normalizeCreatorInput(url);
     if (value !== url) setUrl(value);
     setBusy('preview');
     clearPreview();
@@ -409,7 +390,7 @@ export function CreatorsPage() {
 
   async function doCreate() {
     if (!validate()) return;
-    const value = normalizeCreatorInput(url, kind);
+    const value = normalizeCreatorInput(url);
     if (value !== url) setUrl(value);
     setBusy('create');
     clearPreview();
@@ -547,10 +528,7 @@ export function CreatorsPage() {
       {toastNode}
 
       <div class="page-head">
-        <div>
-          <h1>批量提取</h1>
-          <p class="page-sub">输入博主主页链接，或直接填抖音号 / B 站号；可先预览会选多少条，再开始提取。</p>
-        </div>
+        <h1>批量提取</h1>
       </div>
 
       {/* ---- 提取表单 ---- */}
@@ -566,13 +544,13 @@ export function CreatorsPage() {
             />
           </div>
           <label class={errs.url ? 'field ext-url is-bad' : 'field ext-url'}>
-            <span>{kind === 'url' ? '主页链接 / 分享文案' : KIND_LABEL[kind]}</span>
+            <span>{KIND_LABEL[kind]}</span>
             <input
               type="text"
-              maxLength={kind === 'url' ? 2000 : 40}
-              inputMode={kind === 'url' ? 'text' : 'numeric'}
+              maxLength={40}
+              inputMode="numeric"
               placeholder={KIND_HINT[kind]}
-              aria-label={kind === 'url' ? '主页链接' : KIND_LABEL[kind]}
+              aria-label={KIND_LABEL[kind]}
               value={url}
               onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setErrs({}); clearPreview(); }}
             />
