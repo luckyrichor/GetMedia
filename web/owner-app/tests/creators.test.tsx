@@ -399,7 +399,7 @@ describe('批量提取', () => {
     await click(document.querySelector('button[aria-label="存放方式"]')!);
     const opts = Array.from(document.querySelectorAll('[role="option"]'));
     expect(opts.map((o) => o.querySelector('.select-label')?.textContent))
-      .toEqual(['只记不下载', '服务器缓存', '服务器存储']);
+      .toEqual(['只存元数据', '服务器缓存', '服务器存储']);
     // 刚展开不弹提示，悬停到某一项才弹
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
 
@@ -441,7 +441,7 @@ describe('批量提取', () => {
     await until(() => text().includes('存好的作品'));
     const tags = Array.from(document.querySelectorAll('.item-row .tag')).map((t) => t.textContent);
     expect(tags).toContain('已在服务器');
-    // 「只记不下载」的任务条目没有这份标记
+    // 「只存元数据」的任务条目没有这份标记
     expect(tags.filter((t) => t === '已在服务器')).toHaveLength(1);
   });
 
@@ -582,7 +582,7 @@ describe('批量提取：多格式与任务卡信息', () => {
 
     // 裸值改成带标签的几项，格式用后缀名展示；「任务 #N」已删（数据库 id 与列表序号不一致，反而误导）
     const metas = Array.from(document.querySelectorAll('.job-meta .meta')).map((n) => n.textContent);
-    expect(metas).toEqual(['选取最近 20 条', '存放只记不下载', '输出视频原始格式']);
+    expect(metas).toEqual(['选取最近 20 条', '存放只存元数据', '输出视频原始格式']);
     // 媒体类型和格式拆成两个独立的块，各能单独定位
     expect(document.querySelector('.media-kind')!.textContent).toBe('视频');
     expect(document.querySelector('.format-list')!.textContent).toBe('原始格式');
@@ -738,7 +738,7 @@ describe('批量任务筛选', () => {
     expect(text()).not.toContain('两天前');
   });
 
-  test('存放方式筛「只记不下载」同时命中 metadata 与旧数据 phone', async () => {
+  test('存放方式筛「只存元数据」同时命中 metadata 与旧数据 phone', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [
         job({ id: 1, creator_name: '新只记', storage: 'metadata' }),
@@ -749,7 +749,7 @@ describe('批量任务筛选', () => {
     mount('/creators');
     await until(() => cardCount() === 3);
 
-    await choose('筛选：存放方式', '只记不下载');
+    await choose('筛选：存放方式', '只存元数据');
     await until(() => cardCount() === 2);
     expect(text()).toContain('新只记');
     expect(text()).toContain('旧手机');

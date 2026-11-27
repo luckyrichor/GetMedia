@@ -370,36 +370,44 @@ export function LibraryPage() {
                     <div class="track-main">
                       <span class="track-kind" aria-hidden="true">{t.media_type === 'audio' ? '♪' : '▣'}</span>
                       <span class="track-body">
-                        {editing === t.id ? (
-                          <input
-                            class="search"
-                            value={draft}
-                            maxLength={200}
-                            aria-label="新标题"
-                            autoFocus
-                            onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
-                            onClick={(e) => e.stopPropagation()}
-                            onBlur={() => void commitRename(t)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') void commitRename(t);
-                              if (e.key === 'Escape') setEditing(null);
-                            }}
-                          />
-                        ) : (
-                          <span class="track-title" title="双击改名"
-                                onDblClick={(e) => { e.stopPropagation(); beginRename(t); }}>
-                            {t.title || '(无标题)'}
+                        {/* 标题与作者同一行：作者长短不一时，元信息行仍然对齐，
+                            不会因为有的作者名字长、有的短而让整列参差不齐。 */}
+                        <span class="track-head">
+                          {editing === t.id ? (
+                            <input
+                              class="search track-rename"
+                              value={draft}
+                              maxLength={200}
+                              aria-label="新标题"
+                              autoFocus
+                              onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
+                              onClick={(e) => e.stopPropagation()}
+                              onBlur={() => void commitRename(t)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') void commitRename(t);
+                                if (e.key === 'Escape') setEditing(null);
+                              }}
+                            />
+                          ) : (
+                            <span class="track-title" title="双击改名"
+                                  onDblClick={(e) => { e.stopPropagation(); beginRename(t); }}>
+                              {t.title || '(无标题)'}
+                            </span>
+                          )}
+                          <span class="track-author" title={t.uploader || '未知 UP 主'}>
+                            {t.uploader || '未知 UP 主'}
                           </span>
-                        )}
+                        </span>
+                        {/* 顺序固定：平台 → 时长 → 入库时间 → 存放方式 → 文件大小（无文件）。
+                            每格各一种颜色，相邻三格颜色必不相同，扫一眼就能分开。 */}
                         <span class="track-meta">
-                          <span class="meta-tag store">{STORAGE_LABEL[t.storage]}</span>
-                          <span class="meta-tag plat">{platformLabel(t.platform)}</span>
-                          <span class="meta-tag">{t.uploader || '未知 UP 主'}</span>
-                          <span class="meta-tag">{fmtDuration(t.duration_sec)}</span>
-                          <span class="meta-tag">{fmtTime(t.created_at)}</span>
+                          <span class="meta-tag t-plat">{platformLabel(t.platform)}</span>
+                          <span class="meta-tag t-dur">{fmtDuration(t.duration_sec)}</span>
+                          <span class="meta-tag t-time">{fmtTime(t.created_at)}</span>
+                          <span class="meta-tag t-store">{STORAGE_LABEL[t.storage]}</span>
                           {t.has_file
-                            ? <span class="meta-tag size">{fmtBytes(t.bytes)}</span>
-                            : <span class="meta-tag none">无文件</span>}
+                            ? <span class="meta-tag t-size">{fmtBytes(t.bytes)}</span>
+                            : <span class="meta-tag t-none">无文件</span>}
                         </span>
                       </span>
                     </div>

@@ -249,7 +249,7 @@ describe('媒体库与播放', () => {
     expect(played).toEqual(['/api/v2/media/1', '/api/v2/media/1']);
   });
 
-  test('元信息：平台、作者、时长、入库时间、文件大小各占一个标签，没文件写「无文件」', async () => {
+  test('元信息：平台、时长、入库时间、存放方式、文件大小各占一个标签，没文件写「无文件」', async () => {
     server(ownerRoutes({
       [LIST]: {
         json: {
@@ -268,16 +268,31 @@ describe('媒体库与播放', () => {
       .find((li) => li.querySelector('.track-title')?.textContent === title)!;
     const tags = (title: string) => Array.from(rowOf(title).querySelectorAll('.meta-tag'))
       .map((e) => (e.textContent || '').trim());
+    const tagClasses = (title: string) => Array.from(rowOf(title).querySelectorAll('.meta-tag'))
+      .map((e) => Array.from(e.classList).filter((c) => c.startsWith('t-')).join(','));
 
-    // 顺序：存放方式、平台、作者、时长、入库时间、大小
+    // 顺序：平台、时长、入库时间、存放方式、大小（作者已经挪到标题那一行）
     const t1 = tags('曲目 1');
-    expect(t1.slice(0, 4)).toEqual(['存储', '抖音', '诗和远方つ.', '4:36']);
-    expect(t1[4]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-    expect(t1[5]).toBe('3.0 MB');
+    expect(t1).toHaveLength(5);
+    expect(t1.slice(0, 2)).toEqual(['抖音', '4:36']);
+    expect(t1[2]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(t1[3]).toBe('存储');
+    expect(t1[4]).toBe('3.0 MB');
+
+    // 作者在标题行，不在标签行
+    expect(rowOf('曲目 1').querySelector('.track-author')!.textContent).toBe('诗和远方つ.');
+    expect(tags('曲目 1')).not.toContain('诗和远方つ.');
+
+    // 每格一种颜色，且相邻三格的颜色互不相同
+    const cls = tagClasses('曲目 1');
+    expect(cls).toEqual(['t-plat', 't-dur', 't-time', 't-store', 't-size']);
+    for (let i = 2; i < cls.length; i += 1) {
+      expect(new Set([cls[i - 2], cls[i - 1], cls[i]]).size).toBe(3);
+    }
 
     // 没文件的：同一位置写「无文件」；只有清单的条目存放方式写「元数据」
-    expect(tags('曲目 2')[0]).toBe('元数据');
     expect(tags('曲目 2').at(-1)).toBe('无文件');
+    expect(tags('曲目 2')[3]).toBe('元数据');
   });
 
   test('改名：双击标题就地编辑，PATCH 只带 title', async () => {

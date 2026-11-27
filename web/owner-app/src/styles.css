@@ -217,22 +217,46 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 .track-kind { font-size: 1.1rem; color: var(--accent); width: 1.2rem; flex: none; }
 .track-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .track-title { font-weight: 550; word-break: break-word; cursor: text; }
-/* 标题下面那排元信息做成一串小标签：平台、作者、时长、入库时间、文件大小（或「无文件」）。
-   每格自带边框与底色，扫一眼就知道哪格是什么，不用靠「·」去数。 */
+/* 标题与作者同一行：标题可压缩、作者限宽省略，后面的元信息行才对得齐 */
+.track-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.track-head .track-title { min-width: 0; }
+.track-author {
+  flex: none; max-width: 14rem; font-size: 0.8rem; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.track-rename { flex: 1; min-width: 0; }
+/* 标题下面那排元信息做成一串小标签：平台、时长、入库时间、存放方式、文件大小（或「无文件」）。
+   每格一种颜色（相邻三格必不相同），扫一眼就能分开，不用靠「·」去数。 */
 .track-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .meta-tag {
   display: inline-block; max-width: 20rem; padding: 1px 7px;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
-  color: var(--muted); font-size: 0.76rem; line-height: 1.55;
+  border: 1px solid var(--tag-line, var(--line)); border-radius: 999px;
+  background: var(--tag-bg, var(--bg)); color: var(--tag-ink, var(--muted));
+  font-size: 0.76rem; line-height: 1.55;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
 }
-.meta-tag.plat { color: var(--accent); border-color: var(--accent); background: var(--info-bg); }
-/* 存放方式（存储/缓存/元数据）：跟大小一样用实心底色，别被当成可有可无的说明 */
-.meta-tag.store { color: var(--text); background: var(--side); border-color: var(--line); }
-.meta-tag.size { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-.meta-tag.none { border-style: dashed; }
-/* 行内按钮：靠右、紧凑；窄屏放不下就整体换到下一行（margin-left:auto 仍贴右） */
-.track-actions { flex: none; display: flex; gap: 6px; align-items: center; margin-left: auto; }
+/* 五种颜色固定跟着语义走，不跟着位置轮换：换个排序也不会"这条的时间变成蓝色"。
+   顺序恰好是 平台→时长→时间→存放→大小，相邻三格颜色天然不同。 */
+.meta-tag.t-plat { --tag-bg: #eaf1fe; --tag-line: #c6d7f8; --tag-ink: #1c47b0; }
+.meta-tag.t-dur { --tag-bg: #f4f0fe; --tag-line: #dcd2fb; --tag-ink: #6535c9; }
+.meta-tag.t-time { --tag-bg: #e8f7f8; --tag-line: #bcebef; --tag-ink: #0d6d77; }
+.meta-tag.t-store { --tag-bg: #fdf4e6; --tag-line: #f5ddb3; --tag-ink: #96601a; }
+.meta-tag.t-size {
+  --tag-bg: #eaf6ee; --tag-line: #c2e6ce; --tag-ink: #1b6b39;
+  font-weight: 600; font-variant-numeric: tabular-nums;
+}
+/* 「无文件」保持虚线、不上色：它是"没有"这件事，不该跟有内容的信息抢眼 */
+.meta-tag.t-none { border-style: dashed; --tag-bg: transparent; --tag-ink: var(--muted); }
+@media (prefers-color-scheme: dark) {
+  .meta-tag.t-plat { --tag-bg: #16213a; --tag-line: #2c4272; --tag-ink: #a8c1ff; }
+  .meta-tag.t-dur { --tag-bg: #221a3a; --tag-line: #3f3272; --tag-ink: #c0aaff; }
+  .meta-tag.t-time { --tag-bg: #0f2a2c; --tag-line: #245053; --tag-ink: #86dfe4; }
+  .meta-tag.t-store { --tag-bg: #2a2113; --tag-line: #4f3f1d; --tag-ink: #e8c489; }
+  .meta-tag.t-size { --tag-bg: #12291b; --tag-line: #26492f; --tag-ink: #8fd8a6; }
+}
+/* 行内按钮：靠右、紧凑；窄屏放不下就整体换到下一行（margin-left:auto 仍贴右）。
+   padding-left 是给长标题用的：标题占满时作者会顶到这里，别跟按钮粘在一起。 */
+.track-actions { flex: none; display: flex; gap: 6px; align-items: center; margin-left: auto; padding-left: 10px; }
 .track-actions .btn { padding: 3px 9px; font-size: 0.82rem; }
 .player-media { width: 100%; border-radius: 8px; background: #000; }
 audio.player-media { background: none; }

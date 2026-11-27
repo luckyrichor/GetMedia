@@ -431,8 +431,8 @@ export function CreatorsPage() {
     if (untilSec != null && j.created_at > untilSec) return false;
     if (fMedia && j.media_type !== fMedia) return false;
     if (fStorage) {
-      // 旧数据里的「手机下载」值就是 phone，行为与「只记不下载」一致、卡片上也显示「只记不下载」，
-      // 所以筛「只记不下载」时两者都要命中，否则历史任务一条都筛不出来。
+      // 旧数据里的「手机下载」值就是 phone，行为与「只存元数据」一致、卡片上也显示「只存元数据」，
+      // 所以筛「只存元数据」时两者都要命中，否则历史任务一条都筛不出来。
       if (fStorage === 'metadata') {
         if (j.storage !== 'metadata' && j.storage !== 'phone') return false;
       } else if (j.storage !== fStorage) return false;
