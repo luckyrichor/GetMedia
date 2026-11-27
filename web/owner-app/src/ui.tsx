@@ -110,6 +110,120 @@ export function Chips({ items, value, onChange, ariaLabel }: {
   );
 }
 
+export interface SegItem { key: string; label: string; n?: number }
+
+/** 分段控件：单选，选中项浮起来（浅色底 + 轻阴影），每段可带一个数量。
+ *  与 `Chips` 的区别是语义——这里"永远有一项被选中"（含"全部"），不是多选开关。 */
+export function Segmented({ items, value, onChange, ariaLabel }: {
+  items: SegItem[]; value: string; onChange: (k: string) => void; ariaLabel: string;
+}) {
+  return (
+    <div class="seg" role="tablist" aria-label={ariaLabel}>
+      {items.map((it) => (
+        <button
+          type="button"
+          role="tab"
+          aria-selected={value === it.key}
+          class={value === it.key ? 'seg-btn on' : 'seg-btn'}
+          onClick={() => onChange(it.key)}
+        >
+          {it.label}
+          {typeof it.n === 'number' ? <span class="seg-n">{it.n}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export interface MenuItem { text: string; onClick: () => void; danger?: boolean }
+
+/** 小下拉菜单：低频/有风险的操作用它收起来（"更多 ⋯"、"快捷"）。
+ *
+ * 弹层用 `position: fixed` + 打开时算一次坐标：表格外面套着 `overflow: auto` 的滚动容器，
+ * 用 absolute 会被裁掉一半；fixed 的包含块是视口，不受祖先 overflow 影响。
+ * 滚动/点别处/Esc 都关——坐标是打开那一刻算的，滚走就不准了。
+ */
+export function Menu({ label, items, ariaLabel, align = 'left', disabled }: {
+  label: ComponentChildren;
+  items: MenuItem[];
+  ariaLabel: string;
+  align?: 'left' | 'right';
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const root = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    const onScroll = () => setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [open]);
+
+  /** 贴在按钮下方；下面放不下就翻到上方，左右按 align 对齐并夹在视口内。 */
+  function toggle() {
+    const r = root.current?.getBoundingClientRect();
+    if (r) {
+      const w = 176;
+      const h = items.length * 34 + 10;
+      const below = r.bottom + 6;
+      const top = below + h > window.innerHeight - 8 ? Math.max(8, r.top - h - 6) : below;
+      const raw = align === 'right' ? r.right - w : r.left;
+      const left = Math.min(Math.max(8, raw), Math.max(8, window.innerWidth - w - 8));
+      setPos({ top, left });
+    }
+    setOpen((v) => !v);
+  }
+
+  return (
+    <span class="menu-wrap" ref={root}>
+      <button
+        type="button"
+        class={open ? 'menu-btn on' : 'menu-btn'}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        onClick={toggle}
+      >
+        {label}
+      </button>
+      {open ? (
+        <div class="menu-pop" role="menu" aria-label={ariaLabel} style={{ top: `${pos.top}px`, left: `${pos.left}px` }}>
+          {items.map((it) => (
+            <button
+              type="button"
+              role="menuitem"
+              class={it.danger ? 'menu-item danger' : 'menu-item'}
+              onClick={() => {
+                setOpen(false);
+                it.onClick();
+              }}
+            >
+              {it.text}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </span>
+  );
+}
+
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n) || n < 0) return '—';

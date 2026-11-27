@@ -74,7 +74,7 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 .side a[aria-current="page"] { background: var(--surface); font-weight: 650; box-shadow: inset 3px 0 0 var(--accent); }
 
 /* ---- 内容 ---- */
-.content { padding: 20px 22px 40px; max-width: 62rem; }
+.content { padding: 20px 22px 40px; max-width: 62rem; min-width: 0; }
 .content h1 { font-size: 1.45rem; margin: 4px 0 6px; }
 .content h2 { font-size: 1.05rem; margin: 22px 0 8px; }
 .lead { color: var(--muted); margin-top: 0; }
@@ -766,3 +766,175 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 /* 邀请码状态：未使用灰（默认 tag）、已使用蓝、已过期红 */
 .tag.used { color: var(--accent); border-color: currentColor; }
+
+/* ============================================================================
+   权限管理页（重设计）
+   这页列多、控件多：标题 → 统计条 → 筛选区 → 表格卡片 → 分页。
+   间距只用 4 / 8 / 12 / 16 / 24，圆角统一 8–12px，阴影只留极轻的一层。
+   ========================================================================== */
+/* 9 列表格在 62rem 里会挤，这页单独放宽；其余页保持原来的阅读宽度 */
+.content-wide { max-width: 84rem; }
+
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px; }
+.page-head h1 { margin: 0; }
+
+/* ---- 统计条：一行 5 张等宽卡 ---- */
+.stat-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px 16px; min-width: 0;
+}
+.stat-k { font-size: 0.78rem; color: var(--muted); line-height: 1.4; white-space: nowrap; }
+.stat-v {
+  font-size: 1.6rem; font-weight: 700; line-height: 1.25; margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.stat-sep { margin: 0 4px; font-weight: 400; color: var(--muted); opacity: 0.55; }
+
+/* ---- 筛选区：一块白底圆角容器，两行 ---- */
+.filter-box {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 16px; display: grid; grid-template-columns: minmax(0, 1fr);
+  gap: 10px; margin-bottom: 16px;
+}
+.filter-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.filter-line .search {
+  flex: 1 1 16rem; min-width: 10rem; height: 36px; padding: 0 10px; border-radius: 8px;
+}
+/* 三个下拉统一宽度、统一高度，跟日期框和分段控件同一条基线 */
+.ctrl-fixed { flex: none; width: 11rem; }
+.ctrl-fixed .select { width: 100%; }
+.filter-line .select-trigger { height: 36px; min-height: 36px; padding: 0 10px; border-radius: 8px; background: var(--surface); }
+.filter-line input.date-input { height: 36px; padding: 0 8px; }
+.filter-line .date-wrap { flex: none; }
+.date-range { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.date-label { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+.filter-reset { margin-left: auto; }
+
+/* ---- 等级分段控件 ---- */
+.seg {
+  display: inline-flex; flex: none; gap: 2px; padding: 2px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 9px;
+}
+.seg-btn {
+  display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent;
+  color: var(--muted); font: inherit; font-size: 0.88rem; line-height: 1.5;
+  padding: 4px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap;
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn.on {
+  background: var(--surface); color: var(--text); font-weight: 650;
+  box-shadow: 0 1px 2px rgba(8, 11, 16, 0.12);
+}
+.seg-n { font-size: 0.76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.seg-btn.on .seg-n { color: var(--accent); }
+
+/* ---- 文字按钮 / 行内操作 ---- */
+.text-btn {
+  border: 0; background: none; color: var(--accent); font: inherit; font-size: 0.86rem;
+  padding: 4px 8px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.text-btn:hover { background: var(--info-bg); }
+.text-btn:disabled { color: var(--muted); background: none; cursor: default; }
+.row-ops { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; }
+
+/* ---- 下拉菜单（"更多 ⋯" / "快捷"） ---- */
+.menu-wrap { position: relative; display: inline-flex; flex: none; }
+.menu-btn {
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.86rem;
+  padding: 4px 8px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.menu-btn:hover, .menu-btn.on { background: var(--bg); color: var(--text); }
+.menu-btn:disabled { opacity: 0.6; cursor: default; }
+/* fixed：表格外面套着 overflow:auto 的滚动容器，absolute 会被裁掉一半 */
+.menu-pop {
+  position: fixed; z-index: 300; min-width: 168px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(8, 11, 16, 0.18); padding: 4px;
+  display: grid; gap: 2px;
+}
+.menu-item {
+  text-align: left; border: 0; background: none; color: var(--text); font: inherit;
+  font-size: 0.88rem; padding: 7px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+}
+.menu-item:hover { background: var(--bg); }
+.menu-item.danger { color: #a4271c; }
+.menu-item.danger:hover { background: #fdecea; }
+
+/* ---- 表格卡片 ---- */
+.box {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  overflow: hidden;
+}
+.box .table-wrap { margin: 0; }
+.box-foot {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 16px; border-top: 1px solid var(--line);
+}
+.empty-state { padding: 48px 20px; text-align: center; }
+.empty-state p { margin: 0 0 12px; color: var(--muted); }
+
+/* 列宽由 <colgroup> 固定；整行单行、行高一致，内容再长也不折。
+   正文字号比全局小一号（0.9rem）、内边距 10px：9 列才塞得进 1440 屏的可视宽度。 */
+.accounts-table { min-width: 1166px; table-layout: fixed; border: 0; border-radius: 0; background: none; }
+.accounts-table th, .accounts-table td {
+  padding: 8px 10px; vertical-align: middle; white-space: nowrap; height: 56px;
+}
+.accounts-table td { font-size: 0.9rem; }
+.accounts-table th { background: var(--bg); font-size: 0.8rem; }
+.accounts-table th.num { text-align: right; }
+.accounts-table tbody tr:hover { background: var(--bg); }
+.accounts-table .cell-name .name {
+  font-weight: 650; line-height: 1.4; overflow: hidden; text-overflow: ellipsis;
+}
+.accounts-table .cell-name .sub { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+.accounts-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.accounts-table .time-part { font-size: 0.86em; }
+.accounts-table .cell-ops { padding-left: 4px; }
+/* 操作列三个按钮挤在一行：内边距收窄一点，整列才放得下 */
+.row-ops .text-btn, .row-ops .menu-btn { padding: 4px 6px; }
+
+/* ---- 等级徽章：柔和底色，不用高饱和实心 ---- */
+.badge {
+  display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 0.78rem; line-height: 1.55; white-space: nowrap;
+}
+.badge-free { background: var(--bg); color: var(--muted); }
+.badge-full { background: #e8eefe; color: #2458d6; }
+.badge-admin { background: #e6f4ea; color: #1b5e20; }
+
+/* ---- 状态点 ---- */
+.status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.status .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: currentColor; }
+.status-ok { color: var(--text); }
+.status-ok .dot { background: #2e7d32; }
+.status-warn { color: var(--muted); }
+.status-warn .dot { background: #b26a00; }
+.status-bad { color: #a4271c; }
+.status-bad .dot { background: #a4271c; }
+
+/* 有效期列的两个状态色（普通文字，不做胶囊，免得列里出现一排彩色块） */
+.text-bad { color: #a4271c; }
+.text-warn { color: #8a5a00; }
+
+@media (prefers-color-scheme: dark) {
+  .badge-free { background: #1d232c; color: var(--muted); }
+  .badge-full { background: #1a2742; color: #9db8ff; }
+  .badge-admin { background: #14301c; color: #a5d6a7; }
+  .status-ok .dot { background: #66bb6a; }
+  .status-warn .dot { background: #e0b567; }
+  .status-bad, .menu-item.danger, .text-bad { color: #ef9a9a; }
+  .text-warn { color: #e0b567; }
+  .menu-item.danger:hover { background: #3a1d1d; }
+  .seg-btn.on { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
+}
+
+/* 窄屏：卡片 5 → 3 → 2 列，筛选自动换行，表格横向滚 */
+@media (max-width: 1080px) {
+  .stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filter-reset { margin-left: 0; }
+  .ctrl-fixed { width: 100%; }
+}

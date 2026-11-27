@@ -1,32 +1,37 @@
 /** 权限管理（仅管理员）：账号列表、改等级、改有效期、重置密码、停用/恢复、撤销注销。
  *
- * 三条硬规则在界面上也要体现：
- * - 管理员行没有「设为…」「停用」「改有效期」，只有重置密码；
- * - 改等级 / 重置密码 / 停用都要吊销对方全部会话，确认文案里写明；
- * - 待注销行显示「还剩 N 天」与到秒的截止时间，方便判断来不来得及撤销。
+ * 页面自上而下：标题 → 统计条（5 张等宽卡）→ 筛选区（搜索 + 等级分段 / 状态下拉 + 有效期 +
+ * 数据 + 创建时间范围 + 重置）→ 表格卡片（固定列宽、单行、操作列不折行）→ 分页。
  *
- * 「改有效期」是唯一不踢人的操作：等级每次请求都按库里的 `tier + tier_expires_at` 实时算，
- * 改完立即生效，所以保存后设备不用重新登录。
+ * 几条硬规则在界面上也要体现：
+ * - 管理员行只有「重置密码」，没有改等级 / 停用 / 改有效期；
+ * - 改等级、重置密码、停用都要吊销对方全部会话，确认文案里写明；
+ * - 改有效期不踢人（等级每次请求都按库里的 `tier + tier_expires_at` 实时算）；
+ * - 待注销的精确截止时间放进 `title`，列里只留「还剩 N 天」，保证整行单行显示。
  */
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { ownerApi, type AdminAccount, type AdminAccountPage, type Tier } from '../api';
 import { Select } from '../select';
-import { DateInput, Empty, ErrorBox, Loading, Modal, NoAccess, fmtBytes, fmtDateTime, fmtTime, relTime, useLoad } from '../ui';
+import {
+  DateInput, ErrorBox, Loading, Menu, Modal, NoAccess, Segmented,
+  fmtBytes, fmtDateTime, fmtTime, relTime, useLoad,
+} from '../ui';
 
 const TIER_LABEL: Record<Tier, string> = { free: '免费版', full: '完整版', admin: '管理员' };
-const ALL_TIERS: Tier[] = ['free', 'full', 'admin'];
-/** 表格列。带 `sort` 的列点击表头排序；表头与表体都按这张表来，列数不会对不上。 */
-const COLS: { label: string; sort?: string }[] = [
-  { label: '登录名', sort: 'login_name' },
-  { label: '等级' },
-  { label: '有效期', sort: 'expires_at' },
-  { label: '状态' },
-  { label: '创建时间', sort: 'created_at' },
-  { label: '最近活跃', sort: 'last_seen_at' },
-  { label: '媒体', sort: 'tracks' },
-  { label: '列表 / 占用' },
-  { label: '操作' },
+
+/** 表格列。带 `sort` 的列点击表头排序；`w` 是固定列宽（`table-layout: fixed`），
+ *  各列加起来就是表格的最小宽度，再窄就横向滚，不折行。 */
+const COLS: { label: string; sort?: string; w: number; right?: boolean }[] = [
+  { label: '登录名', sort: 'login_name', w: 116 },
+  { label: '等级', w: 84 },
+  { label: '有效期', sort: 'expires_at', w: 144 },
+  { label: '状态', w: 118 },
+  { label: '创建时间', sort: 'created_at', w: 140 },
+  { label: '最近活跃', sort: 'last_seen_at', w: 92 },
+  { label: '媒体', sort: 'tracks', w: 144, right: true },
+  { label: '列表 / 占用', w: 114, right: true },
+  { label: '操作', w: 214 },
 ];
 
 function dayStart(s: string): number | undefined {
@@ -38,6 +43,18 @@ function dayEnd(s: string): number | undefined {
   if (!s) return undefined;
   const t = new Date(`${s}T23:59:59`).getTime();
   return Number.isFinite(t) ? Math.floor(t / 1000) : undefined;
+}
+
+/** 本地时区的 `YYYY-MM-DD`，也就是 `input[type=date]` 的取值格式。
+ *  日期框、表格里的创建时间、`dayStart/dayEnd` 三者都按本地时区解释，口径一致。 */
+function ymd(d: Date): string {
+  const two = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+function daysAgo(n: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d;
 }
 
 /** epoch 秒 → `<input type="datetime-local" step="1">` 认的字符串（本地时间，不带时区）。 */
@@ -71,29 +88,55 @@ function expiryCell(a: AdminAccount) {
   if (a.tier === 'free') return <span class="muted">—</span>;
   if (a.tier_expires_at == null) return <span>永久</span>;
   const now = Math.floor(Date.now() / 1000);
-  if (a.tier_expires_at <= now) return <span class="tag bad">已过期</span>;
+  if (a.tier_expires_at <= now) return <span class="text-bad">已过期</span>;
   const soon = a.tier_expires_at - now <= 30 * 86400;
-  // 表格里只到分钟；鼠标停上去看秒（改有效期是精确到秒的）
-  return <span class={soon ? 'tag warn' : ''} title={fmtDateTime(a.tier_expires_at)}>{fmtTime(a.tier_expires_at)}</span>;
+  // 列里只到分钟；鼠标停上去看秒（改有效期是精确到秒的）
+  return (
+    <span class={soon ? 'text-warn' : ''} title={fmtDateTime(a.tier_expires_at)}>
+      {fmtTime(a.tier_expires_at)}
+    </span>
+  );
 }
 
 function statusCell(a: AdminAccount) {
-  if (a.status === 'disabled') return <span class="tag warn-tag">已停用</span>;
+  if (a.status === 'disabled') {
+    return <span class="status status-warn"><i class="dot" aria-hidden="true" />已停用</span>;
+  }
   if (a.status === 'pending_deletion' && a.deletion) {
+    // 精确到秒的截止时间放 title：列里塞下「还剩 N 天 · 截止 …」必然折行
     return (
-      <span class="tag bad">
-        待注销 · 还剩 {a.deletion.days_left} 天 · 截止 {fmtDateTime(a.deletion.execute_at)}
+      <span class="status status-bad" title={`截止 ${fmtDateTime(a.deletion.execute_at)}`}>
+        <i class="dot" aria-hidden="true" />待注销 · {a.deletion.days_left} 天
       </span>
     );
   }
-  return <span class="muted">正常</span>;
+  return <span class="status status-ok"><i class="dot" aria-hidden="true" />正常</span>;
+}
+
+/** 最近活跃：一律相对时间。`relTime` 超过 30 天会回落到「2026-11-02 07:25」，
+ *  那一串比「45 天前」宽一倍，会把这一列撑开；这里只保留相对口径。 */
+function activeText(unix: number | null): string {
+  if (!unix) return '—';
+  const days = Math.floor((Date.now() / 1000 - unix) / 86400);
+  return days >= 30 ? `${days} 天前` : relTime(unix);
+}
+
+/** 创建时间：日期正常色、时分弱化，整体不用等宽字体。 */
+function timeCell(unix: number) {
+  const [d, t] = fmtTime(unix).split(' ');
+  return (
+    <>
+      <span>{d}</span> <span class="muted time-part">{t}</span>
+    </>
+  );
 }
 
 export function AccountsPage() {
   const me = useLoad(() => ownerApi.me());
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');
-  const [tiers, setTiers] = useState<Tier[]>(ALL_TIERS);
+  /** 等级：`''` = 全部。分段控件是单选，接口仍收数组。 */
+  const [tier, setTier] = useState<'' | Tier>('');
   const [status, setStatus] = useState('');
   const [expiry, setExpiry] = useState('');
   const [from, setFrom] = useState('');
@@ -121,12 +164,9 @@ export function AccountsPage() {
     return () => clearTimeout(t);
   }, [q]);
 
-  // 三个等级默认全选。全选等于不过滤，参数就不发，省得接口白拼一个 `tier=free,full,admin`
-  const tierFilter = tiers.length === ALL_TIERS.length ? undefined : tiers;
-
   const query = useMemo(() => ({
     q: debounced || undefined,
-    tier: tierFilter,
+    tier: tier ? [tier] : undefined,
     status: status || undefined,
     expiry: expiry || undefined,
     created_from: dayStart(from),
@@ -135,13 +175,13 @@ export function AccountsPage() {
     sort,
     order,
     page,
-  }), [debounced, tiers, status, expiry, from, to, hasData, sort, order, page]);
+  }), [debounced, tier, status, expiry, from, to, hasData, sort, order, page]);
 
   // 条件写进 URL：刷新/收藏/换个标签页打开都还在
   useEffect(() => {
     const p = new URLSearchParams();
     if (debounced) p.set('q', debounced);
-    if (tierFilter) p.set('tier', tierFilter.join(','));
+    if (tier) p.set('tier', tier);
     if (status) p.set('status', status);
     if (expiry) p.set('expiry', expiry);
     if (from) p.set('from', from);
@@ -152,7 +192,7 @@ export function AccountsPage() {
     if (page > 1) p.set('page', String(page));
     const qs = p.toString();
     history.replaceState(null, '', qs ? `?${qs}` : location.pathname);
-  }, [debounced, tiers, status, expiry, from, to, hasData, sort, order, page]);
+  }, [debounced, tier, status, expiry, from, to, hasData, sort, order, page]);
 
   // 换筛选/翻页时保留旧表格（keep），否则列表被骨架替掉、页面高度一塌就会跳回顶部
   const { state, reload, refreshing } = useLoad(
@@ -161,14 +201,43 @@ export function AccountsPage() {
 
   if (me.state.k === 'ok' && me.state.data.tier !== 'admin') return <NoAccess what="权限管理" />;
 
-  function toggleTier(t: Tier) {
+  const hasFilter = !!(q.trim() || debounced || tier || status || expiry || from || to || hasData);
+
+  function resetFilters() {
+    setQ('');
+    setDebounced('');
+    setTier('');
+    setStatus('');
+    setExpiry('');
+    setFrom('');
+    setTo('');
+    setHasData('');
     setPage(1);
-    setTiers((cur) => {
-      if (!cur.includes(t)) return [...cur, t];
-      // 至少留一个等级，否则"什么都不选"和"全选"看起来一样、行为也一样，容易让人误以为筛选坏了
-      if (cur.length === 1) return cur;
-      return cur.filter((x) => x !== t);
-    });
+  }
+
+  /** 手填起始日期时若晚于结束日期，直接把两个框对调，别让人对着倒置的区间猜结果。 */
+  function changeFrom(v: string) {
+    setPage(1);
+    if (v && to && v > to) {
+      setFrom(to);
+      setTo(v);
+      return;
+    }
+    setFrom(v);
+  }
+  function changeTo(v: string) {
+    setPage(1);
+    if (v && from && v < from) {
+      setTo(from);
+      setFrom(v);
+      return;
+    }
+    setTo(v);
+  }
+  function applyRange(f: Date, t: Date) {
+    setFrom(ymd(f));
+    setTo(ymd(t));
+    setPage(1);
   }
 
   /** 点表头：同一列再点一次反序，换列则回到该列的默认方向（时间类倒序、名字正序）。 */
@@ -180,6 +249,17 @@ export function AccountsPage() {
       setSort(col);
       setOrder(col === 'login_name' ? 'asc' : 'desc');
     }
+  }
+
+  /** 打开「改有效期」：预填当前到期时间；本来就是永久就先把输入框填成 6 个月后，方便直接改。 */
+  function openExpiry(a: AdminAccount) {
+    const now = Math.floor(Date.now() / 1000);
+    setTierFor(null);
+    setPwFor(null);
+    setExpFor(a);
+    setExpPermanent(a.tier_expires_at == null);
+    setExpValue(toLocalInput(a.tier_expires_at ?? addMonthsTs(now, 6)));
+    setFlash(null);
   }
 
   async function doTier(a: AdminAccount) {
@@ -201,17 +281,6 @@ export function AccountsPage() {
     } finally {
       setBusy(false);
     }
-  }
-
-  /** 打开「改有效期」：预填当前到期时间；本来就是永久就先把输入框填成 6 个月后，方便直接改。 */
-  function openExpiry(a: AdminAccount) {
-    const now = Math.floor(Date.now() / 1000);
-    setTierFor(null);
-    setPwFor(null);
-    setExpFor(a);
-    setExpPermanent(a.tier_expires_at == null);
-    setExpValue(toLocalInput(a.tier_expires_at ?? addMonthsTs(now, 6)));
-    setFlash(null);
   }
 
   async function doExpiry() {
@@ -297,6 +366,7 @@ export function AccountsPage() {
 
   const data: AdminAccountPage | null = state.k === 'ok' ? state.data : null;
   const s = data?.summary;
+  const totalAll = s ? s.free + s.full + s.admin : 0;
   const nowSec = Math.floor(Date.now() / 1000);
   const expTs = fromLocalInput(expValue);
   const expPreview = expPermanent
@@ -304,50 +374,120 @@ export function AccountsPage() {
     : expTs == null
       ? '还没选时间。'
       : `将设为 ${fmtDateTime(expTs)}（还剩 ${Math.max(0, Math.ceil((expTs - nowSec) / 86400))} 天）。`;
+  const pages = data ? Math.max(1, Math.ceil(data.total / data.size)) : 1;
+
+  /** 行内操作：管理员只有重置密码；其余按状态给「撤销注销 / 恢复」，风险项收进「更多」。 */
+  function rowOps(a: AdminAccount) {
+    const openPw = () => {
+      setExpFor(null);
+      setTierFor(null);
+      setPwFor(a);
+      setPw1('');
+      setPw2('');
+    };
+    if (a.admin) {
+      return <button type="button" class="text-btn" disabled={busy} onClick={openPw}>重置密码</button>;
+    }
+    const more = [];
+    if (a.status === 'active') {
+      more.push({
+        text: a.tier === 'full' ? '设为免费' : '设为完整版',
+        onClick: () => { setExpFor(null); setPwFor(null); setTierFor(a); setTierMonths('6m'); },
+      });
+      more.push({ text: '停用', danger: true, onClick: () => void doStatus(a, 'disabled') });
+    } else if (a.status === 'disabled') {
+      more.push({ text: '恢复', onClick: () => void doStatus(a, 'active') });
+    } else {
+      more.push({ text: '撤销注销', onClick: () => void doRestore(a) });
+      more.push({ text: '停用', danger: true, onClick: () => void doStatus(a, 'disabled') });
+    }
+    return (
+      <div class="row-ops">
+        {a.tier === 'full' ? (
+          <button type="button" class="text-btn" disabled={busy} onClick={() => openExpiry(a)}>改有效期</button>
+        ) : null}
+        <button type="button" class="text-btn" disabled={busy} onClick={openPw}>重置密码</button>
+        <Menu label="更多 ⋯" ariaLabel={`${a.login_name} 的更多操作`} align="right" disabled={busy} items={more} />
+      </div>
+    );
+  }
 
   return (
     <>
-      <h1>权限管理</h1>
+      <div class="page-head">
+        <h1>权限管理</h1>
+      </div>
 
       {s ? (
-        <div class="cards">
-          <div class="card"><div class="muted small">账号总数</div><div class="stat">{data?.total ?? 0}</div></div>
-          <div class="card"><div class="muted small">免费版</div><div class="stat">{s.free}</div></div>
-          <div class="card"><div class="muted small">完整版</div><div class="stat">{s.full}</div></div>
-          <div class="card"><div class="muted small">30 天内到期</div><div class="stat">{s.expiring_30d}</div></div>
-          <div class="card"><div class="muted small">已停用 / 待注销</div><div class="stat">{s.disabled} / {s.pending_deletion}</div></div>
+        <div class="stat-grid">
+          <div class="stat-card"><div class="stat-k">账号总数</div><div class="stat-v">{totalAll}</div></div>
+          <div class="stat-card"><div class="stat-k">免费版</div><div class="stat-v">{s.free}</div></div>
+          <div class="stat-card"><div class="stat-k">完整版</div><div class="stat-v">{s.full}</div></div>
+          <div class="stat-card"><div class="stat-k">30 天内到期</div><div class="stat-v">{s.expiring_30d}</div></div>
+          <div class="stat-card">
+            <div class="stat-k">已停用 / 待注销</div>
+            <div class="stat-v">{s.disabled}<span class="stat-sep">/</span>{s.pending_deletion}</div>
+          </div>
         </div>
       ) : null}
 
-      <div class="filters">
-        <div class="filter-row">
-          <input class="search" type="search" placeholder="搜索登录名" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
-          <div class="chips" role="group" aria-label="按等级筛选">
-            {(['free', 'full', 'admin'] as Tier[]).map((t) => (
-              <button type="button" class={tiers.includes(t) ? 'chip on' : 'chip'} onClick={() => toggleTier(t)}>
-                {TIER_LABEL[t]}
-              </button>
-            ))}
-          </div>
+      <div class="filter-box">
+        <div class="filter-line">
+          <input class="search" type="search" placeholder="搜索登录名" aria-label="搜索登录名"
+                 value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+          <Segmented
+            ariaLabel="按等级筛选"
+            value={tier}
+            onChange={(k) => { setTier(k as '' | Tier); setPage(1); }}
+            items={[
+              { key: '', label: '全部', n: totalAll },
+              { key: 'free', label: '免费版', n: s?.free },
+              { key: 'full', label: '完整版', n: s?.full },
+              { key: 'admin', label: '管理员', n: s?.admin },
+            ]}
+          />
         </div>
-        <div class="filter-row">
-          <Select ariaLabel="按状态筛选" value={status} onChange={(v) => { setStatus(v); setPage(1); }} options={[
-            { value: '', label: '全部状态' }, { value: 'active', label: '正常' },
-            { value: 'disabled', label: '已停用' }, { value: 'pending_deletion', label: '待注销' },
-          ]} />
-          <Select ariaLabel="按到期筛选" value={expiry} onChange={(v) => { setExpiry(v); setPage(1); }} options={[
-            { value: '', label: '全部有效期' }, { value: 'permanent', label: '永久' },
-            { value: 'soon', label: '30 天内到期' }, { value: 'expired', label: '已过期' },
-          ]} />
-          <Select ariaLabel="按数据量筛选" value={hasData} onChange={(v) => { setHasData(v); setPage(1); }} options={[
-            { value: '', label: '有无数据都看' }, { value: '1', label: '有曲目' }, { value: '0', label: '无曲目' },
-          ]} />
-        </div>
-        <div class="filter-row">
-          <label class="small muted">创建时间</label>
-          <DateInput label="创建时间开始" value={from} onInput={(v) => { setFrom(v); setPage(1); }} />
-          <span class="muted">至</span>
-          <DateInput label="创建时间截止" value={to} onInput={(v) => { setTo(v); setPage(1); }} />
+        <div class="filter-line">
+          <span class="ctrl-fixed">
+            <Select ariaLabel="按状态筛选" value={status} onChange={(v) => { setStatus(v); setPage(1); }} options={[
+              { value: '', label: '全部状态' }, { value: 'active', label: '正常' },
+              { value: 'disabled', label: '已停用' }, { value: 'pending_deletion', label: '待注销' },
+            ]} />
+          </span>
+          <span class="ctrl-fixed">
+            <Select ariaLabel="按到期筛选" value={expiry} onChange={(v) => { setExpiry(v); setPage(1); }} options={[
+              { value: '', label: '全部有效期' }, { value: 'permanent', label: '永久' },
+              { value: 'soon', label: '30 天内到期' }, { value: 'expired', label: '已过期' },
+            ]} />
+          </span>
+          <span class="ctrl-fixed">
+            <Select ariaLabel="按数据量筛选" value={hasData} onChange={(v) => { setHasData(v); setPage(1); }} options={[
+              { value: '', label: '有无数据都看' }, { value: '1', label: '有曲目' }, { value: '0', label: '无曲目' },
+            ]} />
+          </span>
+          <span class="date-range">
+            <span class="date-label">创建时间</span>
+            <DateInput label="创建时间开始" value={from} onInput={changeFrom} />
+            <span class="muted">至</span>
+            <DateInput label="创建时间截止" value={to} onInput={changeTo} />
+            <Menu
+              label="快捷 ▾"
+              ariaLabel="创建时间快捷范围"
+              items={[
+                { text: '今天', onClick: () => applyRange(new Date(), new Date()) },
+                { text: '近 7 天', onClick: () => applyRange(daysAgo(6), new Date()) },
+                { text: '近 30 天', onClick: () => applyRange(daysAgo(29), new Date()) },
+                {
+                  text: '本月',
+                  onClick: () => applyRange(new Date(new Date().getFullYear(), new Date().getMonth(), 1), new Date()),
+                },
+                { text: '清除日期', onClick: () => { setFrom(''); setTo(''); setPage(1); } },
+              ]}
+            />
+          </span>
+          {hasFilter ? (
+            <button type="button" class="text-btn filter-reset" onClick={resetFilters}>重置筛选</button>
+          ) : null}
         </div>
       </div>
 
@@ -425,87 +565,68 @@ export function AccountsPage() {
         </div>
       ) : null}
 
-      {state.k === 'loading' ? <Loading what="账号列表" /> : null}
-      {state.k === 'error' ? <ErrorBox message={state.message} retry={reload} /> : null}
-      {data && data.items.length === 0 ? <Empty>没有符合条件的账号。</Empty> : null}
+      <section class="box">
+        {state.k === 'loading' ? <Loading what="账号列表" /> : null}
+        {state.k === 'error' ? <ErrorBox message={state.message} retry={reload} /> : null}
 
-      {data && data.items.length ? (
-        <div class={refreshing ? 'table-wrap is-refreshing' : 'table-wrap'}>
-          <table class="table">
-            <thead>
-              <tr>
-                {COLS.map((c) => (
-                  <th>
-                    {c.sort ? (
-                      <button type="button" class="th-sort" aria-pressed={sort === c.sort} onClick={() => sortBy(c.sort!)}>
-                        {c.label}{sort === c.sort ? (order === 'asc' ? ' ↑' : ' ↓') : ''}
-                      </button>
-                    ) : c.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((a) => (
+        {data && data.items.length === 0 ? (
+          <div class="empty-state">
+            <p>没有符合条件的账号。</p>
+            {hasFilter ? (
+              <button type="button" class="btn small" onClick={resetFilters}>重置筛选</button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {data && data.items.length ? (
+          <div class={refreshing ? 'table-wrap is-refreshing' : 'table-wrap'}>
+            <table class="table accounts-table">
+              <colgroup>
+                {COLS.map((c) => <col style={{ width: `${c.w}px` }} />)}
+              </colgroup>
+              <thead>
                 <tr>
-                  <td>
-                    {a.admin ? <span class="tag admin">管理员</span> : null}
-                    <strong>{a.login_name}</strong>
-                    <div class="muted small">{a.active_sessions} 台在线</div>
-                  </td>
-                  <td><span class={`tag tier-${a.tier}`}>{TIER_LABEL[a.tier]}</span></td>
-                  <td>{expiryCell(a)}</td>
-                  <td>{statusCell(a)}</td>
-                  <td class="mono small">{fmtTime(a.created_at)}</td>
-                  <td class="mono small">{a.last_seen_at ? relTime(a.last_seen_at) : '—'}</td>
-                  <td class="small">音频 {a.audio} / 视频 {a.video} / 合计 {a.media_total}</td>
-                  <td class="small">{a.playlists} 个 · {fmtBytes(a.bytes)}</td>
-                  <td>
-                    <div class="row-actions">
-                      {a.admin ? null : a.status === 'disabled' ? (
-                        <>
-                          {a.tier === 'full' ? (
-                            <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => openExpiry(a)}>改有效期</button>
-                          ) : null}
-                          <button type="button" class="btn small" disabled={busy} onClick={() => void doStatus(a, 'active')}>恢复</button>
-                        </>
-                      ) : a.status === 'pending_deletion' ? (
-                        <>
-                          <button type="button" class="btn small" disabled={busy} onClick={() => void doRestore(a)}>撤销注销</button>
-                          <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => void doStatus(a, 'disabled')}>停用</button>
-                        </>
-                      ) : (
-                        <>
-                          <button type="button" class="btn small" disabled={busy}
-                                  onClick={() => { setExpFor(null); setTierFor(a); setTierMonths('6m'); }}>
-                            {a.tier === 'full' ? '设为免费' : '设为完整版'}
-                          </button>
-                          {a.tier === 'full' ? (
-                            <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => openExpiry(a)}>改有效期</button>
-                          ) : null}
-                          <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => void doStatus(a, 'disabled')}>停用</button>
-                        </>
-                      )}
-                      <button type="button" class="btn btn-ghost small" disabled={busy}
-                              onClick={() => { setExpFor(null); setPwFor(a); setPw1(''); setPw2(''); }}>
-                        重置密码
-                      </button>
-                    </div>
-                  </td>
+                  {COLS.map((c) => (
+                    <th class={c.right ? 'num' : ''}>
+                      {c.sort ? (
+                        <button type="button" class="th-sort" aria-pressed={sort === c.sort} onClick={() => sortBy(c.sort!)}>
+                          {c.label}{sort === c.sort ? (order === 'asc' ? ' ↑' : ' ↓') : ''}
+                        </button>
+                      ) : c.label}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
+              </thead>
+              <tbody>
+                {data.items.map((a) => (
+                  <tr>
+                    <td class="cell-name">
+                      <div class="name" title={a.login_name}>{a.login_name}</div>
+                      <div class="sub">{a.active_sessions} 台在线</div>
+                    </td>
+                    <td><span class={`badge badge-${a.tier}`}>{TIER_LABEL[a.tier]}</span></td>
+                    <td>{expiryCell(a)}</td>
+                    <td>{statusCell(a)}</td>
+                    <td>{timeCell(a.created_at)}</td>
+                    <td class="cell-active">{activeText(a.last_seen_at)}</td>
+                    <td class="num" title={`合计 ${a.media_total}`}>音频 {a.audio} · 视频 {a.video}</td>
+                    <td class="num">{a.playlists} 个 · {fmtBytes(a.bytes)}</td>
+                    <td class="cell-ops">{rowOps(a)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
 
-      {data && data.total > data.size ? (
-        <div class="toolbar">
-          <button type="button" class="btn small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</button>
-          <span class="small muted">第 {data.page} / {Math.ceil(data.total / data.size)} 页 · 共 {data.total} 条</span>
-          <button type="button" class="btn small" disabled={page >= Math.ceil(data.total / data.size)} onClick={() => setPage((p) => p + 1)}>下一页</button>
-        </div>
-      ) : null}
+        {data && data.total > data.size ? (
+          <div class="box-foot">
+            <button type="button" class="btn small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</button>
+            <span class="small muted">第 {data.page} / {pages} 页 · 共 {data.total} 条</span>
+            <button type="button" class="btn small" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>下一页</button>
+          </div>
+        ) : null}
+      </section>
     </>
   );
 }

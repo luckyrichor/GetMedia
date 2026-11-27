@@ -206,7 +206,8 @@ function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
       <Header me={me} />
       <div class="layout">
         <Nav path={path} tier={me.tier} />
-        <main class="content">{body}</main>
+        {/* 权限管理列多（9 列），宽屏上按默认 62rem 会右边空一大片，单独放宽 */}
+        <main class={path === '/accounts' ? 'content content-wide' : 'content'}>{body}</main>
       </div>
     </>
   );

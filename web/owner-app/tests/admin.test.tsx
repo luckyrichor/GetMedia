@@ -24,6 +24,19 @@ function localInput(unix: number): string {
     + `T${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
 }
 
+/** 等级分段控件：按钮文字是「免费版 4」，按前缀找。 */
+const seg = (label: string) => Array.from(document.querySelectorAll('.seg-btn'))
+  .find((b) => (b.textContent ?? '').startsWith(label)) as HTMLElement;
+
+/** 最近一次账号列表请求的查询串（筛选参数真的发出去了没有，就看它）。 */
+function lastAccountsQuery(): URLSearchParams {
+  const hit = calls.filter((c) => c.path === '/v2/admin/accounts').pop();
+  return new URLSearchParams(hit?.search ?? '');
+}
+
+const dayStartOf = (s: string) => Math.floor(new Date(`${s}T00:00:00`).getTime() / 1000);
+const dayEndOf = (s: string) => Math.floor(new Date(`${s}T23:59:59`).getTime() / 1000);
+
 const NOW = Math.floor(Date.now() / 1000);
 
 const ACCOUNT = {
@@ -72,7 +85,7 @@ describe('权限管理', () => {
     expect(text()).not.toContain('账号总数');
   });
 
-  test('列表：统计条、等级徽章、待注销的「还剩 N 天 · 截止」都渲染出来', async () => {
+  test('列表：统计条、等级徽章、待注销的「还剩 N 天」都渲染出来（整行单行）', async () => {
     server(ownerRoutes({
       'GET /account/me': { json: ADMIN_ME },
       'GET /v2/admin/accounts': accountsPage([ADMIN_ROW, ACCOUNT, PENDING_ROW]),
@@ -84,22 +97,31 @@ describe('权限管理', () => {
     expect(text()).toContain('30 天内到期');
     expect(text()).toContain('已停用 / 待注销');
     // 等级徽章：alice 与 bob 都是完整版，管理员一个
-    expect(document.querySelectorAll('.tag.tier-full').length).toBe(2);
-    expect(document.querySelectorAll('.tag.tier-admin').length).toBe(1);
-    // 待注销：还剩天数 + 到秒的截止时间
-    expect(text()).toContain('待注销 · 还剩 6 天 · 截止');
-    expect(text()).toMatch(/截止 \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+    expect(document.querySelectorAll('.badge-full').length).toBe(2);
+    expect(document.querySelectorAll('.badge-admin').length).toBe(1);
+    // 管理员标识只在「等级」列出现一次，不再挂在登录名下面
+    expect(document.querySelectorAll('.cell-name .tag').length).toBe(0);
+    expect(document.querySelectorAll('tbody .badge-admin').length).toBe(1);
+    // 待注销：列里只留「还剩 N 天」，到秒的截止时间放 title（塞进列里必然折行）
+    expect(text()).toContain('待注销 · 6 天');
+    const bad = document.querySelector('.status-bad') as HTMLElement;
+    expect(bad.getAttribute('title')).toMatch(/^截止 \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
     // 管理员行只有「重置密码」：整行不该出现「设为免费」「停用」
     const adminRow = Array.from(document.querySelectorAll('tbody tr'))
       .find((tr) => tr.textContent?.includes('luckyrichor'))!;
     expect(adminRow.textContent).toContain('重置密码');
     expect(adminRow.textContent).not.toContain('停用');
     expect(adminRow.textContent).not.toContain('设为');
-    // 待注销行给的是「撤销注销」而不是「设为…」
+    expect(adminRow.querySelector('.menu-btn')).toBeNull();      // 连「更多」都不给
+    // 待注销行的风险操作收进「更多」：默认不占位置，点开才出现
     const pendingRow = Array.from(document.querySelectorAll('tbody tr'))
       .find((tr) => tr.textContent?.includes('bob'))!;
-    expect(pendingRow.textContent).toContain('撤销注销');
-    expect(pendingRow.textContent).not.toContain('设为完整版');
+    expect(pendingRow.textContent).not.toContain('撤销注销');
+    await click(pendingRow.querySelector('.menu-btn') as HTMLElement);
+    const pop = document.querySelector('.menu-pop') as HTMLElement;
+    expect(pop.textContent).toContain('撤销注销');
+    expect(pop.textContent).toContain('停用');
+    expect(pop.textContent).not.toContain('设为完整版');
   });
 
   test('设为完整版：选永久 → 提交 tier=full + duration=permanent，并提示踢下线数', async () => {
@@ -115,6 +137,9 @@ describe('权限管理', () => {
       },
     }));
     mount('/accounts');
+    await until(() => text().includes('alice'));
+    // 「设为完整版」在行尾的「更多 ⋯」里
+    await click(document.querySelector('tbody .menu-btn') as HTMLElement);
     await until(() => text().includes('设为完整版'));
 
     await click(button('设为完整版'));
@@ -140,6 +165,8 @@ describe('权限管理', () => {
       },
     }));
     mount('/accounts');
+    await until(() => text().includes('alice'));
+    await click(document.querySelector('tbody .menu-btn') as HTMLElement);
     await until(() => text().includes('设为免费'));
     await click(button('设为免费'));
     await until(() => text().includes('把「alice」设为免费版'));
@@ -168,7 +195,7 @@ describe('权限管理', () => {
     const rows = document.querySelectorAll('tbody tr').length;
     expect(rows).toBe(3);
 
-    await click(button('免费版')); // 取消勾选「免费版」→ 触发重取
+    await click(seg('免费版')); // 只选「免费版」→ 触发重取
 
     // 请求未完成：不能出现骨架（骨架一出现，页面高度就塌，滚动位置会被夹回顶部）
     expect(document.querySelector('.skeleton')).toBeNull();
@@ -270,6 +297,101 @@ describe('权限管理', () => {
     await click(button('取消'));
     await until(() => document.querySelector('[role="dialog"]') === null);
   });
+  test('创建时间范围：起止按当天 00:00:00 / 23:59:59 传参，只填一端也生效', async () => {
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage([ACCOUNT]),
+    }));
+    mount('/accounts');
+    await until(() => text().includes('alice'));
+
+    await setInput('input[aria-label="创建时间开始"]', '2026-11-01');
+    await until(() => lastAccountsQuery().get('created_from') === String(dayStartOf('2026-11-01')));
+    expect(lastAccountsQuery().get('created_to')).toBeNull();   // 只填起始也算生效
+
+    await setInput('input[aria-label="创建时间截止"]', '2026-11-27');
+    await until(() => lastAccountsQuery().get('created_to') === String(dayEndOf('2026-11-27')));
+    expect(lastAccountsQuery().get('created_from')).toBe(String(dayStartOf('2026-11-01')));
+  });
+
+  test('起始晚于结束：自动对调两个框，并按对调后的区间查询', async () => {
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage([ACCOUNT]),
+    }));
+    mount('/accounts');
+    await until(() => text().includes('alice'));
+
+    await setInput('input[aria-label="创建时间开始"]', '2026-11-27');
+    await setInput('input[aria-label="创建时间截止"]', '2026-11-01');
+
+    await until(() => lastAccountsQuery().get('created_from') === String(dayStartOf('2026-11-01')));
+    expect(lastAccountsQuery().get('created_to')).toBe(String(dayEndOf('2026-11-27')));
+    expect((document.querySelector('input[aria-label="创建时间开始"]') as HTMLInputElement).value).toBe('2026-11-01');
+    expect((document.querySelector('input[aria-label="创建时间截止"]') as HTMLInputElement).value).toBe('2026-11-27');
+  });
+
+  test('快捷「今天」：两个框都填今天，参数是今天 00:00:00 到 23:59:59', async () => {
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage([ACCOUNT]),
+    }));
+    mount('/accounts');
+    await until(() => text().includes('alice'));
+
+    await click(button('快捷 ▾'));
+    await click(button('今天'));
+
+    const today = new Date();
+    const two = (x: number) => String(x).padStart(2, '0');
+    const ymd = `${today.getFullYear()}-${two(today.getMonth() + 1)}-${two(today.getDate())}`;
+    await until(() => lastAccountsQuery().get('created_from') === String(dayStartOf(ymd)));
+    expect(lastAccountsQuery().get('created_to')).toBe(String(dayEndOf(ymd)));
+    expect((document.querySelector('input[aria-label="创建时间开始"]') as HTMLInputElement).value).toBe(ymd);
+  });
+
+  test('重置筛选：有筛选才出现，点完清空并回到第一页', async () => {
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage([ACCOUNT]),
+    }));
+    mount('/accounts');
+    await until(() => text().includes('alice'));
+    expect(document.querySelector('.filter-reset')).toBeNull();   // 什么都没选时不显示
+
+    await setInput('input[aria-label="创建时间开始"]', '2026-11-01');
+    await until(() => document.querySelector('.filter-reset') !== null);
+    await click(button('重置筛选'));
+
+    await until(() => lastAccountsQuery().get('created_from') === null);
+    expect((document.querySelector('input[aria-label="创建时间开始"]') as HTMLInputElement).value).toBe('');
+    expect(document.querySelector('.filter-reset')).toBeNull();
+    expect((seg('全部') as HTMLElement).getAttribute('aria-selected')).toBe('true');
+  });
+
+  test('「更多」里的停用是危险项，点了要先确认再发请求', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage([ACCOUNT]),
+      'POST /v2/admin/accounts/acct_2/status': {
+        json: { ok: true, status: 'disabled', revoked_sessions: 2 },
+      },
+    }));
+    mount('/accounts');
+    await until(() => text().includes('alice'));
+    await click(document.querySelector('tbody .menu-btn') as HTMLElement);
+
+    const item = Array.from(document.querySelectorAll('.menu-item')).find((b) => b.textContent === '停用')!;
+    expect(item.className).toContain('danger');
+    await click(item);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    const post = calls.find((c) => c.method === 'POST')!;
+    expect(post.body).toEqual({ status: 'disabled' });
+    await until(() => text().includes('已停用 alice'));
+  });
+
 });
 
 describe('邀请码', () => {
