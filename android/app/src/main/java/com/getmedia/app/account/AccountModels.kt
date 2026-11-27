@@ -29,7 +29,11 @@ data class DeviceInfo(
 
 data class SessionInfo(val token: String, val expiresAt: Long, val deviceId: String?)
 
-data class AccountInfo(val id: String, val loginName: String, val tier: String)
+data class AccountInfo(
+    val id: String, val loginName: String, val tier: String,
+    /** 完整版的到期时间（秒）；`null` = 永久或免费版。 */
+    val tierExpiresAt: Long? = null,
+)
 
 /** 注册 / 登录成功后的结果。`recoveryCode` 只在注册和找回时有值，且只显示这一次。 */
 data class AuthResult(
@@ -44,7 +48,12 @@ data class MeInfo(
     val consentRequired: Boolean, val recoveryConfirmed: Boolean, val status: String,
     /** 服务端**当前要求**的隐私版本（`legal_versions.privacy_policy`）；缺失为 null。 */
     val privacyVersion: Int? = null,
+    /** 完整版的到期时间（秒）；`null` = 永久或免费版。 */
+    val tierExpiresAt: Long? = null,
 )
+
+/** 邀请码兑换结果：兑换后应立即用这两个值刷新本地会话与界面。 */
+data class RedeemResult(val tier: String, val tierExpiresAt: Long?)
 
 data class LatestRelease(
     val version: String, val notes: String, val apk: String, val sha256: String,
@@ -84,7 +93,10 @@ object AccountJson {
 
     fun session(o: JSONObject) = SessionInfo(o.getString("token"), o.optLong("expires_at"), o.optString("device_id").ifBlank { null })
 
-    fun account(o: JSONObject) = AccountInfo(o.getString("id"), o.getString("login_name"), o.optString("tier", "free"))
+    fun account(o: JSONObject) = AccountInfo(
+        o.getString("id"), o.getString("login_name"), o.optString("tier", "free"),
+        tierExpiresAt(o),
+    )
 
     fun auth(o: JSONObject) = AuthResult(
         session = session(o.getJSONObject("session")),
@@ -98,8 +110,17 @@ object AccountJson {
     fun me(o: JSONObject) = MeInfo(
         o.getString("id"), o.getString("login_name"), o.optString("tier", "free"),
         o.optBoolean("consent_required"), o.optBoolean("recovery_confirmed"), o.optString("status"),
-        requiredPrivacyVersion(o),
+        requiredPrivacyVersion(o), tierExpiresAt(o),
     )
+
+    fun redeem(o: JSONObject) = RedeemResult(o.optString("tier", "full"), tierExpiresAt(o))
+
+    /**
+     * 到期时间（秒）。服务端对免费版回 `null`、对永久回 `null`；老服务端没有这个字段也是 `null`。
+     * 只有正数才算"有到期时间"，0 与负数一律当未知/永久。
+     */
+    private fun tierExpiresAt(o: JSONObject): Long? =
+        if (o.isNull("tier_expires_at")) null else o.optLong("tier_expires_at", 0L).takeIf { it > 0 }
 
     /**
      * 服务端当前要求的隐私版本。取不到就当"不知道"，由调用方按"不许同步"处理——

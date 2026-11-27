@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,11 +59,26 @@ private fun Field(
     value: String, onChange: (String) -> Unit, label: String, secret: Boolean = false,
     enabled: Boolean = true, singleLine: Boolean = true, keyboard: KeyboardType = KeyboardType.Text,
 ) {
+    // 密码框的「小眼睛」：每个框各自独立，默认遮住；旋转屏幕后保持当前显示状态
+    // （只存这个布尔值，不存密码本身）。
+    var revealed by rememberSaveable { mutableStateOf(false) }
+    val masked = secret && !revealed
     OutlinedTextField(
         value = value, onValueChange = onChange, label = { Text(label) },
         singleLine = singleLine, enabled = enabled,
-        visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
+        visualTransformation = if (masked) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(keyboardType = if (secret) KeyboardType.Password else keyboard),
+        trailingIcon = if (secret) {
+            {
+                IconButton(onClick = { revealed = !revealed }, enabled = enabled) {
+                    Icon(
+                        if (revealed) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (revealed) "隐藏密码" else "显示密码",
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        } else null,
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
     )
 }
@@ -72,6 +90,76 @@ private fun ErrorLine(text: String?) {
 
 private fun formatTime(sec: Long): String =
     if (sec <= 0) "—" else SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(sec * 1000))
+
+private fun formatDay(sec: Long): String = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(sec * 1000))
+
+/**
+ * 「我的」页顶部那行等级文案。
+ *
+ * - 免费版：「免费版」；
+ * - 完整版：有到期时间写「完整版 · 有效期至 2027-05-27」，没有（"设为永久"）写「完整版（永久）」；
+ *   过了到期日写「完整版 · 已于 … 到期」（服务端每小时才刷成 free，这里不能等它）；
+ * - 管理员：「管理员（永久）」。
+ *
+ * 先用手里的会话渲染、`me()` 回来再换，避免打开页面先闪一下"未知"。
+ */
+internal fun tierText(localTier: String?, localExpiresAt: Long?, me: MeInfo?): String {
+    val tier = (me?.tier ?: localTier)?.lowercase() ?: return "等级未知"
+    // me 回来了就信它：它说 null 就是"永久"，不能拿本地旧值兜底
+    val expiresAt = if (me != null) me.tierExpiresAt else localExpiresAt
+    return when (tier) {
+        "admin" -> "管理员（永久）"
+        "full" -> when {
+            expiresAt == null || expiresAt <= 0 -> "完整版（永久）"
+            expiresAt <= System.currentTimeMillis() / 1000 -> "完整版 · 已于 ${formatDay(expiresAt)} 到期"
+            else -> "完整版 · 有效期至 ${formatDay(expiresAt)}"
+        }
+        else -> "免费版"
+    }
+}
+
+/**
+ * 免费版账号在「我的」页里的邀请码兑换入口。
+ *
+ * 服务端只接受"登录态兑换"（`POST /account/redeem-invite`），所以这里不需要密码；
+ * 成功后回调 [onDone]，由页面重新拉一次 `me()`，等级文案与同步入口跟着变。
+ */
+@Composable
+private fun RedeemInviteCard(onDone: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val act = remember { Action() }
+    var code by remember { mutableStateOf("") }
+    var done by remember { mutableStateOf<String?>(null) }
+
+    SectionTitle("邀请码")
+    SectionCard {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "填一个邀请码可升级为完整版（6 个月）；还没到期的话会在原到期日上叠加。",
+                style = MaterialTheme.typography.bodySmall, color = uiMuted(),
+            )
+            Field(code, { code = it.trim() }, "邀请码", enabled = !act.busy)
+            ErrorLine(act.error)
+            done?.let { Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 4.dp)) }
+            Button(
+                onClick = {
+                    scope.launch {
+                        done = null
+                        val ok = act.run {
+                            val r = AccountService.redeemInvite(code)
+                            val at = r.tierExpiresAt
+                            done = if (at != null) "已升级为完整版，有效期至 ${formatDay(at)}" else "已升级为完整版"
+                            code = ""
+                        }
+                        if (ok) onDone()
+                    }
+                },
+                enabled = code.isNotBlank() && !act.busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(if (act.busy) "兑换中…" else "兑换") }
+        }
+    }
+}
 
 // ------------------------------------------------------------------ 登录 / 注册 / 找回
 
@@ -137,7 +225,13 @@ internal fun AuthPage(onDone: () -> Unit) {
         Field(password, { password = it }, if (mode == AuthMode.RECOVER) "新密码" else "密码", secret = true, enabled = !action.busy)
         if (mode == AuthMode.REGISTER) {
             if (config?.registrationOpen == false) Text("当前暂停注册。", color = MaterialTheme.colorScheme.error)
-            if (config?.inviteRequired == true) Field(invite, { invite = it }, "邀请码", enabled = !action.busy)
+            // 注册关闭时：邀请码是准入门槛；注册开放时：可不填，填了建号即完整版 6 个月
+            if (config?.inviteRequired == true) {
+                Field(invite, { invite = it }, "邀请码", enabled = !action.busy)
+            } else {
+                Field(invite, { invite = it }, "邀请码（可选）", enabled = !action.busy)
+                Text("没有邀请码也能注册（免费版）；填了直接升为完整版，6 个月。", style = MaterialTheme.typography.bodySmall, color = uiMuted())
+            }
             Text("登录名 3–32 位英文字母、数字、下划线或连字符；密码至少 8 位。请记好登录名，找回密码需要它。", style = MaterialTheme.typography.bodySmall, color = uiMuted())
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
                 Checkbox(agreed, { agreed = it }, enabled = !action.busy)
@@ -274,7 +368,7 @@ internal fun AccountPage(onLoggedOut: () -> Unit) {
     val load = remember { Action() }
     val act = remember { Action() }
     var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
-    var tier by remember { mutableStateOf<String?>(null) }
+    var me by remember { mutableStateOf<MeInfo?>(null) }
     var dialog by remember { mutableStateOf<String?>(null) }
     var legal by remember { mutableStateOf<LegalBundle?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
@@ -282,7 +376,7 @@ internal fun AccountPage(onLoggedOut: () -> Unit) {
     suspend fun reload() {
         load.run {
             AccountService.authed {
-                tier = AccountService.api.me().tier
+                me = AccountService.api.me()
                 devices = AccountService.api.devices()
             }
         }
@@ -295,8 +389,12 @@ internal fun AccountPage(onLoggedOut: () -> Unit) {
         SectionCard {
             Column(Modifier.padding(16.dp)) {
                 Text(s.loginName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(if (tier == "free" || tier == null) "免费版账号" else "账号等级：$tier", style = MaterialTheme.typography.bodySmall, color = uiMuted())
+                Text(tierText(s.tier, s.tierExpiresAt, me), style = MaterialTheme.typography.bodySmall, color = uiMuted())
             }
+        }
+        // 免费版就地兑换升级；完整版也能填（未到期时在到期日上叠加，等于续期）；管理员不需要
+        if ((me?.tier ?: s.tier)?.lowercase() in setOf("free", "full")) {
+            RedeemInviteCard(onDone = { scope.launch { reload() } })
         }
         if (!s.recoveryConfirmed) InlineBanner("这个账号的恢复码尚未确认保存。当前版本无法在登录状态下重新生成恢复码，请务必记好密码。")
         ErrorLine(load.error)

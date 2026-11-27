@@ -37,6 +37,13 @@ object SessionStore {
          */
         val tier: String? = null,
         /**
+         * 完整版的到期时间（秒）。`null` = 永久或免费版。
+         *
+         * 与 [tier] 一起在登录与每次 `me()` 时刷新：`LibrarySyncGate` 到期就本地关掉同步入口，
+         * 不等服务端把 tier 刷成 free（服务端那边还有每小时清扫，本地不能指望它及时）。
+         */
+        val tierExpiresAt: Long? = null,
+        /**
          * 该账号**已同意**的隐私说明版本。只在 `consentRequired == false` 时才可信
          * （那时服务端的"当前版本"就等于他同意过的那一版）；同意过期或从没对过 `me()` 时为 null。
          *
@@ -62,6 +69,7 @@ object SessionStore {
                 o.optBoolean("consent_required"), o.optBoolean("recovery_confirmed", true),
                 o.optString("pending_recovery").ifBlank { null },
                 o.optString("tier").ifBlank { null },
+                o.optLong("tier_exp", 0L).takeIf { it > 0 },
                 o.optInt("consent_pp", 0).takeIf { it > 0 },
             )
         }.getOrNull()
@@ -75,6 +83,7 @@ object SessionStore {
             .put("expires_at", session.expiresAt).put("device_id", session.deviceId ?: "")
             .put("consent_required", session.consentRequired).put("recovery_confirmed", session.recoveryConfirmed)
             .put("pending_recovery", session.pendingRecoveryCode ?: "").put("tier", session.tier ?: "")
+            .put("tier_exp", session.tierExpiresAt ?: 0L)
             .put("consent_pp", session.consentedPrivacyVersion ?: 0).toString().toByteArray()
         val temp = File(file.parentFile, file.name + ".tmp")
         temp.writeBytes(encrypt(data))

@@ -64,8 +64,21 @@ class AccountApiTest {
         assertEquals("android", body.getJSONObject("client").getString("channel"))
     }
 
-    @Test fun deviceLimitSurfacesDevicesAndRetryUsesEvictId() = runBlocking {
-        server.enqueue(json("""{"detail":"设备已达上限","code":"device_limit","devices":[{"id":"dev_1","channel":"android","device":"A","app_version":"1","created_at":1,"last_used_at":2,"current":false}]}""", 409))
+    @Test fun redeemInvitePostsCodeWithSessionHeader() = runBlocking {
+        token = "tok-123"
+        server.enqueue(json("""{"tier":"full","tier_expires_at":1800000000}"""))
+        val r = api.redeemInvite("  ABCD-1234  ")
+        assertEquals("full", r.tier)
+        assertEquals(1800000000L, r.tierExpiresAt)
+        val req = server.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/getmedia/api/account/redeem-invite", req.path)
+        assertEquals("tok-123", req.getHeader("X-GetMedia-Session"))
+        // 前后空格在本地就去掉，服务端不用再容错
+        assertEquals("ABCD-1234", org.json.JSONObject(req.body.readUtf8()).getString("code"))
+    }
+
+    @Test fun deviceLimitSurfacesDevicesAndRetryUsesEvictId() = runBlocking {        server.enqueue(json("""{"detail":"设备已达上限","code":"device_limit","devices":[{"id":"dev_1","channel":"android","device":"A","app_version":"1","created_at":1,"last_used_at":2,"current":false}]}""", 409))
         val e = assertThrows(ApiException::class.java) { runBlocking { api.login("abc", "password-1", info) } }
         assertEquals("device_limit", e.code); assertEquals("dev_1", e.devices.single().id)
         server.takeRequest()

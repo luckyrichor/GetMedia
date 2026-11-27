@@ -47,6 +47,29 @@ class AccountJsonTest {
         assertTrue(r.consentRequired); assertTrue(r.recoveryConfirmed); assertNull(r.recoveryCode); assertNull(r.session.deviceId)
     }
 
+    @Test fun tierExpiryParsedFromLoginAndMe() {
+        val login = AccountJson.auth(JSONObject("""{"session":{"token":"t","expires_at":9},
+            "account":{"id":"a","login_name":"abc","tier":"full","tier_expires_at":1800000000}}"""))
+        assertEquals("full", login.account.tier)
+        assertEquals(1800000000L, login.account.tierExpiresAt)
+
+        val me = AccountJson.me(JSONObject("""{"id":"a","login_name":"abc","tier":"full",
+            "consent_required":false,"recovery_confirmed":true,"status":"active","tier_expires_at":1800000000}"""))
+        assertEquals(1800000000L, me.tierExpiresAt)
+
+        // 免费版与"永久"都是 null；老服务端没有这个字段也是 null；0 不当成"已过期"
+        assertNull(AccountJson.me(JSONObject("""{"id":"a","login_name":"abc","tier":"free","tier_expires_at":null}""")).tierExpiresAt)
+        assertNull(AccountJson.me(JSONObject("""{"id":"a","login_name":"abc","tier":"admin"}""")).tierExpiresAt)
+        assertNull(AccountJson.me(JSONObject("""{"id":"a","login_name":"abc","tier":"full","tier_expires_at":0}""")).tierExpiresAt)
+    }
+
+    @Test fun redeemResultCarriesTierAndExpiry() {
+        val r = AccountJson.redeem(JSONObject("""{"tier":"full","tier_expires_at":1800000000}"""))
+        assertEquals("full", r.tier)
+        assertEquals(1800000000L, r.tierExpiresAt)
+        assertNull(AccountJson.redeem(JSONObject("""{"tier":"full","tier_expires_at":null}""")).tierExpiresAt)
+    }
+
     @Test fun configHandlesNullMaintenanceAndMissingLatest() {
         val c = AccountJson.config(JSONObject("""{"registration_open":false,"invite_required":true,"maintenance":null,"min_version":"0.1.0"}"""))
         assertFalse(c.registrationOpen); assertTrue(c.inviteRequired); assertNull(c.maintenance); assertNull(c.latest)

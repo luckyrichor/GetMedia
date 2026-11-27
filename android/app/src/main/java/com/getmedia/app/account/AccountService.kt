@@ -30,7 +30,7 @@ object AccountService {
         SessionStore.save(SessionStore.Session(
             r.account.loginName, r.session.token, r.session.expiresAt, r.session.deviceId,
             consentRequired = false, recoveryConfirmed = false, pendingRecoveryCode = r.recoveryCode,
-            tier = r.account.tier,
+            tier = r.account.tier, tierExpiresAt = r.account.tierExpiresAt,
             consentedPrivacyVersion = consent.privacyPolicy.version,
         ))
     }
@@ -40,7 +40,7 @@ object AccountService {
         SessionStore.save(SessionStore.Session(
             r.account.loginName, r.session.token, r.session.expiresAt, r.session.deviceId,
             consentRequired = r.consentRequired, recoveryConfirmed = r.recoveryConfirmed,
-            tier = r.account.tier,
+            tier = r.account.tier, tierExpiresAt = r.account.tierExpiresAt,
             // 同意已过期时"已同意版本"不可信，一律记 null（闸门按不许同步处理）
             consentedPrivacyVersion = if (r.consentRequired) null else r.privacyVersion,
         ))
@@ -66,6 +66,19 @@ object AccountService {
         SessionStore.update { it.copy(recoveryConfirmed = true, pendingRecoveryCode = null) }
     }
 
+    /**
+     * 兑换邀请码：成功后立刻把本机会话的等级与到期时间改掉（不等下一次 `refresh()`），
+     * 完整版的同步入口因此马上出现。返回兑换后的等级与到期时间，由界面提示"升到哪一天"。
+     */
+    suspend fun redeemInvite(code: String): RedeemResult {
+        val sessionToken = SessionStore.token()
+        val r = api.redeemInvite(code)
+        SessionStore.update {
+            if (it.token != sessionToken) it else it.copy(tier = r.tier, tierExpiresAt = r.tierExpiresAt)
+        }
+        return r
+    }
+
     /** 启动/回到前台时对一次账号状态；401 说明会话失效（被吊销、过期、账号注销），退回登录页。联网失败则保持现状。 */
     suspend fun refresh() {
         val sessionToken = SessionStore.token() ?: return
@@ -75,7 +88,7 @@ object AccountService {
                 if (it.token != sessionToken || it.loginName != me.loginName) it
                 else it.copy(
                     consentRequired = me.consentRequired, recoveryConfirmed = me.recoveryConfirmed,
-                    tier = me.tier,
+                    tier = me.tier, tierExpiresAt = me.tierExpiresAt,
                     consentedPrivacyVersion = if (me.consentRequired) null else me.privacyVersion,
                 )
             }

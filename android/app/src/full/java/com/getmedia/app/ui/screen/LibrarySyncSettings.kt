@@ -46,7 +46,22 @@ import kotlinx.coroutines.withContext
 internal fun LibrarySyncSettings() {
     val session by SessionStore.current.collectAsState()
     val account = session?.loginName ?: return
-    if (!LibrarySyncGate.isOwner(session)) return
+    if (!LibrarySyncGate.isOwner(session)) {
+        // 完整版到期（等级还是 full、只是过了有效期）：入口留在原地只给一句说明。
+        // 直接整段消失会让人以为"功能没了"，而实际只是该续期了。
+        if (LibrarySyncGate.expired(session)) {
+            SectionTitle("曲库同步")
+            SectionCard {
+                Text(
+                    "已到期，续期后可继续同步",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = com.getmedia.app.ui.components.uiMuted(),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                )
+            }
+        }
+        return
+    }
     val context = LocalContext.current.applicationContext
     val prefs = remember(context) { LibrarySyncPrefs(context) }
     var enabled by remember(account) { mutableStateOf(prefs.enabled(account)) }

@@ -64,6 +64,10 @@ class AccountApi(
     /** 注销账号：返回物理删除时间（秒，冷静期结束）。 */
     suspend fun deleteAccount(password: String): Long =
         JSONObject(send("DELETE", "/account/me", JSONObject().put("password", password).toString().toRequestBody(json), auth = true)).optLong("delete_at")
+
+    /** 邀请码兑换：把免费账号升为完整版（6 个自然月，未到期则在原到期日上叠加）。 */
+    suspend fun redeemInvite(code: String): RedeemResult =
+        AccountJson.redeem(post("/account/redeem-invite", JSONObject().put("code", code.trim()), auth = true))
     suspend fun heartbeat(info: ClientInfo) { send("POST", "/v2/heartbeat", JSONObject().put("client", clientJson(info)).toString().toRequestBody(json), auth = true) }
 
     /** 联系作者。`idempotencyKey` 同一条反馈重试时保持不变，服务端据此去重。 */

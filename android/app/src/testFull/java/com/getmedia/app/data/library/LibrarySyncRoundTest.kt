@@ -30,7 +30,7 @@ class LibrarySyncRoundTest {
     }
 
     private fun session(
-        tier: String? = "owner",
+        tier: String? = "full",
         consentRequired: Boolean = false,
         name: String = "boss",
         privacy: Int? = LibrarySyncGate.MIN_PRIVACY_FOR_SYNC,
@@ -154,8 +154,11 @@ class LibrarySyncRoundTest {
     }
 
     /** 闸门函数本身：tier 大小写不敏感，空档位与 `free` 一样不许同步；隐私版本低于门槛也不许。 */
-    @Test fun gateAcceptsOwnerInAnyCase() {
-        assertTrue(LibrarySyncGate.maySync(session(tier = "OWNER")))
+    @Test fun gateAcceptsFullAndAdminInAnyCase() {
+        assertTrue(LibrarySyncGate.maySync(session(tier = "FULL")))
+        assertTrue(LibrarySyncGate.maySync(session(tier = "admin")))
+        // 0.1.37 之前写的是 owner；升级后服务端已改 full，这个值不再被认
+        assertFalse(LibrarySyncGate.maySync(session(tier = "OWNER")))
         assertFalse(LibrarySyncGate.maySync(session(tier = "free")))
         assertFalse(LibrarySyncGate.maySync(session(tier = "")))
         assertFalse(LibrarySyncGate.maySync(session(privacy = LibrarySyncGate.MIN_PRIVACY_FOR_SYNC - 1)))

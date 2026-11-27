@@ -99,7 +99,7 @@ class RestoredMatcherTest {
 
     private fun session() = com.getmedia.app.account.SessionStore.Session(
         loginName = owner, token = "t", expiresAt = Long.MAX_VALUE, deviceId = "d",
-        tier = "owner", consentedPrivacyVersion = 3,
+        tier = "full", consentedPrivacyVersion = 3,
     )
 
     @Test fun distinctCloudIdsForEquivalentPartitionAcrossPagesLeaveOriginal() = runBlocking {
