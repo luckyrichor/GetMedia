@@ -378,7 +378,7 @@ describe('首页、协议与心跳', () => {
     mount('/login?next=%2Fowner%2F');
     await type('登录名', 'alice'); await type('密码', PW);
     await click((await until(() => buttonByText('登录')))!);
-    await until(() => hasText('当前账号不是 owner'));
+    await until(() => hasText('当前账号没有完整版权限'));
     expect(location.pathname).toBe('/login');                 // 没有被送到 /owner/（那里只会回 404）
     expect(document.querySelector('a[href*="owner"]')).toBeNull();
   });

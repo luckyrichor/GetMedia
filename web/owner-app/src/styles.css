@@ -642,3 +642,69 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 /* 置顶选项单独一行：跟说明文字排在一块儿，不再挤在「格式」右边 */
 .pin-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin: 0 0 4px; }
 .pin-row .check { margin-bottom: 0; }
+
+/* ---- 等级体系与管理员后台 ---- */
+/* 通用卡片：统计条、生成面板、确认面板共用，和 .metric / .panel-card 同一套观感 */
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; margin: 12px 0;
+}
+.card > h2:first-child { margin-top: 0; }
+/* 统计条里的大数字：等宽数字，几个卡片并排时小数点不会抖 */
+.stat { font-size: 1.5rem; font-weight: 700; line-height: 1.25; font-variant-numeric: tabular-nums; }
+
+/* 宽表：账号列表 9 列、邀请码 5 列，窄屏横向滚，不把内容区撑破 */
+.table-wrap { overflow-x: auto; margin: 10px 0; }
+.table {
+  width: 100%; border-collapse: collapse;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.table th, .table td {
+  text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top;
+}
+.table th { font-size: 0.82rem; color: var(--muted); font-weight: 600; background: var(--bg); white-space: nowrap; }
+.table tr:last-child td { border-bottom: 0; }
+/* 时间列不折行；状态胶囊也不许折（「待注销 · 还剩 N 天 · 截止 …」在胶囊里换行会很难看） */
+.table td.mono { white-space: nowrap; }
+.table td .tag { white-space: nowrap; }
+
+/* 管理员标识：浅绿底 + 绿框 + 绿字（亮/暗各一套），页头与表格里都用它 */
+.tag.admin {
+  color: #1b5e20; border-color: #2e7d32; background: #e8f5e9; font-weight: 650;
+}
+@media (prefers-color-scheme: dark) {
+  .tag.admin { color: #a5d6a7; border-color: #66bb6a; background: #14301c; }
+}
+/* 等级标签：free 中性、full 强调色、admin 绿（与管理员标识同一套颜色语义） */
+.tag.tier-free { color: var(--muted); }
+.tag.tier-full { color: var(--accent); border-color: currentColor; }
+.tag.tier-admin { color: #1b5e20; border-color: #2e7d32; background: #e8f5e9; }
+@media (prefers-color-scheme: dark) {
+  .tag.tier-admin { color: #a5d6a7; border-color: #66bb6a; background: #14301c; }
+}
+
+/* 表头就是排序按钮：整格可点，字色跟表头一致，不额外加框 */
+.th-sort {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0;
+  cursor: pointer; white-space: nowrap;
+}
+.th-sort:hover { color: var(--accent); }
+.th-sort[aria-pressed="true"] { color: var(--text); font-weight: 700; }
+
+/* 邀请码明文：一码一行，等宽字体，方便肉眼核对与手动抄；长列表内部滚动 */
+.invite-codes {
+  font-family: var(--mono); font-size: 0.9rem; line-height: 1.7;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; margin: 8px 0; max-height: 18rem; overflow: auto;
+  white-space: pre; user-select: text;
+}
+/* 生成结果：明文在左、按钮竖排在右；窄屏叠成上下，按钮横排 */
+.invite-result { display: flex; gap: 12px; align-items: flex-start; }
+.invite-result .invite-codes { flex: 1 1 auto; min-width: 0; margin-top: 0; }
+.invite-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+@media (max-width: 640px) {
+  .invite-result { flex-direction: column; }
+  .invite-actions { flex-direction: row; flex-wrap: wrap; }
+}
+/* 邀请码状态：未使用灰（默认 tag）、已使用蓝、已过期红 */
+.tag.used { color: var(--accent); border-color: currentColor; }

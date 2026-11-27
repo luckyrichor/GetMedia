@@ -53,6 +53,23 @@ const PLATFORMS = [
   { value: 'douyin', label: '抖音' },
 ];
 
+/** 上传上限：nginx 给 owner 通道的 body 上限是 210 MiB，留一点余量按 200 MiB 挡。
+ *  真正的配额（全站 archive 池）在服务端，超了会回 409，错误文案原样显示。 */
+const UP_LIMIT = 200 * 1024 ** 2;
+/** 浏览器给的 MIME 有时是空的（尤其 mkv/flv），退回看扩展名。 */
+const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|flv|wmv|ts|mpg|mpeg)$/i;
+
+function mediaTypeOf(f: File): MediaType {
+  if (f.type.startsWith('video/')) return 'video';
+  if (f.type.startsWith('audio/')) return 'audio';
+  return VIDEO_EXT.test(f.name) ? 'video' : 'audio';
+}
+
+/** 条目键：`local` 条目没有平台作品号，用时间戳 + 随机串凑一个，避免和历史墓碑撞键。 */
+function localId(): string {
+  return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 /** 行里那行小字显示平台，别把 `local` 这种内部值直接摊给用户看。 */
 function platformLabel(p: string): string {
   return PLATFORMS.find((x) => x.value === p)?.label ?? p;
@@ -81,6 +98,47 @@ export function LibraryPage() {
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   /** 改名提交中：防止"回车保存"和"失焦保存"各发一次 PATCH。 */
   const committing = useRef(false);
+  /** 「上传本地文件」：隐藏的文件选择框，按钮点它。 */
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  /** 串行上传的进度（第几个/共几个/当前文件名）；null 表示没在传。 */
+  const [up, setUp] = useState<{ i: number; n: number; name: string } | null>(null);
+  const [upNote, setUpNote] = useState('');
+  const [upErr, setUpErr] = useState<string[]>([]);
+
+  /** 逐个文件串行：失败不中断，最后汇总「成功 x，失败 y」并列出原因。 */
+  async function uploadMany(list: File[]) {
+    if (!list.length) return;
+    setUpErr([]);
+    setUpNote('');
+    setBusy(true);
+    const failed: string[] = [];
+    let ok = 0;
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i]!;
+      setUp({ i: i + 1, n: list.length, name: f.name });
+      if (f.size > UP_LIMIT) {
+        failed.push(`${f.name}：${fmtBytes(f.size)}，超过 ${fmtBytes(UP_LIMIT)} 上限`);
+        continue;
+      }
+      try {
+        const r = await ownerApi.createTrack({
+          media_type: mediaTypeOf(f),
+          platform: 'local',
+          video_id: localId(),
+          title: f.name.replace(/\.[^.]+$/, '').slice(0, 200) || f.name,
+        });
+        await ownerApi.uploadTrackFile(r.track.id, f);
+        ok++;
+      } catch (e) {
+        failed.push(`${f.name}：${messageFor(e)}`);
+      }
+    }
+    setUp(null);
+    setBusy(false);
+    setUpErr(failed);
+    setUpNote(`上传完成：成功 ${ok} 个，失败 ${failed.length} 个。`);
+    if (ok > 0) await load();
+  }
 
   async function load() {
     setPhase('loading');
@@ -259,13 +317,52 @@ export function LibraryPage() {
     <>
       <h1>媒体库</h1>
 
+      {/* 上传本地文件：建一条 platform=local 的条目再传原件，和手机端"本机导入"是同一条路径 */}
+      <div class="toolbar">
+        <button type="button" class="btn" disabled={busy || up !== null} onClick={() => fileRef.current?.click()}>
+          上传本地文件
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="audio/*,video/*"
+          multiple
+          hidden
+          aria-label="选择要上传的音频或视频"
+          onChange={(e) => {
+            const el = e.currentTarget;
+            const pickedFiles = Array.from(el.files ?? []);
+            el.value = ''; // 清空，同一个文件再选一次也能触发 change
+            void uploadMany(pickedFiles);
+          }}
+        />
+        <span class="small muted">
+          可多选；单个不超过 {fmtBytes(UP_LIMIT)}。原件存进服务器「存储」，计入账号配额。
+        </span>
+      </div>
+
+      {up && (
+        <div class="alert info small">
+          正在上传 第 {up.i}/{up.n} 个：<span class="mono">{up.name}</span>
+        </div>
+      )}
+      {upNote && <div class="alert info small">{upNote}</div>}
+      {upErr.length > 0 && (
+        <div class="alert warn small">
+          <strong>有 {upErr.length} 个没上传成功：</strong>
+          <ul class="plain">
+            {upErr.map((t) => <li>{t}</li>)}
+          </ul>
+        </div>
+      )}
+
       {phase === 'loading' && <Loading what="媒体库" />}
       {phase === 'error' && <ErrorBox message={err} retry={() => void load()} />}
 
       {phase === 'ok' && items.length === 0 && (
         <Empty>
           <strong>媒体库里还没有内容</strong>
-          <p class="small muted">在「服务器提取」里提交一个链接，入库后就会出现在这里。</p>
+          <p class="small muted">上传本地文件，或在「服务器提取」里提交一个链接，入库后就会出现在这里。</p>
         </Empty>
       )}
 

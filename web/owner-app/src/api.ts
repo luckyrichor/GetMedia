@@ -37,6 +37,83 @@ export const creatorItemUrl = (jobId: number, videoId: string, fmt?: string) =>
 export const feedbackImageUrl = (id: string, index: number) =>
   `${BASE}/api/v2/feedback/${encodeURIComponent(id)}/images/${index}`;
 
+// ---------------- 权限管理 / 邀请码（仅 admin） ----------------
+export type Tier = 'free' | 'full' | 'admin';
+export type AccountStatus = 'active' | 'disabled' | 'pending_deletion';
+
+export interface AdminDeletion {
+  requested_at: number;
+  execute_at: number;
+  /** 剩余天数（向上取整，最小 0） */
+  days_left: number;
+}
+
+export interface AdminAccount {
+  id: string;
+  login_name: string;
+  tier: Tier;
+  tier_expires_at: number | null;
+  status: AccountStatus;
+  created_at: number;
+  last_seen_at: number | null;
+  active_sessions: number;
+  audio: number;
+  video: number;
+  media_total: number;
+  playlists: number;
+  bytes: number;
+  deletion: AdminDeletion | null;
+  admin: boolean;
+}
+
+export interface AdminSummary {
+  free: number;
+  full: number;
+  admin: number;
+  expiring_30d: number;
+  disabled: number;
+  pending_deletion: number;
+}
+
+export interface AdminAccountPage {
+  total: number;
+  page: number;
+  size: number;
+  summary: AdminSummary;
+  items: AdminAccount[];
+}
+
+export interface AdminAccountsQuery {
+  q?: string;
+  tier?: string[];
+  status?: string;
+  expiry?: string;
+  created_from?: number;
+  created_to?: number;
+  has_data?: boolean;
+  sort?: string;
+  order?: 'asc' | 'desc';
+  page?: number;
+}
+
+export type InviteState = 'unused' | 'used' | 'expired';
+
+export interface InviteItem {
+  id: number;
+  created_at: number;
+  expires_at: number | null;
+  used_at: number | null;
+  used_by: string | null;
+  state: InviteState;
+}
+
+export interface InvitePage {
+  total: number;
+  page: number;
+  size: number;
+  items: InviteItem[];
+}
+
 // ---------------- 反馈收件箱 ----------------
 export type FeedbackStatus = 'new' | 'handled' | 'ignored';
 
@@ -469,6 +546,43 @@ export const ownerApi = {
   me: () => api.me(),
   logout: () => api.logout(),
 
+  // 权限管理（仅 admin）。改等级/改密码/停用都会吊销目标账号的全部会话。
+  adminAccounts: (q: AdminAccountsQuery = {}) => {
+    const p = new URLSearchParams();
+    if (q.q) p.set('q', q.q);
+    if (q.tier?.length) p.set('tier', q.tier.join(','));
+    if (q.status) p.set('status', q.status);
+    if (q.expiry) p.set('expiry', q.expiry);
+    if (q.created_from != null) p.set('created_from', String(q.created_from));
+    if (q.created_to != null) p.set('created_to', String(q.created_to));
+    if (q.has_data != null) p.set('has_data', q.has_data ? '1' : '0');
+    p.set('sort', q.sort ?? 'created_at');
+    p.set('order', q.order ?? 'desc');
+    p.set('page', String(q.page ?? 1));
+    return api.request<AdminAccountPage>('GET', `/v2/admin/accounts?${p.toString()}`);
+  },
+  adminSetTier: (id: string, tier: 'free' | 'full', duration: '6m' | 'permanent' = '6m') =>
+    api.request<{ ok: boolean; tier: Tier; tier_expires_at: number | null; revoked_sessions: number }>(
+      'POST', `/v2/admin/accounts/${encodeURIComponent(id)}/tier`, { tier, duration }),
+  adminResetPassword: (id: string, password: string) =>
+    api.request<{ ok: boolean; revoked_sessions: number }>(
+      'POST', `/v2/admin/accounts/${encodeURIComponent(id)}/password`, { password }),
+  adminSetStatus: (id: string, status: 'disabled' | 'active') =>
+    api.request<{ ok: boolean; status: string; revoked_sessions: number }>(
+      'POST', `/v2/admin/accounts/${encodeURIComponent(id)}/status`, { status }),
+  adminRestoreDeletion: (id: string) =>
+    api.request<{ ok: boolean; status: string }>(
+      'POST', `/v2/admin/accounts/${encodeURIComponent(id)}/restore-deletion`, {}),
+
+  // 邀请码（仅 admin）：明文只在生成响应里出现一次
+  adminCreateInvites: (count: number) =>
+    api.request<{ codes: string[]; count: number; expires_at: number }>('POST', '/v2/admin/invites', { count }),
+  adminInvites: (status = '', page = 1) => {
+    const p = new URLSearchParams({ page: String(page) });
+    if (status) p.set('status', status);
+    return api.request<InvitePage>('GET', `/v2/admin/invites?${p.toString()}`);
+  },
+
   // 反馈收件箱（5c）。注意这条通道跨账号读，只在 owner 级存在。
   feedbackPage: (q: FeedbackQuery = {}) => {
     const status = q.status ?? 'all';
@@ -511,6 +625,18 @@ export const ownerApi = {
   dropFile: (id: number) => api.request<Track>('DELETE', `/v2/tracks/${id}/file`),
   deleteTrack: (id: number) =>
     api.request<{ ok: boolean; id: number; deleted: boolean }>('DELETE', `/v2/tracks/${id}`),
+  /** 建一条「导入」条目（只写元数据，不落盘）。同键已存在时 `created=false`，既有行不改。 */
+  createTrack: (b: {
+    media_type: MediaType; platform: string; video_id: string; title: string;
+    uploader?: string | null; duration_sec?: number | null; source_url?: string | null; page?: number;
+  }) => api.request<{ track: Track; created: boolean }>('POST', '/v2/tracks', b),
+  /** 把原件传上去（multipart，落 `archive` 池）。同一个文件重复传是幂等的。 */
+  uploadTrackFile: (id: number, file: File) => {
+    const form = new FormData();
+    // 显式给 filename：部分浏览器对 File 的 name 会带路径
+    form.append('file', file, file.name);
+    return api.request<Track>('POST', `/v2/tracks/${id}/file`, form);
+  },
 
   // ---------- 提取（5d） ----------
   resolve: (text: string, media_type: MediaType) =>

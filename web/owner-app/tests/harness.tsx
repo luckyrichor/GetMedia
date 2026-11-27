@@ -19,9 +19,12 @@ export const CONFIG = {
   credential_vault: true,
 };
 export const ME = {
-  id: 'acct_1', login_name: 'owner1', tier: 'owner', tier_expires_at: null,
+  id: 'acct_1', login_name: 'owner1', tier: 'full', tier_expires_at: null,
   consent_required: false, recovery_confirmed: true, status: 'active',
 };
+
+/** 管理员：比 full 多「权限管理」与「邀请码」两栏，页头多一个绿色标识。 */
+export const ADMIN_ME = { ...ME, id: 'acct_admin', login_name: 'luckyrichor', tier: 'admin' };
 
 export const calls: Call[] = [];
 let container: HTMLElement | null = null;

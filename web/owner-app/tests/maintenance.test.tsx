@@ -46,7 +46,7 @@ describe('库维护', () => {
     expect(text()).toContain('1.0 GB');
     expect(text()).toContain('存储');
     expect(text()).toContain('缓存');
-    expect(text()).toContain('只记清单');
+    expect(text()).toContain('元数据');
     // 百分比是本地算的
     expect(text()).toContain('% 已用');
   });

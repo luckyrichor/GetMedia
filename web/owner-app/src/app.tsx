@@ -11,9 +11,10 @@ import type { ComponentChildren } from 'preact';
 import type { JSX } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { isApiError, messageFor } from '@shared/errors';
+import { isAdmin } from '@shared/api';
 import { LOGIN_URL, PUBLIC_BASE, ownerApi, type Me, type OwnerConfig } from './api';
 import { Link, navigate, useRoute } from './router';
-import { Overview, Placeholder, SECTIONS, sectionFor } from './sections';
+import { Overview, Placeholder, sectionFor, visibleSections } from './sections';
 import { FeedbackPage } from './pages/feedback';
 import { LibraryPage } from './pages/library';
 import { ExtractPage } from './pages/extract';
@@ -23,9 +24,14 @@ import { AgentPage } from './pages/agent';
 import { PlatformsPage } from './pages/platforms';
 import { MaintenancePage } from './pages/maintenance';
 import { AiPage } from './pages/ai';
+import { AccountsPage } from './pages/accounts';
+import { InvitesPage } from './pages/invites';
 
-/** 栏目路径 → 真实页面。九栏在 5f 之后都已接完；漏注册的栏目会落到 `Placeholder`（列出接口与"还差什么"）。 */
+/** 栏目路径 → 真实页面。十一个栏目都已接完；漏注册的栏目会落到 `Placeholder`（列出接口与"还差什么"）。
+ *  `/accounts` 与 `/invites` 只有 admin 能看到导航，但页面本身在非 admin 直接输 URL 时也会自己拦一道。 */
 const PAGES: Record<string, () => JSX.Element> = {
+  '/accounts': AccountsPage,
+  '/invites': InvitesPage,
   '/feedback': FeedbackPage,
   '/library': LibraryPage,
   '/extract': ExtractPage,
@@ -88,7 +94,7 @@ function LoginNeeded() {
   return (
     <Center>
       <h1>需要先登录</h1>
-      <p class="lead">管理台只对 owner 账号开放。请先登录，登录后会按账号权限决定能不能进来。</p>
+      <p class="lead">管理台只对完整版与管理员账号开放。请先登录，登录后会按账号权限决定能不能进来。</p>
       <p>
         <a class="btn" href={LOGIN_URL}>去登录</a>
       </p>
@@ -118,8 +124,8 @@ function Hidden() {
 function Forbidden() {
   return (
     <Center>
-      <h1>当前账号不是 owner</h1>
-      <p class="lead">这个账号可以正常使用手机应用与公开网页，但管理台只对 owner 开放。</p>
+      <h1>当前账号没有完整版权限</h1>
+      <p class="lead">这个账号可以正常使用手机应用与公开网页，但管理台只对完整版与管理员开放。</p>
       <p class="small muted">
         如果你认为这是误判：确认登录的是正确的账号（右上角没有切换账号的入口，需要先在公开站退出再登录）。
       </p>
@@ -165,6 +171,8 @@ function Header({ me }: { me: Me }) {
         GetMedia <span class="tag owner">管理台</span>
       </div>
       <div class="who">
+        {/* 只有管理员加绿色标识；免费版/完整版不加任何标签，免得把"有效期"之类的事混进页头 */}
+        {isAdmin(me.tier) ? <span class="tag admin">管理员</span> : null}
         <span class="muted small">{me.login_name}</span>
         <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => void logout()}>
           退出
@@ -174,8 +182,8 @@ function Header({ me }: { me: Me }) {
   );
 }
 
-function Nav({ path }: { path: string }) {
-  const items = [{ path: '/', label: '概览' }, ...SECTIONS.map((s) => ({ path: s.path, label: s.label }))];
+function Nav({ path, tier }: { path: string; tier: string }) {
+  const items = [{ path: '/', label: '概览' }, ...visibleSections(tier).map((s) => ({ path: s.path, label: s.label }))];
   return (
     <nav class="side" aria-label="管理台导航">
       {items.map((it) => (
@@ -192,12 +200,12 @@ function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
   const section = sectionFor(path);
   const Page = PAGES[path];
   const body =
-    path === '/' ? <Overview cfg={cfg} /> : Page ? <Page /> : section ? <Placeholder section={section} /> : <Missing />;
+    path === '/' ? <Overview cfg={cfg} tier={me.tier} /> : Page ? <Page /> : section ? <Placeholder section={section} /> : <Missing />;
   return (
     <>
       <Header me={me} />
       <div class="layout">
-        <Nav path={path} />
+        <Nav path={path} tier={me.tier} />
         <main class="content">{body}</main>
       </div>
     </>

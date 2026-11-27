@@ -1,19 +1,25 @@
-/** owner 管理台的栏目表与占位页。
+/* owner 管理台的栏目表与占位页。
  *
  * 5f 之后九栏都有真实页面（`done: true`）。`Placeholder` 留作兜底：以后新增栏目却忘了在
  * `app.tsx` 的 `PAGES` 里注册页面时，会落到占位页并把**后端接口**与**还差什么**写清楚，
  * 而不是渲染一片空白。`endpoints` / `missing` 也只被占位页消费，真实页面上不显示。
+ *
+ * 后两栏（权限管理、邀请码）带 `adminOnly`：`full` 账号能进管理台，但看不到、也进不去这两页；
+ * 服务端同样按 `require_tier("admin")` 拒掉，界面只是不给人点。
  */
+import { isAdmin } from '@shared/api';
 import type { OwnerConfig } from './api';
 import { Link } from './router';
 
 export interface Section {
   path: string;
   label: string;
-  /** 交付阶段：5c 反馈与媒体库 / 5d 提取、批量、定时、Agent / 5e 授权与维护 / 5f AI */
-  phase: '5c' | '5d' | '5e' | '5f';
+  /** 交付阶段：5c 反馈与媒体库 / 5d 提取、批量、定时、Agent / 5e 授权与维护 / 5f AI / 5g 等级与后台 */
+  phase: '5c' | '5d' | '5e' | '5f' | '5g';
   /** 这一栏已经有真实页面（否则渲染占位页） */
   done?: boolean;
+  /** 仅管理员可见（`full` 账号看不到这一栏，也不能直接进） */
+  adminOnly?: boolean;
   blurb: string;
   /** 已有的后端接口；标 `待建` 的是这一阶段要新增的 */
   endpoints: { method: string; path: string; note: string }[];
@@ -22,6 +28,35 @@ export interface Section {
 }
 
 export const SECTIONS: Section[] = [
+  {
+    path: '/accounts',
+    label: '权限管理',
+    phase: '5g',
+    done: true,
+    adminOnly: true,
+    blurb: '查所有账号：改等级、重置密码、停用与恢复、撤销冷静期内的注销。',
+    endpoints: [
+      { method: 'GET', path: '/v2/admin/accounts', note: '筛选/排序/分页 + 统计条（等级、到期、状态、数据量）' },
+      { method: 'POST', path: '/v2/admin/accounts/{id}/tier', note: 'free ↔ full，可给 6 个月或永久；admin 不可改' },
+      { method: 'POST', path: '/v2/admin/accounts/{id}/password', note: '重置任意账号密码，响应不回显密码' },
+      { method: 'POST', path: '/v2/admin/accounts/{id}/status', note: 'disabled / active（停用与恢复）' },
+      { method: 'POST', path: '/v2/admin/accounts/{id}/restore-deletion', note: '撤销注销申请，数据保留' },
+    ],
+    missing: '不能删除账号、不能改登录名、看不到别人的媒体内容；admin 账号没有「改等级」与「停用」（服务端也拒）。改等级/重置密码/停用都会吊销对方全部会话。',
+  },
+  {
+    path: '/invites',
+    label: '邀请码',
+    phase: '5g',
+    done: true,
+    adminOnly: true,
+    blurb: '批量生成升级券：把免费账号升成完整版 6 个月，一次 1–50 个。',
+    endpoints: [
+      { method: 'POST', path: '/v2/admin/invites', note: '批量生成（count 1–50），明文只在这一次响应里' },
+      { method: 'GET', path: '/v2/admin/invites', note: '列表：状态/创建/到期/使用人，不含明文' },
+    ],
+    missing: '明文只出现一次，关掉面板就查不回来；不能手工作废未使用的码；码固定 1 天有效、一码一人；已使用的码 1 天后与过期未用的码一起被物理删除，所以没有长期追溯。',
+  },
   {
     path: '/feedback',
     label: '反馈收件箱',
@@ -46,7 +81,7 @@ export const SECTIONS: Section[] = [
       { method: 'GET', path: '/v2/tracks', note: '游标翻页（since_seq），按当前账号' },
       { method: 'GET', path: '/v2/media/{id}', note: '媒体流，支持 Range（拖动进度条）' },
       { method: 'PATCH', path: '/v2/tracks/{id}', note: '改标题/UP 主/置顶' },
-      { method: 'DELETE', path: '/v2/tracks/{id}/file', note: '只删文件，记录退回"只记清单"' },
+      { method: 'DELETE', path: '/v2/tracks/{id}/file', note: '只删文件，记录退回"元数据"' },
       { method: 'DELETE', path: '/v2/tracks/{id}', note: '逻辑删除，会同步到手机端' },
     ],
     missing: '不能上传或替换文件、不能新建播放列表；条目没有"分类"字段（旧版的分类没有迁过来）。',
@@ -130,7 +165,7 @@ export const SECTIONS: Section[] = [
     blurb: '看存储水位、清理缓存与孤儿文件、看提取失败上报。',
     endpoints: [
       { method: 'GET', path: '/v2/maintenance/storage', note: '按存放方式的条目与字节、配额与已用' },
-      { method: 'POST', path: '/v2/maintenance/prune-cache', note: '删过期缓存，顺手退回"只记清单"' },
+      { method: 'POST', path: '/v2/maintenance/prune-cache', note: '删过期缓存，顺手退回"元数据"' },
       { method: 'POST', path: '/v2/maintenance/orphans', note: '删没有记录指向的文件' },
       { method: 'GET', path: '/v2/diagnostics/extractions', note: '最近 50 条失败上报' },
     ],
@@ -161,11 +196,17 @@ export function sectionFor(path: string): Section | null {
   return SECTIONS.find((s) => s.path === path) ?? null;
 }
 
+/** 当前账号能看到的栏目：`adminOnly` 的只给管理员，其余所有能进管理台的等级都能看。 */
+export function visibleSections(tier: string | null | undefined): Section[] {
+  const admin = isAdmin(tier);
+  return SECTIONS.filter((s) => !s.adminOnly || admin);
+}
+
 const GB = 1024 ** 3;
 const fmtGB = (b: number) => `${(b / GB).toFixed(b % GB === 0 ? 0 : 1)} GB`;
 const fmtTTL = (s: number) => (s % 86400 === 0 ? `${s / 86400} 天` : `${Math.round(s / 3600)} 小时`);
 
-export function Overview({ cfg }: { cfg: OwnerConfig }) {
+export function Overview({ cfg, tier }: { cfg: OwnerConfig; tier: string }) {
   return (
     <>
       <h1>概览</h1>
@@ -202,7 +243,7 @@ export function Overview({ cfg }: { cfg: OwnerConfig }) {
 
       <h2>栏目</h2>
       <ul class="plain sections">
-        {SECTIONS.map((s) => (
+        {visibleSections(tier).map((s) => (
           <li>
             <Link class="sections-label" to={s.path}>{s.label}</Link>
             <span class="muted small">　{s.blurb}</span>

@@ -92,6 +92,19 @@ input[type="text"], input[type="password"], input[type="email"], input[type="sea
 textarea { resize: vertical; }
 input[aria-invalid="true"] { border-color: var(--danger); }
 .pw-row { display: flex; gap: 8px; align-items: center; }
+/* 输入框吃掉剩余宽度，眼睛按钮保持 44×44 不被压缩。
+   不写这两行的话，flex 会把按钮压到「一个字宽」，「显示」就会断成上下两行。 */
+.pw-row input { flex: 1 1 auto; min-width: 0; }
+.pw-eye {
+  flex: none;
+  width: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  text-decoration: none;
+}
 .field-error { color: var(--danger); font-size: 0.875rem; margin: 4px 0 0; }
 .check { display: flex; gap: 10px; align-items: flex-start; margin: 14px 0; }
 .check input { width: 22px; height: 22px; margin-top: 3px; flex: none; }

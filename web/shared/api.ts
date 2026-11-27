@@ -42,6 +42,21 @@ export interface Me {
   legal_versions?: { user_agreement: number; privacy_policy: number };
 }
 
+/** 等级取值：free 免费版 / full 完整版（可有时效）/ admin 管理员（唯一、永久）。 */
+export const TIER_FREE = 'free';
+export const TIER_FULL = 'full';
+export const TIER_ADMIN = 'admin';
+
+/** 能不能进管理台。`full` 与 `admin` 都可以；admin 在管理台里再多一个「权限管理」。 */
+export function canUseConsole(tier: string | null | undefined): boolean {
+  return tier === TIER_FULL || tier === TIER_ADMIN;
+}
+
+/** 管理台里的管理员专属页（权限管理、邀请码）只对 admin 显示。 */
+export function isAdmin(tier: string | null | undefined): boolean {
+  return tier === TIER_ADMIN;
+}
+
 export interface Device {
   id: string;
   channel: 'android' | 'web';
@@ -159,6 +174,9 @@ export function createApi(opts: ApiOptions = {}) {
     recover: (login_name: string, recovery_code: string, new_password: string) =>
       request<{ recovery_code: string }>('POST', '/account/recover', { login_name, recovery_code, new_password }),
     deleteAccount: (password: string) => request<{ delete_at: number }>('DELETE', '/account/me', { password }),
+    /** 邀请码兑换：把免费账号升级为完整版（6 个自然月，未到期则在原到期日上叠加）。 */
+    redeemInvite: (code: string) =>
+      request<{ tier: string; tier_expires_at: number | null }>('POST', '/account/redeem-invite', { code }),
 
     heartbeat: (client: ClientInfo) => request<void>('POST', '/v2/heartbeat', { client }),
     feedback: (form: FormData) => request<{ id: string }>('POST', '/v2/feedback', form),

@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks';
-import { api, type Device } from '@shared/api';
+import { api, canUseConsole, isAdmin, type Device } from '@shared/api';
+import { messageFor } from '@shared/errors';
 import { formatDateTime } from '@shared/format';
 import { normalizeLoginName, passwordProblem } from '@shared/validate';
 import { useAsync } from '../hooks';
@@ -15,16 +16,25 @@ export function Account() {
     <Page title="账号与安全">
       <div class="card">
         <p><strong>登录名</strong>：<span data-testid="login-name">{me.login_name}</span></p>
+        <p><strong>账号类型</strong>：<span data-testid="tier">{tierLabel(me.tier)}</span>
+          {me.tier !== 'free' && me.tier_expires_at
+            ? <span class="muted">（有效期至 {formatDateTime(me.tier_expires_at)}）</span>
+            : null}
+        </p>
         <p class="muted">需要联系作者时，请使用「<Link to="/contact">联系作者</Link>」。</p>
       </div>
-      {me.tier === 'owner' ? (
+      {canUseConsole(me.tier) ? (
         <div class="card">
           <h2>管理台</h2>
-          <p class="muted">这个账号有 owner 权限。管理台是单独的页面，进去要重新加载一次。</p>
+          <p class="muted">
+            {isAdmin(me.tier) ? '这个账号是管理员。' : '这个账号有完整版权限。'}
+            管理台是单独的页面，进去要重新加载一次。
+          </p>
           {/* 管理台是独立构建，必须整页跳转；用 <a> 而不是 SPA 的 <Link> */}
           <a href={href('/owner/')}>进入管理台</a>
         </div>
       ) : null}
+      {me.tier === 'free' || me.tier === 'full' ? <RedeemInvite onDone={() => void s.refresh()} /> : null}
       <Devices />
       <ChangePassword />
       <div class="card">
@@ -195,5 +205,56 @@ function DeleteAccount() {
         <Button type="submit" variant="danger" busy={busy}>注销账号</Button>
       </form>
     </details>
+  );
+}
+
+function tierLabel(tier: string): string {
+  if (tier === 'admin') return '管理员';
+  if (tier === 'full') return '完整版';
+  return '免费版';
+}
+
+/** 邀请码兑换：免费账号升级为完整版 6 个月；已有完整版则在原到期日上顺延 6 个月。 */
+function RedeemInvite({ onDone }: { onDone: () => void }) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  async function submit(e: Event) {
+    e.preventDefault();
+    if (!code.trim()) return setMsg({ kind: 'err', text: '请输入邀请码' });
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api.redeemInvite(code.trim());
+      setMsg({
+        kind: 'ok',
+        text: r.tier_expires_at
+          ? `已升级为完整版，有效期至 ${formatDateTime(r.tier_expires_at)}。手机端请安装完整版应用。`
+          : '已升级为完整版。手机端请安装完整版应用。',
+      });
+      setCode('');
+      onDone();
+    } catch (ex) {
+      setMsg({ kind: 'err', text: messageFor(ex) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div class="card">
+      <h2>邀请码</h2>
+      <p class="muted">
+        输入邀请码可把免费账号升级为完整版（6 个月）；已经是完整版的，兑换后会在原到期日上顺延 6 个月。
+        功能需要安装完整版应用，免费版应用里没有这些界面。
+      </p>
+      <form onSubmit={submit} noValidate>
+        <Field label="邀请码" value={code} onInput={setCode} autoComplete="off" maxLength={64}
+               hint="一次性使用，请连同连字符一起粘贴" />
+        {msg ? <Alert kind={msg.kind === 'ok' ? 'ok' : 'error'}>{msg.text}</Alert> : null}
+        <Button type="submit" busy={busy}>兑换</Button>
+      </form>
+    </div>
   );
 }

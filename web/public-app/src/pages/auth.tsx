@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { api, type Device } from '@shared/api';
+import { api, canUseConsole, type Device } from '@shared/api';
 import { clientInfo } from '@shared/clientinfo';
 import { ApiError, isApiError, messageFor } from '@shared/errors';
 import { formatDateTime } from '@shared/format';
@@ -131,7 +131,7 @@ export function Login() {
   const s = useSession();
   const route = new URLSearchParams(location.search);
   const next = safeNext(route.get('next'));
-  /** 从管理台被挡下来（next=/owner/）时，只有 owner 才该进去；不是 owner 就停在这里说明。 */
+  /** 从管理台被挡下来（next=/owner/）时，只有完整版/管理员才该进去；否则停在这里说明。 */
   const wantOwner = isOwnerPath(next);
   const authed = s.state.status === 'authed' ? s.state.me : null;
   const [name, setName] = useState('');
@@ -147,7 +147,7 @@ export function Login() {
   useEffect(() => {
     if (!authed) return;
     if (!wantOwner) return navigate(next ?? '/account', true);
-    if (authed.tier === 'owner') goOwner();
+    if (canUseConsole(authed.tier)) goOwner();
   }, [authed, wantOwner, next]);
 
   async function submit(e: Event) {
@@ -161,7 +161,7 @@ export function Login() {
       const me = await s.refresh();
       if (wantOwner) {
         // 登录成功但账号不是 owner：不跳 /owner/（那里只会回 404），就地说清楚
-        if (me?.tier === 'owner') goOwner();
+        if (canUseConsole(me?.tier)) goOwner();
         return;
       }
       navigate(next ?? '/account', true);
@@ -178,12 +178,12 @@ export function Login() {
     }
   }
 
-  if (authed && wantOwner && authed.tier !== 'owner') {
+  if (authed && wantOwner && !canUseConsole(authed.tier)) {
     return (
       <Page title="登录">
-        <Alert kind="warn">当前账号不是 owner，管理台不对外开放。手机应用和这个网页不受影响。</Alert>
+        <Alert kind="warn">当前账号没有完整版权限，管理台不对外开放。手机应用和这个网页不受影响。</Alert>
         <p class="muted small">
-          如果登录错了账号，先到<Link to="/account">账户页</Link>退出，再用 owner 账号登录。
+          如果登录错了账号，先到<Link to="/account">账户页</Link>退出，再用完整版或管理员账号登录。
         </p>
         <p>
           <Link to="/account">查看当前账号</Link>

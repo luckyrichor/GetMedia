@@ -51,6 +51,28 @@ interface FieldProps {
   name?: string;
 }
 
+/** 眼睛图标：睁眼表示"点一下显示"，闭眼表示"点一下遮住"。纯图标，无文字。 */
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function EyeOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z" />
+      <circle cx="12" cy="12" r="3" />
+      <path d="M3 3l18 18" />
+    </svg>
+  );
+}
+
 export function Field({ label, value, onInput, type = 'text', hint, error, autoComplete, maxLength, required, name }: FieldProps) {
   const id = useId();
   const [shown, setShown] = useState(false);
@@ -75,8 +97,15 @@ export function Field({ label, value, onInput, type = 'text', hint, error, autoC
       <div class={isPw ? 'pw-row' : undefined}>
         {isPw && !shown ? <input {...common} type="password" /> : <input {...common} type="text" />}
         {isPw ? (
-          <button type="button" class="btn btn-link" onClick={() => setShown((v) => !v)} aria-pressed={shown}>
-            {shown ? '隐藏' : '显示'}
+          <button
+            type="button"
+            class="btn btn-link pw-eye"
+            onClick={() => setShown((v) => !v)}
+            aria-pressed={shown}
+            aria-label={shown ? '隐藏密码' : '显示密码'}
+            title={shown ? '隐藏密码' : '显示密码'}
+          >
+            {shown ? <EyeOffIcon /> : <EyeIcon />}
           </button>
         ) : null}
       </div>

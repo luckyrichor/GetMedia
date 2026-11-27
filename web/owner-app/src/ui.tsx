@@ -5,6 +5,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
+import { Link } from './router';
 
 export type Loaded<T> = { k: 'loading' } | { k: 'error'; message: string } | { k: 'ok'; data: T };
 
@@ -47,6 +48,20 @@ export function ErrorBox({ message, retry }: { message: string; retry: () => voi
 
 export function Empty({ children }: { children: ComponentChildren }) {
   return <div class="empty">{children}</div>;
+}
+
+/** 管理员专属页被非 admin 直接输 URL 打开时的占位。
+ *  导航里本来就不显示，所以走到这里基本是手输地址或旧书签；服务端那边也会回 403。 */
+export function NoAccess({ what }: { what: string }) {
+  return (
+    <>
+      <h1>无权访问</h1>
+      <div class="alert warn">
+        <strong>{what}</strong>只有管理员能打开。当前账号权限不足，服务端接口同样会拒绝。
+      </div>
+      <p><Link to="/">回到概览</Link></p>
+    </>
+  );
 }
 
 export interface ChipItem { key: string; label: string; n?: number }

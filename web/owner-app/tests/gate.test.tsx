@@ -1,7 +1,7 @@
 /** owner 认证壳的三态与失败分支。只测"门"，功能页在 feedback/library 两个用例里。 */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { callKeys, cleanup, click, CONFIG, ME, mount, server, text, until } from './harness';
-import { SECTIONS } from '../src/sections';
+import { callKeys, cleanup, click, CONFIG, ADMIN_ME, ME, mount, server, text, until } from './harness';
+import { SECTIONS, visibleSections } from '../src/sections';
 
 beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
@@ -26,6 +26,10 @@ describe('owner 认证壳', () => {
     for (const label of ['反馈收件箱', '媒体库', '服务器提取', '批量提取', '定时任务', 'Agent', '平台授权', '库维护', 'AI 视频']) {
       expect(text()).toContain(label);
     }
+    // 完整版看不到管理员专属的两栏，页头也不加绿色标识
+    expect(text()).not.toContain('权限管理');
+    expect(text()).not.toContain('邀请码');
+    expect(document.querySelector('.tag.admin')).toBeNull();
   });
 
   test('未登录（401，未经边缘时）：给登录入口，不自动跳转，不显示任何 owner 内容', async () => {
@@ -53,9 +57,9 @@ describe('owner 认证壳', () => {
   });
 
   test('非 owner（403）：说明原因，不把人绕回登录页', async () => {
-    server({ 'GET /v2/config/owner': { status: 403, json: { detail: '当前账号不是 owner', code: 'forbidden_tier' } } });
+    server({ 'GET /v2/config/owner': { status: 403, json: { detail: '需要完整版权限', code: 'forbidden_tier' } } });
     mount();
-    await until(() => text().includes('当前账号不是 owner'));
+    await until(() => text().includes('当前账号没有完整版权限'));
     expect(Array.from(document.querySelectorAll('a.btn')).some((a) => a.getAttribute('href')?.includes('login'))).toBe(false);
     expect(text()).toContain('查看当前账号');
   });
@@ -99,8 +103,9 @@ describe('owner 认证壳', () => {
       'GET /v2/recreations/capabilities': { json: { available: false, reason: '未配置模型', max_upload_bytes: 209715200, modes: [], retention_days: 14, storage: { quota: 1, used: 0, ai_bytes: 0, ai_files: 0 } } },
       'GET /v2/recreations': { json: { recreations: [] } },
     });
-    // 每个栏目都注册了真实页面，所以"还没实现"这句话不该再出现在任何一栏
-    expect(SECTIONS.length).toBe(9);
+    // 完整版能看到的九栏，每个栏目都注册了真实页面，所以"还没实现"这句话不该再出现在任何一栏
+    const sections = visibleSections(ME.tier);
+    expect(sections.length).toBe(9);
     const markers: Record<string, string> = {
       '/feedback': '这个筛选下没有反馈',
       '/library': '媒体库里还没有内容',
@@ -112,7 +117,7 @@ describe('owner 认证壳', () => {
       '/maintenance': '提取失败上报',
       '/ai': '还没有重建项目',
     };
-    for (const s of SECTIONS) {
+    for (const s of sections) {
       cleanup();
       mount(s.path);
       const marker = markers[s.path];
@@ -121,5 +126,16 @@ describe('owner 认证壳', () => {
       expect(text()).not.toContain('这一栏还没实现');
       expect(s.done).toBe(true);
     }
+  });
+
+  test('管理员：多出「权限管理」「邀请码」两栏，页头带绿色标识', async () => {
+    server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ADMIN_ME } });
+    mount();
+    await until(() => text().includes('概览'));
+    // 十一个栏目：九栏 + 两个管理员专属页，且「权限管理」排在「概览」之后
+    expect(SECTIONS.length).toBe(11);
+    const nav = Array.from(document.querySelectorAll('nav.side a')).map((a) => a.textContent);
+    expect(nav.slice(0, 3)).toEqual(['概览', '权限管理', '邀请码']);
+    expect(document.querySelector('.top .tag.admin')?.textContent).toBe('管理员');
   });
 });
