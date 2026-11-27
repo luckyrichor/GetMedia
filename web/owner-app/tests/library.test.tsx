@@ -347,6 +347,34 @@ describe('媒体库与播放', () => {
     expect(callKeys()).not.toContain('DELETE /v2/tracks/1/file');
   });
 
+  test('切到上面那一条：新播放器照样自动播，旧的那条停掉', async () => {
+    const played: string[] = [];
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
+      played.push(this.getAttribute('src') || '');
+      return Promise.resolve();
+    });
+    server(ownerRoutes({
+      [LIST]: { json: { items: [track(1), track(2)], count: 2 } },
+    }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+    // 默认按入库时间倒序：第一行是曲目 2
+    expect(titles()).toEqual(['曲目 2', '曲目 1']);
+
+    const playBtn = (row: number) => Array.from(
+      document.querySelectorAll('.track-actions')[row]!.querySelectorAll('button'),
+    ).find((b) => /播放|暂停/.test(b.textContent || ''))!;
+
+    // 先放下面那条，再点上一条：旧播放器卸载时不能把新播放器的引用抹掉
+    await click(playBtn(1));
+    await until(() => played.length === 1);
+    await click(playBtn(0));
+    await until(() => played.length === 2);
+    expect(played).toEqual(['/api/v2/media/1', '/api/v2/media/2']);
+    // 同一时刻只有一个播放器
+    expect(document.querySelectorAll('audio')).toHaveLength(1);
+  });
+
   test('筛选器分两行排、底部说明已去掉', async () => {
     server(ownerRoutes({ [LIST]: { json: { items: [track(1)], count: 1 } } }));
     mount('/library');

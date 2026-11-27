@@ -569,14 +569,21 @@ function Player({ track, mediaRef, onState }: {
   mediaRef: { current: HTMLMediaElement | null };
   onState: (playing: boolean) => void;
 }) {
+  /** 自己这一份引用：换到上面那条时，旧播放器的卸载清理可能晚于新播放器挂载，
+   *  共享引用会被清空，所以播哪个元素必须以自己的为准。 */
+  const own = useRef<HTMLMediaElement | null>(null);
+
   const attach = (el: HTMLVideoElement | HTMLAudioElement | null) => {
+    own.current = el;
     mediaRef.current = el;
   };
 
   useEffect(() => {
-    playElement(mediaRef.current, () => onState(false));
+    const el = own.current;
+    playElement(el, () => onState(false));
     return () => {
-      mediaRef.current = null;
+      // 只有共享引用还指着"我"的时候才清：否则会把刚挂上的新播放器抹掉
+      if (mediaRef.current === el) mediaRef.current = null;
     };
   }, [track.id]);
 
