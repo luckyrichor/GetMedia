@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { api, canUseConsole, isAdmin, type Device } from '@shared/api';
+import { api, canRedeemInvite, canUseConsole, isAdmin, type Device } from '@shared/api';
 import { messageFor } from '@shared/errors';
 import { formatDateTime } from '@shared/format';
 import { normalizeLoginName, passwordProblem } from '@shared/validate';
@@ -34,7 +34,7 @@ export function Account() {
           <a href={href('/owner/')}>进入管理台</a>
         </div>
       ) : null}
-      {me.tier === 'free' || me.tier === 'full' ? <RedeemInvite onDone={() => void s.refresh()} /> : null}
+      {canRedeemInvite(me.tier, me.tier_expires_at) ? <RedeemInvite onDone={() => void s.refresh()} /> : null}
       <Devices />
       <ChangePassword />
       <div class="card">
@@ -214,7 +214,8 @@ function tierLabel(tier: string): string {
   return '免费版';
 }
 
-/** 邀请码兑换：免费账号升级为完整版 6 个月；已有完整版则在原到期日上顺延 6 个月。 */
+/** 邀请码兑换：free 升为完整版 6 个月；有时限的完整版则在原到期日上顺延 6 个月。
+ *  永久完整版不显示这个入口（`canRedeemInvite`），服务端也会拒。 */
 function RedeemInvite({ onDone }: { onDone: () => void }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -230,8 +231,8 @@ function RedeemInvite({ onDone }: { onDone: () => void }) {
       setMsg({
         kind: 'ok',
         text: r.tier_expires_at
-          ? `已升级为完整版，有效期至 ${formatDateTime(r.tier_expires_at)}。手机端请安装完整版应用。`
-          : '已升级为完整版。手机端请安装完整版应用。',
+          ? `兑换成功，有效期至 ${formatDateTime(r.tier_expires_at)}。手机端请安装完整版应用。`
+          : '兑换成功。手机端请安装完整版应用。',
       });
       setCode('');
       onDone();
@@ -246,7 +247,7 @@ function RedeemInvite({ onDone }: { onDone: () => void }) {
     <div class="card">
       <h2>邀请码</h2>
       <p class="muted">
-        输入邀请码可把免费账号升级为完整版（6 个月）；已经是完整版的，兑换后会在原到期日上顺延 6 个月。
+        填写邀请码延长有效期 6 个月。
         功能需要安装完整版应用，免费版应用里没有这些界面。
       </p>
       <form onSubmit={submit} noValidate>

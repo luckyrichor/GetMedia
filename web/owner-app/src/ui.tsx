@@ -133,12 +133,16 @@ export function relTime(unix: number | null | undefined, now = Date.now()): stri
 
 /** 日期选择框。
  *
- * 浏览器会给空着的 `input[type=date]` 自造一段占位：Chrome 画「年/月/日」、Safari 画
- * 「yyyy/mm/dd」。这些筛选框旁边本来就有「从 / 到 / 提交时间」之类的说明，那串占位只是
- * 噪音。所以这里按「有没有值」打 `has-value`，具体隐藏规则在 styles.css 的
- * `input.date-input`：没值时内部字段涂成透明，选完日期再正常显示。
+ * 浏览器会给空着的 `input[type=date]` 自造一段占位，**语言跟系统走**：中文环境是
+ * 「年/月/日」，英文环境是「yyyy/mm/dd」。这些筛选框旁边本来就有「从 / 到 / 提交时间」
+ * 之类的说明，那串占位纯属噪音，所以：
  *
- * 点一下直接弹日历——空着时框里什么都看不见，不去瞄右下角的小图标也能用。
+ * - 没值也没聚焦：把内部字段涂透明，框里干干净净（styles.css 的 `input.date-input`）；
+ * - 聚焦但仍没值：盖一行自己的「年/月/日」，不让系统那串英文/数字格式露出来；
+ * - 一按数字键就撤掉这行字、把原生字段放回来，否则看不见正在输入的数字。
+ *
+ * 只有数字键算"开始手输"。空框上按退格/方向键什么都不会发生，没必要把英文占位放回来。
+ * 点一下直接弹日历——空着时框里什么都没写，不去瞄右下角的小图标也能用。
  */
 export function DateInput({ value, onInput, label, class: cls }: {
   value: string;
@@ -146,22 +150,38 @@ export function DateInput({ value, onInput, label, class: cls }: {
   label: string;
   class?: string;
 }) {
+  const [focused, setFocused] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const hint = focused && !value && !typing;
   return (
-    <input
-      type="date"
-      class={`date-input${value ? ' has-value' : ''}${cls ? ` ${cls}` : ''}`}
-      value={value}
-      aria-label={label}
-      onInput={(e) => onInput(e.currentTarget.value)}
-      onClick={(e) => {
-        const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
-        try {
-          el.showPicker?.();
-        } catch {
-          // 浏览器不支持或不在用户手势里：退回键盘输入，不影响使用
-        }
-      }}
-    />
+    <span class={`date-wrap${hint ? ' hinting' : ''}`}>
+      <input
+        type="date"
+        class={`date-input${value ? ' has-value' : ''}${cls ? ` ${cls}` : ''}`}
+        value={value}
+        aria-label={label}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false);
+          setTyping(false);
+        }}
+        onKeyDown={(e) => {
+          // 数字键 = 开始手输；Tab / Esc / 退格 / 方向键都不算，中文占位留着
+          if (/^\d$/.test(e.key)) setTyping(true);
+        }}
+        onPaste={() => setTyping(true)}
+        onInput={(e) => onInput(e.currentTarget.value)}
+        onClick={(e) => {
+          const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+          try {
+            el.showPicker?.();
+          } catch {
+            // 浏览器不支持或不在用户手势里：退回键盘输入，不影响使用
+          }
+        }}
+      />
+      {hint ? <span class="date-hint" aria-hidden="true">年/月/日</span> : null}
+    </span>
   );
 }
 

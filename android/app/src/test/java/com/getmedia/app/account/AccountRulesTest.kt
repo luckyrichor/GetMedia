@@ -34,4 +34,18 @@ class AccountRulesTest {
         assertEquals("ABCD 2345 EFGH 6789", AccountRules.groupRecoveryCode(raw))
         assertEquals(raw, AccountRules.cleanRecoveryCode("abcd-2345 efgh 6789"))
     }
+
+    /** 永久完整版不该出现兑换入口：兑换一次就会从"永久"缩水成"6 个月后到期"。 */
+    @Test fun redeemEntryOnlyForFreeAndTimedFull() {
+        assertTrue(AccountRules.canRedeemInvite("free", null))
+        assertTrue(AccountRules.canRedeemInvite("FREE", null))
+        assertTrue(AccountRules.canRedeemInvite("full", 1_800_000_000))     // 到期前：续期
+        assertTrue(AccountRules.canRedeemInvite("full", 1_000))             // 已过期但库里还没刷：也让他续
+
+        assertFalse(AccountRules.canRedeemInvite("full", null))             // 永久完整版
+        assertFalse(AccountRules.canRedeemInvite("admin", null))
+        assertFalse(AccountRules.canRedeemInvite("owner", null))            // 旧档位不认
+        assertFalse(AccountRules.canRedeemInvite(null, null))
+        assertFalse(AccountRules.canRedeemInvite("", null))
+    }
 }

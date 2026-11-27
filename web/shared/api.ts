@@ -57,6 +57,20 @@ export function isAdmin(tier: string | null | undefined): boolean {
   return tier === TIER_ADMIN;
 }
 
+/** 邀请码兑换入口是否显示。
+ *
+ * 永久完整版（`full` 且没有到期时间）不给入口：兑换一次就会从"永久"变成"6 个月后
+ * 到期"，服务端也会直接拒。free 与**有时限的** full 可以——前者升级、后者续期；
+ * 永久 full 被管理员改成有时限或 free 之后，这里自然又变回可兑换。
+ */
+export function canRedeemInvite(
+  tier: string | null | undefined, expiresAt: number | null | undefined,
+): boolean {
+  if (tier === TIER_FREE) return true;
+  if (tier === TIER_FULL) return expiresAt != null;
+  return false;
+}
+
 export interface Device {
   id: string;
   channel: 'android' | 'web';

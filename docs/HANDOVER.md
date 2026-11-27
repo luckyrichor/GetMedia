@@ -15,12 +15,12 @@
 
 | 部分 | 状态 |
 |---|---|
-| Android | free / full 两个包，`0.1.38 / versionCode 39`（tag `v0.1.38`） |
-| 服务端 | release `20261127-3`，SQLite schema **20**，运行中 |
+| Android | free / full 两个包，`0.1.39 / versionCode 40`（tag `v0.1.39`） |
+| 服务端 | release `20261127-4`，SQLite schema **20**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
-| 线上管理台 | `index-CEXjRbKN.js` / `style-DU7f5Wag.css`（多「权限管理」「邀请码」两页） |
-| 线上公开站 | `index-rIyCAYD0.js` / `style-D1jGOt3t.css` |
+| 线上管理台 | `index-DH42PeX7.js` / `style-Ci9_EW5b.css`（多「权限管理」「邀请码」两页） |
+| 线上公开站 | `index-CHhgq2uv.js` / `style-D1jGOt3t.css` |
 | 用户 | 一个人在用（admin），手机 1 / 手机 2 两台 |
 
 **工作节奏**：用户提具体界面问题 → 一轮改完 → 立刻部署 → 他验收 → 下一轮。
@@ -47,11 +47,11 @@ export ANDROID_HOME=/Users/lc/Library/Android/sdk
 
 # 网页（在 web/ 下，npm 依赖已装好）
 cd web && npm run typecheck          # tsc --noEmit
-npm test                             # vitest，基线 169 项
+npm test                             # vitest，基线 187 项
 npm run build:owner                  # 产物 web/owner-app/dist/
 
 # 服务端（在仓库根）
-.venv/bin/python -m pytest -q server/tests tools/tests        # 基线 382 项
+.venv/bin/python -m pytest -q server/tests tools/tests        # 基线 504 passed / 50 skipped
 python3 tools/scan_leaks.py --all                             # 提交前必跑
 python3 tools/scan_forbidden.py legacy server android web
 python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free web/public-app web/shared
@@ -170,7 +170,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 | # | 事项 | 状态 / 判据 |
 |---|---|---|
-| 1 | 真机验收 0.1.38 | **等用户**。装上后重点看：「我的」页等级一行、完整版到期后同步入口是否消失、邀请码兑换、免费版是否没有任何同步入口。 |
+| 1 | 真机验收 0.1.39 | **等用户**。装上后重点看：永久完整版（owner1/owner2）的「我的」页**没有**邀请码入口、free 和有时限 full 仍有、完整版到期后同步入口消失、免费版没有任何同步入口。 |
 | 2 | 管理台「权限管理」「邀请码」两页的真实浏览器验收 | 只做过构建 + vitest（数据层桩），没在真账号上点过。要验：改等级是否踢下线、待注销行的截止时间、邀请码明文只出现一次。 |
 | 3 | 邀请码发放流程 | 只能由 admin 在 `/invites` 生成，1 天有效、一码一人。生成后关掉面板就没了，必须当场「下载 .txt」。 |
 | 4 | 网页端「上传本地文件」 | 已做（媒体库页顶部），上限 200 MiB，串行上传并汇总失败项。未在真机上跑过大文件。 |

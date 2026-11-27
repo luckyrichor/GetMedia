@@ -366,15 +366,36 @@ input[type="text"], input[type="number"], input[type="date"], textarea, select {
   font: inherit; color: var(--text); background: var(--bg);
   border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%;
 }
-/* 空着的日期框：浏览器会自己画一段占位（Chrome「年/月/日」、Safari「yyyy/mm/dd」），
-   旁边本来就有「从 / 到 / 提交时间」这类说明，占位纯属噪音。把内部字段涂透明，
-   框就真的空着；聚焦编辑或已经有值时照常显示。日历小图标不在这个伪元素里，不受影响。 */
+/* 日期框：浏览器给空值自造的占位语言跟系统走（中文「年/月/日」、英文「yyyy/mm/dd」），
+   而这些框旁边本来就有「从 / 到 / 提交时间」这类说明，占位纯属噪音。
+   外面包一层 .date-wrap 只是为了能在同一位置换一行自己的中文占位。 */
+.date-wrap { position: relative; display: inline-block; vertical-align: middle; min-width: 0; }
+/* 提示条自带与输入框同色的底：原生字段虽然被涂透明，聚焦时那一段的**选中底色**仍会画出来，
+   不盖住就会在「年」后面露出一块蓝。右侧留 32px 给日历图标。 */
+.date-hint {
+  position: absolute; left: 1px; top: 1px; bottom: 1px; right: 32px;
+  display: flex; align-items: center; padding: 0 9px;
+  background: var(--bg); border-radius: 7px 0 0 7px;
+  color: var(--muted); white-space: nowrap; pointer-events: none;
+  /* 框窄到放不下时裁掉，别压到右边的日历图标上 */
+  overflow: hidden;
+}
+/* 空着且没聚焦：内部字段全涂透明，框里干干净净；日历小图标不在这个伪元素里，照常显示 */
 input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit,
 input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-fields-wrapper,
 input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-text,
 input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-month-field,
 input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-day-field,
 input.date-input:not(.has-value):not(:focus)::-webkit-datetime-edit-year-field {
+  color: transparent;
+}
+/* 聚焦且仍为空：换成上面那行「年/月/日」，原生字段一起藏起来，免得两行字叠着 */
+.date-wrap.hinting input.date-input::-webkit-datetime-edit,
+.date-wrap.hinting input.date-input::-webkit-datetime-edit-fields-wrapper,
+.date-wrap.hinting input.date-input::-webkit-datetime-edit-text,
+.date-wrap.hinting input.date-input::-webkit-datetime-edit-month-field,
+.date-wrap.hinting input.date-input::-webkit-datetime-edit-day-field,
+.date-wrap.hinting input.date-input::-webkit-datetime-edit-year-field {
   color: transparent;
 }
 textarea { resize: vertical; }
@@ -420,6 +441,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .filter-clear:hover { background: var(--accent); color: var(--accent-ink); }
 .filter-range { display: flex; gap: 6px; align-items: center; }
 .filter-range input { min-width: 0; flex: 1 1 auto; }
+/* 日期框套了 .date-wrap 之后，伸缩落到包装层上（input 不再是 flex 子项） */
+.filter-range .date-wrap { flex: 1 1 auto; }
 /* 发起时间的清除 × 跟着日期框排，不绝对定位到（跨两列的）整个格子右上角 */
 .filter-range .filter-clear { position: static; flex: none; }
 /* 窄屏：三列太挤，降为两列；再窄就一列 */

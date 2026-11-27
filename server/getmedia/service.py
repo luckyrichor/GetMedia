@@ -397,11 +397,21 @@ class AccountService:
         return codes
 
     def redeem_invite(self, ctx: AuthCtx, code: str, ip: str, path: str = "/account/redeem-invite") -> dict:
-        """已登录账号兑换升级券；一码一人，已到期/已升级的按现有到期日叠加。"""
+        """已登录账号兑换升级券；一码一人，已到期/未升级的从现在算，未到期的在原到期日上叠加。
+
+        永久完整版（`tier='full'` 且 `tier_expires_at IS NULL`）直接拒绝：那种账号
+        在这里会被算成 `base=now`，兑换一次就从"永久"缩水成"6 个月后到期"。
+        拒绝时**不消耗**邀请码，码还能给别人用。
+        """
         self._hit(f"invite:acct:{ctx.user_id}", (20, 3600))
         if ctx.tier == TIER_ADMIN:
             raise ApiError(409, "already_admin", "管理员账号无需兑换邀请码")
         now = self.now()
+        with self.engine.begin() as c:
+            u = c.execute(text("SELECT tier,tier_expires_at FROM users WHERE id=:u"), {"u": ctx.user_id}).first()
+        if u is not None and u[0] == TIER_FULL and u[1] is None:
+            self._audit_own("invite_redeem", ctx.user_id, ip, path, "permanent")
+            raise ApiError(409, "already_permanent", "当前账号已是永久完整版，无需兑换邀请码")
         ih = invite_hash(self.s.secret_key, code.strip())
         with self.engine.begin() as c:
             row = c.execute(text("SELECT id FROM invites WHERE code_hash=:h AND used_by IS NULL "

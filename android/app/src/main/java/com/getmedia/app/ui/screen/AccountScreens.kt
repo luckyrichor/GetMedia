@@ -119,7 +119,7 @@ internal fun tierText(localTier: String?, localExpiresAt: Long?, me: MeInfo?): S
 }
 
 /**
- * 免费版账号在「我的」页里的邀请码兑换入口。
+ * 「我的」页里的邀请码兑换入口（只对 free 与有时限的 full 显示，见 `AccountRules.canRedeemInvite`）。
  *
  * 服务端只接受"登录态兑换"（`POST /account/redeem-invite`），所以这里不需要密码；
  * 成功后回调 [onDone]，由页面重新拉一次 `me()`，等级文案与同步入口跟着变。
@@ -135,7 +135,7 @@ private fun RedeemInviteCard(onDone: () -> Unit) {
     SectionCard {
         Column(Modifier.padding(16.dp)) {
             Text(
-                "填一个邀请码可升级为完整版（6 个月）；还没到期的话会在原到期日上叠加。",
+                "填写邀请码延长有效期 6 个月。",
                 style = MaterialTheme.typography.bodySmall, color = uiMuted(),
             )
             Field(code, { code = it.trim() }, "邀请码", enabled = !act.busy)
@@ -148,7 +148,7 @@ private fun RedeemInviteCard(onDone: () -> Unit) {
                         val ok = act.run {
                             val r = AccountService.redeemInvite(code)
                             val at = r.tierExpiresAt
-                            done = if (at != null) "已升级为完整版，有效期至 ${formatDay(at)}" else "已升级为完整版"
+                            done = if (at != null) "兑换成功，有效期至 ${formatDay(at)}" else "兑换成功"
                             code = ""
                         }
                         if (ok) onDone()
@@ -392,8 +392,14 @@ internal fun AccountPage(onLoggedOut: () -> Unit) {
                 Text(tierText(s.tier, s.tierExpiresAt, me), style = MaterialTheme.typography.bodySmall, color = uiMuted())
             }
         }
-        // 免费版就地兑换升级；完整版也能填（未到期时在到期日上叠加，等于续期）；管理员不需要
-        if ((me?.tier ?: s.tier)?.lowercase() in setOf("free", "full")) {
+        // 免费版与「有时限的完整版」才给兑换入口：前者升级、后者续期。
+        // 永久完整版不能出现——兑换一次就会从"永久"变成"6 个月后到期"（服务端也会拒）。
+        // `me` 是委托属性，取一次到局部变量再判断（否则不能智能转换）。
+        val effMe = me
+        val effTier = effMe?.tier ?: s.tier
+        // me 回来了就以它为准：它说 null 就是"永久"，不能拿本地旧到期时间兜底
+        val effExpires = if (effMe != null) effMe.tierExpiresAt else s.tierExpiresAt
+        if (AccountRules.canRedeemInvite(effTier, effExpires)) {
             RedeemInviteCard(onDone = { scope.launch { reload() } })
         }
         if (!s.recoveryConfirmed) InlineBanner("这个账号的恢复码尚未确认保存。当前版本无法在登录状态下重新生成恢复码，请务必记好密码。")

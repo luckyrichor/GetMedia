@@ -90,6 +90,25 @@ def test_admin_cannot_redeem(open_reg):
     assert r.status_code == 409 and r.json()["code"] == "already_admin"
 
 
+def test_permanent_full_cannot_redeem_and_keeps_permanent(open_reg):
+    """永久完整版兑换一次就会从"永久"缩水成"6 个月后到期"，必须直接拒绝，且码不能被烧掉。"""
+    token = make_owner(open_reg, name="boss")
+    me = open_reg.client.get("/account/me", headers=hdr(token)).json()
+    assert me["tier"] == "full" and me["tier_expires_at"] is None
+    code = open_reg.svc.create_invites()[0]
+
+    r = open_reg.client.post("/account/redeem-invite", json={"code": code}, headers=hdr(token))
+    assert r.status_code == 409 and r.json()["code"] == "already_permanent"
+
+    after = open_reg.client.get("/account/me", headers=hdr(token)).json()
+    assert after["tier"] == "full" and after["tier_expires_at"] is None   # 还是永久
+
+    # 码没被消耗：换个人照样能兑
+    other = register(open_reg, name="user9").json()["session"]["token"]
+    assert open_reg.client.post("/account/redeem-invite", json={"code": code},
+                                headers=hdr(other)).status_code == 200
+
+
 def test_redeem_requires_login(open_reg):
     code = open_reg.svc.create_invites()[0]
     assert open_reg.client.post("/account/redeem-invite", json={"code": code}).status_code == 401
