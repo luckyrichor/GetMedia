@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -19,6 +20,7 @@ from fastapi import BackgroundTasks, Depends, File, Header, Query, Response, Upl
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import creator_formats
 from .errors import ApiError
 from .extractor import MediaResolver, ResolveError, iter_source
 from .media import MediaError, MediaStore
@@ -60,6 +62,8 @@ class ExtractBody(BaseModel):
     input: str = Field(min_length=1, max_length=4000, description="作品链接或分享文案")
     media_type: Literal["audio", "video"] = "video"
     storage: Literal["metadata", "archive", "cache"] = "metadata"
+    # 输出格式：一条媒体记录只存一份文件，所以只取第一个；不传就存原始格式。
+    formats: list[str] | None = Field(default=None, max_length=4)
     target: ExtractTarget | None = None
 
 
@@ -331,6 +335,8 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
 
     def _run_job(job_id: int, user_id: str, body: ExtractBody) -> None:
         input_, media_type, storage = body.input, body.media_type, body.storage
+        # 一条媒体记录只存一份文件，所以输出格式只取第一个；不传就是原始格式
+        target_fmt = (body.formats or ["source"])[0]
         store.job_update(job_id, status="running", started_at=store.now())
         try:
             if body.target is not None:
@@ -347,13 +353,17 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
                              error_detail="解析失败，请稍后重试", finished_at=store.now())
             return
 
+        # 标题与上传者先落库：列表里要能看出这是谁的作品，后面失败了也留着
+        store.job_update(job_id, platform=m.platform, video_id=m.video_id,
+                         title=(m.title or "")[:300] or None,
+                         uploader=(m.uploader or "")[:200] or None)
+
         if storage == "metadata":
             track = store.upsert(user_id, media_type=media_type, platform=m.platform, video_id=m.video_id,
                                  page=m.page, title=m.title, uploader=m.uploader,
                                  duration_sec=m.duration_sec, cover_url=m.cover_url, source_url=m.source_url,
                                  storage="metadata")
-            store.job_update(job_id, status="done", platform=m.platform, video_id=m.video_id,
-                             track_id=track["id"], finished_at=store.now())
+            store.job_update(job_id, status="done", track_id=track["id"], finished_at=store.now())
             return
 
         try:
@@ -366,32 +376,73 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
         track = store.upsert(user_id, media_type=media_type, platform=m.platform, video_id=m.video_id,
                              page=m.page, title=m.title, uploader=m.uploader, duration_sec=m.duration_sec,
                              cover_url=m.cover_url, source_url=m.source_url, storage="metadata")
-        filename = f"{track['id']}-{m.video_id}.{m.ext}"
+        base = store.dir_for(storage)
         last_error = "no_source"
         for source in m.sources:
             try:
-                _path, nbytes, sha = store.write_atomic(
-                    store.dir_for(storage), filename, iter_source(resolver, source))
+                filename, nbytes, sha = _fetch_one(source, m, track, base, target_fmt)
             except ResolveError as exc:
                 last_error = exc.detail
                 continue
+            except creator_formats.FormatError as exc:
+                store.job_update(job_id, status="failed", error_code="format_failed",
+                                 error_detail=str(exc)[:200], finished_at=store.now())
+                return
             except Exception as exc:  # noqa: BLE001
                 last_error = type(exc).__name__
                 continue
             store.attach_file(user_id, track["id"], storage=storage, filename=filename,
                               nbytes=nbytes, sha256=sha)
-            store.job_update(job_id, status="done", platform=m.platform, video_id=m.video_id,
-                             track_id=track["id"], finished_at=store.now())
+            store.job_update(job_id, status="done", track_id=track["id"], bytes=nbytes,
+                             finished_at=store.now())
             return
 
         store.job_update(job_id, status="failed", error_code="download_failed",
                          error_detail=f"下载失败：{last_error}"[:200], track_id=track["id"],
                          finished_at=store.now())
 
+    def _fetch_one(source, m, track: dict, base: Path, target_fmt: str):
+        """取一路流并按所选格式落盘，返回（文件名, 字节数, sha256）。
+
+        格式就是原始格式（或目标扩展名与源一致）时直接边下边写；否则先落到 ``.src``
+        再交给 ffmpeg 转到 ``.part``，成功后换上去。两个临时文件都会删掉——一条媒体只留最终那一份。
+        """
+        ext = m.ext if target_fmt == "source" else creator_formats.ext_of(target_fmt, m.ext)
+        filename = f"{track['id']}-{m.video_id}.{ext}"
+        if ext == m.ext:
+            _path, nbytes, sha = store.write_atomic(base, filename, iter_source(resolver, source))
+            return filename, nbytes, sha
+        src_path, _n, _s = store.write_atomic(base, f"{track['id']}-{m.video_id}.src",
+                                              iter_source(resolver, source))
+        # 先转到 .part，成功了再换上去：转失败时同名旧文件还在（库里还指着它）
+        part = base / f"{filename}.part"
+        try:
+            creator_formats.convert(src_path, part, target_fmt)
+            nbytes = part.stat().st_size
+            if nbytes <= 0:
+                raise creator_formats.FormatError("转换出来的文件是空的")
+            digest = hashlib.sha256()
+            with part.open("rb") as fh:
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    digest.update(chunk)
+            part.replace(base / filename)
+            return filename, nbytes, digest.hexdigest()
+        finally:
+            src_path.unlink(missing_ok=True)
+            part.unlink(missing_ok=True)
+
     @app.post("/v2/extract", status_code=202)
     def extract(body: ExtractBody, background: BackgroundTasks, ctx: AuthCtx = Depends(guard)):
+        if body.formats:
+            try:
+                picked = creator_formats.normalize(body.media_type, body.formats)
+            except ValueError as exc:
+                raise ApiError(422, "bad_formats", str(exc)) from exc
+            formats = picked[:1]          # 一条媒体只存一份文件，只认第一个
+        else:
+            formats = ["source"]          # 不传就按老行为：原样保存，不转码
         job_id = store.job_create(ctx.user_id, media_type=body.media_type, storage=body.storage,
-                                  input_=body.input)
+                                  input_=body.input, formats=formats)
         background.add_task(_run_job, job_id, ctx.user_id, body)
         return {"id": job_id, "status": "queued"}
 

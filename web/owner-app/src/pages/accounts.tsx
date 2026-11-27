@@ -460,7 +460,7 @@ export function AccountsPage() {
         <div class="card">
           <h2>{tierFor.tier === 'full' ? `把「${tierFor.login_name}」设为免费版` : `把「${tierFor.login_name}」设为完整版`}</h2>
           {tierFor.tier === 'full' ? (
-            <p class="muted">设为免费版后，该账号立即失去云端同步、服务器提取、批量提取等完整版能力，且所有设备退出登录。</p>
+            <p class="muted">设为免费版后，该账号立即失去云端同步、单个提取、批量提取等完整版能力，且所有设备退出登录。</p>
           ) : (
             <>
               <p class="muted">保存后该账号所有设备将退出登录，必须用原密码重新登录。</p>

@@ -763,16 +763,23 @@ class MediaStore:
         return self.get(user_id, track_id, include_deleted=True)
 
     # ---------- 提取任务 ----------
-    def job_create(self, user_id: str, *, media_type: str, storage: str, input_: str) -> int:
+    _JOB_FIELDS = ("id", "media_type", "storage", "platform", "video_id", "status",
+                   "error_code", "error_detail", "track_id", "created_at",
+                   "started_at", "finished_at", "title", "uploader", "bytes", "formats", "input")
+
+    def job_create(self, user_id: str, *, media_type: str, storage: str, input_: str,
+                   formats: list[str] | None = None) -> int:
+        fm = json.dumps(formats or [])
         with self.engine.begin() as c:
-            c.execute(text("INSERT INTO extract_jobs(user_id, media_type, storage, input, status, created_at)"
-                           " VALUES(:u,:m,:s,:i,'queued',:n)"),
-                      {"u": user_id, "m": media_type, "s": storage, "i": input_[:4000], "n": self.now()})
+            c.execute(text("INSERT INTO extract_jobs(user_id, media_type, storage, input, formats,"
+                           " status, created_at) VALUES(:u,:m,:s,:i,:f,'queued',:n)"),
+                      {"u": user_id, "m": media_type, "s": storage, "i": input_[:4000],
+                       "f": fm, "n": self.now()})
             return int(c.execute(text("SELECT last_insert_rowid()")).scalar_one())
 
     def job_update(self, job_id: int, **fields) -> None:
         allowed = {"status", "error_code", "error_detail", "track_id", "platform", "video_id",
-                   "started_at", "finished_at"}
+                   "started_at", "finished_at", "title", "uploader", "bytes", "formats"}
         sets, params = [], {"i": job_id}
         for k, v in fields.items():
             if k not in allowed:
@@ -783,24 +790,29 @@ class MediaStore:
         with self.engine.begin() as c:
             c.execute(text(f"UPDATE extract_jobs SET {', '.join(sets)} WHERE id=:i"), params)
 
+    @staticmethod
+    def _job_row(m) -> dict:
+        out = {k: m[k] for k in MediaStore._JOB_FIELDS}
+        try:
+            out["formats"] = json.loads(out.get("formats") or "[]") or []
+        except (TypeError, ValueError):
+            out["formats"] = []
+        out["bytes"] = int(out.get("bytes") or 0)
+        return out
+
     def job_get(self, user_id: str, job_id: int) -> dict:
         with self.engine.begin() as c:
             row = c.execute(text("SELECT * FROM extract_jobs WHERE id=:i AND user_id=:u"),
                             {"i": job_id, "u": user_id}).first()
         if row is None:
             raise MediaError("job_not_found", "任务不存在", 404)
-        m = row._mapping
-        return {k: m[k] for k in ("id", "media_type", "storage", "platform", "video_id", "status",
-                                  "error_code", "error_detail", "track_id", "created_at",
-                                  "started_at", "finished_at")}
+        return self._job_row(row._mapping)
 
     def jobs_list(self, user_id: str, limit: int = 50) -> list[dict]:
         with self.engine.begin() as c:
             rows = c.execute(text("SELECT * FROM extract_jobs WHERE user_id=:u ORDER BY id DESC LIMIT :l"),
                              {"u": user_id, "l": limit}).all()
-        return [{k: r._mapping[k] for k in ("id", "media_type", "storage", "platform", "video_id", "status",
-                                            "error_code", "error_detail", "track_id", "created_at",
-                                            "started_at", "finished_at")} for r in rows]
+        return [self._job_row(r._mapping) for r in rows]
 
     def record_failure(self, *, user_id: str | None, platform: str | None, video_id: str | None,
                        track_id: int | None, stage: str, error_code: str, detail: str,

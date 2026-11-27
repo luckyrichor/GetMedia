@@ -1415,3 +1415,47 @@ td.zero .bytes-u { color: inherit; }
   .ext-acts { margin-left: 0; width: 100%; justify-content: flex-end; }
   .info-list > span { max-width: 100%; }
 }
+
+/* ==========================================================================
+   单个提取页（原「服务器提取」）：链接框 + 三个下拉 → 任务表格
+   与批量提取页同一套视觉，只是列少一列，所以另起一组 `--e-*` 变量，不动 `--c-*`。
+   ========================================================================== */
+/* 分享文案常常一整段，所以留 textarea 而不是单行 input；白底跟卡片一致 */
+.ext-form textarea { background: var(--surface); min-height: 76px; line-height: 1.55; }
+.field.is-bad textarea { border-color: #a4271c; }
+@media (prefers-color-scheme: dark) {
+  .field.is-bad textarea { border-color: #ef9a9a; }
+}
+
+/* 八列合计 1028px：1280 屏内容区只有 1036，这一档刚好不横向滚（与批量页同一算法）。
+   宽屏多出来的宽度由浏览器按比例摊给每一列：1536 放大 1.25、1920 放大 1.6。 */
+.ex-table {
+  --e-no: 40px; --e-title: 292px; --e-who: 140px; --e-st: 76px;
+  --e-out: 116px; --e-bytes: 88px; --e-at: 156px; --e-ops: 120px;
+  min-width: 1028px;
+}
+/* 作品：标题一行（超出省略，完整标题进 tooltip）+ 作品号一行 */
+.ex-table .t-main {
+  font-weight: 650; line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ex-table .t-sub {
+  font-size: 0.78rem; color: var(--muted); line-height: 1.4;
+  font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis;
+}
+/* 失败原因写在这一行：`.t-sub` 的灰色要压得住，所以带上同样的前缀 */
+.ex-table .t-sub.bad-text { color: #a4271c; }
+@media (prefers-color-scheme: dark) {
+  .ex-table .t-sub.bad-text { color: #ef9a9a; }
+}
+/* 操作列：与占用列之间留 20px，两个表头不挤成一块 */
+.ex-table .e-ops { padding-left: 20px; padding-right: 8px; }
+.ex-table th.e-ops { padding-left: 22px; }
+/* 「下载」是 <a>：去掉下划线，外观与同一行的文字按钮一致 */
+.ex-table .row-ops a.text-btn { text-decoration: none; }
+/* 筛选栏沿用批量页的收窄规则：第一行状态分段 + 昵称，第二行三个下拉 + 时间 + 重置 */
+.ex-filters .filter-line .search { flex: 1 1 10rem; min-width: 8rem; }
+.ex-filters .filter-line .select-trigger { min-width: 6.75rem; max-width: 8.5rem; }
+@media (max-width: 900px) {
+  .ex-filters .filter-line > .seg { flex-wrap: wrap; height: auto; width: 100%; }
+}

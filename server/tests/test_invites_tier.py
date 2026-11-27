@@ -179,7 +179,8 @@ def test_migration_v20_rewrites_owner_and_sets_admin(tmp_path, monkeypatch):
                           "VALUES('b','owner1','owner1','x','owner',1)")
     monkeypatch.undo()
 
-    assert dbm.migrate(eng, path, tmp_path / "snaps", 1_800_000_100) == 20
+    # 不断言具体版本号：后面还会加迁移，这里只要求「跑到最新」
+    assert dbm.migrate(eng, path, tmp_path / "snaps", 1_800_000_100) == dbm.MIGRATIONS[-1][0]
     with eng.begin() as c:
         rows = dict(c.execute(text("SELECT login_name,tier FROM users")).all())
         assert rows == {"luckyrichor": "admin", "owner1": "full"}

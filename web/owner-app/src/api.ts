@@ -235,6 +235,13 @@ export interface ExtractionJob {
   media_type: MediaType;
   storage: string;
   input: string;
+  /** 解析出来的标题与上传者：列表里要能看出提取的是谁的作品，也能按昵称筛 */
+  title?: string | null;
+  uploader?: string | null;
+  /** 落盘后的实际字节数；「只存元数据」不落文件，所以是 0 */
+  bytes?: number;
+  /** 这条任务选了哪个输出格式。单条只存一份文件，所以数组里最多一个 */
+  formats?: FormatKey[] | null;
   platform?: string | null;
   video_id?: string | null;
   track_id?: number | null;
@@ -647,8 +654,12 @@ export const ownerApi = {
   // ---------- 提取（5d） ----------
   resolve: (text: string, media_type: MediaType) =>
     api.request<ResolvedMedia>('POST', '/v2/resolve', { text, media_type }),
-  extract: (input: string, media_type: MediaType, storage: Storage) =>
-    api.request<{ id: number; status: JobState }>('POST', '/v2/extract', { input, media_type, storage }),
+  extract: (input: string, media_type: MediaType, storage: Storage, formats?: FormatKey[]) =>
+    api.request<{ id: number; status: JobState }>('POST', '/v2/extract', {
+      input, media_type, storage,
+      // 不传 = 服务端按媒体类型给默认值（视频原样、音频 m4a）
+      ...(formats?.length ? { formats } : {}),
+    }),
   extractionJobs: async (limit = 50): Promise<ExtractionJob[]> =>
     (await api.request<{ jobs: ExtractionJob[] }>('GET', `/v2/extraction-jobs?limit=${limit}`)).jobs,
 

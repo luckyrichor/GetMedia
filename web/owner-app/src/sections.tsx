@@ -88,16 +88,16 @@ export const SECTIONS: Section[] = [
   },
   {
     path: '/extract',
-    label: '服务器提取',
+    label: '单个提取',
     phase: '5d',
     done: true,
-    blurb: '把分享链接交给服务器解析、下载、入库，查看任务状态。',
+    blurb: '把一条作品链接或分享文案交给服务器解析、下载、入库；任务可按状态、平台、类型、存放方式、昵称筛。',
     endpoints: [
       { method: 'POST', path: '/v2/resolve', note: '只解析，不入库（先看一眼）' },
       { method: 'POST', path: '/v2/extract', note: '解析 + 下载 + 入库，返回任务号' },
       { method: 'GET', path: '/v2/extraction-jobs', note: '任务列表；有在跑的任务时页面每 2 秒刷新' },
     ],
-    missing: '没有单条任务详情页，也**没有失败重试按钮**（失败要回填链接重新提交）；抖音在服务器 IP 会被挡（403），页面直说。',
+    missing: '没有单条任务详情页；抖音在服务器 IP 会被挡（403），失败原因直接写在表格行里。',
   },
   {
     path: '/creators',

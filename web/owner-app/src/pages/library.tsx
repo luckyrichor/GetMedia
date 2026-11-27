@@ -362,7 +362,7 @@ export function LibraryPage() {
       {phase === 'ok' && items.length === 0 && (
         <Empty>
           <strong>媒体库里还没有内容</strong>
-          <p class="small muted">上传本地文件，或在「服务器提取」里提交一个链接，入库后就会出现在这里。</p>
+          <p class="small muted">上传本地文件，或在「单个提取」里提交一个链接，入库后就会出现在这里。</p>
         </Empty>
       )}
 

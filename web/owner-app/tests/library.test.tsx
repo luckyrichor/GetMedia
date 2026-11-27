@@ -491,7 +491,7 @@ describe('媒体库', () => {
     server(ownerRoutes({ [LIST]: { json: { items: [], count: 0 } } }));
     mount('/library');
     await until(() => text().includes('媒体库里还没有内容'));
-    expect(text()).toContain('服务器提取');
+    expect(text()).toContain('单个提取');
     cleanup();
 
     let n = 0;

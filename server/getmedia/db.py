@@ -535,6 +535,15 @@ MIGRATIONS: list[tuple[int, list[str]]] = [
         "UPDATE users SET tier='admin', tier_expires_at=NULL WHERE login_name_norm='luckyrichor'",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_one_admin ON users(tier) WHERE tier='admin'",
     ]),
+    # v21 单个提取任务补「展示用」的几列：标题、上传者、占用字节、所选输出格式。
+    # 之前只有 input + 状态，列表里看不出提取的是谁的作品，也没法按昵称筛。
+    # ``formats`` 与批量任务同构（JSON 数组），单条只取第一个：一条媒体记录只存一份文件。
+    (21, [
+        "ALTER TABLE extract_jobs ADD COLUMN title TEXT",
+        "ALTER TABLE extract_jobs ADD COLUMN uploader TEXT",
+        "ALTER TABLE extract_jobs ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE extract_jobs ADD COLUMN formats TEXT",
+    ]),
 ]
 
 

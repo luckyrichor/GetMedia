@@ -196,11 +196,13 @@ function Nav({ path, tier }: { path: string; tier: string }) {
   );
 }
 
-/** 内容区的宽度档：默认 62rem；列多的两页放宽到 84rem；批量提取不设上限。 */
+/** 内容区的宽度档：默认 62rem；列多的两页放宽到 84rem；带表格的两页不设上限。 */
 const WIDE: Record<string, string> = {
   '/accounts': 'content content-wide',
   '/invites': 'content content-wide',
   '/creators': 'content content-full',
+  // 单个提取下方也是表格：留在默认 62rem 里，1028px 的八列会被裁进横向滚动
+  '/extract': 'content content-full',
 };
 
 function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
@@ -215,7 +217,7 @@ function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
       <div class="layout">
         <Nav path={path} tier={me.tier} />
         {/* 权限管理、邀请码两页列多，宽屏上按默认 62rem 会右边空一大片，单独放宽；
-            批量提取的表格要铺满，干脆不设上限 */}
+            批量提取与单个提取的表格要铺满，干脆不设上限 */}
         <main class={WIDE[path] ?? 'content'}>{body}</main>
       </div>
     </>

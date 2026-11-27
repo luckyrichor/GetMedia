@@ -47,11 +47,11 @@ export ANDROID_HOME=/Users/lc/Library/Android/sdk
 
 # 网页（在 web/ 下，npm 依赖已装好）
 cd web && npm run typecheck          # tsc --noEmit
-npm test                             # vitest，基线 220 项
+npm test                             # vitest，基线 223 项
 npm run build:owner                  # 产物 web/owner-app/dist/
 
 # 服务端（在仓库根）
-.venv/bin/python -m pytest -q server/tests tools/tests        # 基线 510 passed / 50 skipped
+.venv/bin/python -m pytest -q server/tests tools/tests        # 基线 514 passed / 50 skipped
 python3 tools/scan_leaks.py --all                             # 提交前必跑
 python3 tools/scan_forbidden.py legacy server android web
 python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free web/public-app web/shared

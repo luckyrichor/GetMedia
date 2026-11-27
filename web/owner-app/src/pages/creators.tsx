@@ -22,6 +22,7 @@ import {
 import { MultiSelect, Select } from '../select';
 import {
   BytesCell, DateInput, DateRange, DateTimeCell, ErrorBox, Loading, Menu, Segmented, Stepper,
+  dayEndSec, dayStartSec,
   fmtBytes, fmtDateTime, fmtDuration, fmtTime, relTime, useToast, type MenuItem,
 } from '../ui';
 
@@ -167,20 +168,6 @@ function md(ts: number): string {
   const d = new Date(ts * 1000);
   const two = (x: number) => String(x).padStart(2, '0');
   return `${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-}
-
-/** 'YYYY-MM-DD' → 当天 00:00:00 的 unix 秒；空串或非法返回 null（不筛）。 */
-function dayStartSec(iso: string): number | null {
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) return null;
-  return Math.floor(new Date(y, m - 1, d).getTime() / 1000);
-}
-
-/** 'YYYY-MM-DD' → 当天 23:59:59 的 unix 秒（闭区间上限）；空串或非法返回 null。 */
-function dayEndSec(iso: string): number | null {
-  const [y, m, d] = iso.split('-').map(Number);
-  if (!y || !m || !d) return null;
-  return Math.floor(new Date(y, m - 1, d, 23, 59, 59).getTime() / 1000);
 }
 
 /** 状态 → 淡色标签的色调：已完成绿、已取消灰、进行中蓝、失败红、已暂停黄。 */

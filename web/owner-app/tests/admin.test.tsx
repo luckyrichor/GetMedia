@@ -170,7 +170,7 @@ describe('权限管理', () => {
     await until(() => text().includes('设为免费'));
     await click(button('设为免费'));
     await until(() => text().includes('把「alice」设为免费版'));
-    expect(text()).toContain('失去云端同步、服务器提取');
+    expect(text()).toContain('失去云端同步、单个提取');
     expect(document.querySelectorAll('input[type="radio"]').length).toBe(0);
 
     await click(button('确认'));

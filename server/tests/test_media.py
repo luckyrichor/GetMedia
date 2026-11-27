@@ -58,9 +58,12 @@ def menv(tmp_path):
     return env
 
 
-def extract(env, *, storage="metadata", media_type="video", text="https://www.bilibili.com/video/BVtest0001"):
-    return env.client.post("/v2/extract", headers=hdr(env.token),
-                           json={"input": text, "media_type": media_type, "storage": storage})
+def extract(env, *, storage="metadata", media_type="video", text="https://www.bilibili.com/video/BVtest0001",
+            formats=None):
+    body = {"input": text, "media_type": media_type, "storage": storage}
+    if formats is not None:
+        body["formats"] = formats
+    return env.client.post("/v2/extract", headers=hdr(env.token), json=body)
 
 
 def test_extract_metadata_only(menv):
@@ -73,6 +76,48 @@ def test_extract_metadata_only(menv):
     assert track["has_file"] is False
     assert track["platform"] == "bilibili" and track["video_id"] == "BVtest0001"
     assert track["duration_sec"] == 12.5
+
+
+def test_extract_records_title_uploader_and_formats(menv):
+    """任务要带标题/上传者/格式：列表里要能看出是谁的作品，也能按昵称筛。"""
+    r = extract(menv, formats=["source"])
+    job = menv.client.get(f"/v2/extraction-jobs/{r.json()['id']}", headers=hdr(menv.token)).json()
+    assert job["status"] == "done", job
+    assert job["title"] == "示例作品" and job["uploader"] == "测试作者"
+    assert job["formats"] == ["source"] and job["bytes"] == 0
+
+    rows = menv.client.get("/v2/extraction-jobs", headers=hdr(menv.token)).json()["jobs"]
+    assert rows[0]["title"] == "示例作品" and rows[0]["uploader"] == "测试作者"
+    assert rows[0]["input"].startswith("https://www.bilibili.com/video/")
+
+
+def test_extract_archive_records_bytes(menv):
+    r = extract(menv, storage="archive", formats=["source"])
+    job = menv.client.get(f"/v2/extraction-jobs/{r.json()['id']}", headers=hdr(menv.token)).json()
+    assert job["status"] == "done", job
+    assert job["bytes"] == len(PAYLOAD)
+
+
+def test_extract_rejects_format_of_other_media_type(menv):
+    r = extract(menv, media_type="audio", formats=["mp4"])
+    assert r.status_code == 422, r.text
+    assert r.json()["code"] == "bad_formats"
+
+
+def test_extract_converted_format_failure_is_reported(menv):
+    """选了要转码但源文件转不出来：任务标失败、给 format_failed，且不留下半截文件。
+
+    假字节不是真媒体，ffmpeg 必然失败；没装 ffmpeg 的机器上抛的是「没有安装 ffmpeg」，
+    同样归到 format_failed —— 两种情况都不该报成功。
+    """
+    r = extract(menv, media_type="audio", storage="archive", formats=["mp3"])
+    assert r.status_code == 202, r.text
+    job = menv.client.get(f"/v2/extraction-jobs/{r.json()['id']}", headers=hdr(menv.token)).json()
+    assert job["status"] == "failed", job
+    assert job["error_code"] == "format_failed"
+    media = menv.tmp / "media"
+    leftovers = list(media.iterdir()) if media.exists() else []
+    assert leftovers == [], f"转码失败不该留下文件：{leftovers}"
 
 
 def test_extract_archive_writes_file_and_streams_range(menv):

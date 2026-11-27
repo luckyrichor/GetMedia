@@ -539,6 +539,20 @@ export function daysAgo(n: number): Date {
   return d;
 }
 
+/** 'YYYY-MM-DD' → 当天 00:00:00 的 unix 秒；空串或非法返回 null（不筛）。 */
+export function dayStartSec(iso: string): number | null {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return Math.floor(new Date(y, m - 1, d).getTime() / 1000);
+}
+
+/** 'YYYY-MM-DD' → 当天 23:59:59 的 unix 秒（闭区间上限）；空串或非法返回 null。 */
+export function dayEndSec(iso: string): number | null {
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return Math.floor(new Date(y, m - 1, d, 23, 59, 59).getTime() / 1000);
+}
+
 /** 日期范围筛选：两个日期框用「至」连起来，右边跟一个「快捷」菜单。
  *
  *  权限管理（创建时间）与批量提取（发起时间）两页共用同一套交互：
