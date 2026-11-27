@@ -19,7 +19,7 @@
 | 服务端 | release `20261127-5`，SQLite schema **20**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
-| 线上管理台 | `index-BxeQXwzB.js` / `style-X5UbhWHK.css`（权限管理、邀请码、批量提取三页已按同一套规范重做） |
+| 线上管理台 | `index-DqcT5X11.js` / `style-CJ5ZWNPl.css`（权限管理、邀请码、批量提取三页已按同一套规范重做） |
 | 线上公开站 | `index-CHhgq2uv.js` / `style-D1jGOt3t.css` |
 | 用户 | 一个人在用（admin），手机 1 / 手机 2 两台 |
 
@@ -51,7 +51,7 @@ npm test                             # vitest，基线 220 项
 npm run build:owner                  # 产物 web/owner-app/dist/
 
 # 服务端（在仓库根）
-.venv/bin/python -m pytest -q server/tests tools/tests        # 基线 504 passed / 50 skipped
+.venv/bin/python -m pytest -q server/tests tools/tests        # 基线 510 passed / 50 skipped
 python3 tools/scan_leaks.py --all                             # 提交前必跑
 python3 tools/scan_forbidden.py legacy server android web
 python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free web/public-app web/shared

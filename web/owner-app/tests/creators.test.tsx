@@ -606,7 +606,7 @@ describe('批量提取：任务表格与行内操作', () => {
     expect(document.querySelectorAll('.row-ops .text-btn')).toHaveLength(1);
   });
 
-  test('已取消任务：操作列固定「显示条目 + 刷新地址 + ⋯」，不折行', async () => {
+  test('已取消任务不给「刷新地址」——它不在下载，而且那个入口会改任务终态', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [job({ status: 'cancelled', platform: 'douyin', source_url: 'https://www.douyin.com/user/1' })] } },
     }));
@@ -614,7 +614,7 @@ describe('批量提取：任务表格与行内操作', () => {
     await until(() => jobRows().length === 1);
 
     const labels = Array.from(document.querySelectorAll('.row-ops .text-btn')).map((b) => b.textContent?.trim());
-    expect(labels).toEqual(['显示条目', '刷新地址']);
+    expect(labels).toEqual(['显示条目']);
     expect(document.querySelector('.row-ops button[aria-label="更多操作"]')).not.toBeNull();
   });
 

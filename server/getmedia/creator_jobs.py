@@ -358,6 +358,9 @@ class CreatorJobService:
         判定「列表是否扫完」：``done`` 一定扫完了；``cancelled`` 要看游标里有没有
         ``scan_done`` 标记（用户扫完后又取消的任务会有这个标记，它的地址同样会过期，
         也应重扫换地址）。还在中途（暂停 / 失败）的任务仍然按原游标续扫，不去动已入库的地址。
+
+        ``rescan=True`` 时不改任务状态：那是维护动作，跑完 ``run(refresh=True)`` 会把状态
+        原样放回。只有真正要续跑（``rescan=False``）才置回 ``pending`` 并清掉 ``finished_at``。
         """
         job = self._owned(user_id, job_id)
         total = int(job["total"] or 0)
@@ -369,9 +372,15 @@ class CreatorJobService:
                                " store_error=NULL, updated_at=:n"
                                " WHERE job_id=:j AND download_state='failed'"),
                           {"n": self.now(), "j": job_id}).rowcount
-            c.execute(text("UPDATE creator_jobs SET status='pending', pause_reason=NULL, failed=0,"
-                           " finished_at=NULL, updated_at=:n WHERE id=:j"),
-                      {"n": self.now(), "j": job_id})
+            if rescan:
+                # 维护模式只换地址：状态和 finished_at 都不动（run(refresh=True) 跑完会原样放回），
+                # 否则一个「已取消」的任务会先变成「待开始」，再被标成「已完成」。
+                c.execute(text("UPDATE creator_jobs SET failed=0, updated_at=:n WHERE id=:j"),
+                          {"n": self.now(), "j": job_id})
+            else:
+                c.execute(text("UPDATE creator_jobs SET status='pending', pause_reason=NULL, failed=0,"
+                               " finished_at=NULL, updated_at=:n WHERE id=:j"),
+                          {"n": self.now(), "j": job_id})
         return {"requeued": int(n), "rescan": rescan, "job": self.get(user_id, job_id)}
 
     def request_refresh(self, user_id: str, job_id: int, *, cooldown: float = 90.0) -> str:
@@ -632,8 +641,10 @@ class CreatorJobService:
             raise JobError("job_not_found", "任务不存在", 404)
         job = self._job(row)
         user_id = row._mapping["user_id"]
-        if job["status"] in ("done", "cancelled", "paused"):
+        # 维护模式（refresh）可以跑在已完成的任务上：它只换直链，跑完把状态原样放回去
+        if job["status"] in ("done", "cancelled", "paused") and not refresh:
             return job
+        prev_status = job["status"]
 
         ref = CreatorRef(Platform(job["platform"]), job["creator_id"], job["source_url"])
         cookie_file, _src = self.cookie_fn(ref.platform, user_id)
@@ -665,7 +676,8 @@ class CreatorJobService:
         normal_seen = 0
         try:
             if refresh and not left:
-                self._finish(job_id, "done")
+                # 没有待换地址的条目，什么也不用做；状态放回去，别顺手标成完成
+                self._restore_status(job_id, prev_status)
                 return self.get(user_id, job_id)
             pinned = set() if (refresh or drained) else self.pinned_fn(ref, cookie_file)
             while not drained and pages < limit_pages:
@@ -705,15 +717,29 @@ class CreatorJobService:
             with self.engine.begin() as c:
                 c.execute(text("UPDATE creator_jobs SET status='paused', pause_reason=:r, updated_at=:n"
                                " WHERE id=:i"), {"r": paused_reason, "n": self.now(), "i": job_id})
+        elif refresh:
+            # 维护模式只换地址，不改任务终态。原来这里会 _finish('done')，于是一个
+            # 「已取消、一条都没存过」的任务点一次「刷新地址」就变成「已完成」，
+            # 而落盘阶段从头到尾没跑过（done=0、stored=0，界面上却显示成功）。
+            if self._status(job_id) == "running":
+                self._restore_status(job_id, prev_status)
         else:
             # 清单齐了再落盘：缓存/长期保存模式要逐条把文件下到服务器，这一阶段可能要跑很久，
             # 期间每处理一条都会看一次任务状态，暂停/取消能立刻停。
-            if not refresh:
-                self._mark_scan_done(job_id, start)
+            self._mark_scan_done(job_id, start)
             if need_store:
                 self._store_items(job_id, user_id)
             if self._status(job_id) == "running":
-                self._finish(job_id, "done")
+                # 落盘模式下「一条文件都没存下来」不能报成功：以前只看状态就标完成，
+                # 结果界面上是「已完成 + 0 / 292」，用户以为存好了，其实什么都没下。
+                after = self.get(user_id, job_id) or {}
+                empty_store = (need_store
+                               and int(after.get("total") or 0) > 0
+                               and int(after.get("stored") or 0) == 0)
+                if empty_store:
+                    self._finish(job_id, "failed", reason="落盘阶段没有处理任何条目")
+                else:
+                    self._finish(job_id, "done")
         return self.get(user_id, job_id)
 
     def _remember_profile(self, job_id: int, profile) -> None:
@@ -1109,6 +1135,12 @@ class CreatorJobService:
             c.execute(text("UPDATE creator_jobs SET status=:s, pause_reason=:r, finished_at=:n,"
                            " updated_at=:n WHERE id=:i"),
                       {"s": status, "r": reason, "n": self.now(), "i": job_id})
+
+    def _restore_status(self, job_id: int, status: str) -> None:
+        """维护模式跑完把状态放回进来时的样子：不动 finished_at，也不改 pause_reason。"""
+        with self.engine.begin() as c:
+            c.execute(text("UPDATE creator_jobs SET status=:s, updated_at=:n WHERE id=:i"),
+                      {"s": status, "n": self.now(), "i": job_id})
 
 
 __all__ = ["CreatorJobService", "Selection", "JobError", "StoreError", "MODES", "ITEM_STATES",

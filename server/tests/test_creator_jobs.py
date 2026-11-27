@@ -376,7 +376,8 @@ def test_retry_on_cancelled_but_scanned_job_refreshes_links(tmp_path):
     assert out["rescan"] is True, "扫完被取消的任务也应重扫换地址"
 
     job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()
-    assert job["status"] == "done", job
+    # 维护模式只换地址，不改任务终态：取消还是取消，不能被顺手标成「已完成」
+    assert job["status"] == "cancelled", job
     assert job["total"] == 3, "刷新不该新增条目"
     after = links_of(env, jid)
     assert set(after) == set(before)
@@ -400,6 +401,31 @@ def test_retry_on_unfinished_job_resumes_instead(tmp_path):
     assert again["cursor"]["start"] > 21, again
 
 
+def test_disk_job_with_nothing_stored_is_marked_failed(tmp_path, monkeypatch):
+    """落盘模式下一条文件都没存下来，不能报「已完成」。
+
+    以前 run() 收尾只看状态：落盘阶段什么都没做也会 _finish('done')，界面上就是
+    「已完成 + 0 / 292」——用户以为存好了，其实服务器上一个字节都没有。
+    """
+    env = env_with_files(tmp_path)
+    service = env.app.state.creator_jobs
+    monkeypatch.setattr(service, "_store_items", lambda job_id, user_id: {"stored": 0, "failed": 0})
+    jid = create(env, mode="latest_n", n=3, storage="cache").json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["status"] == "failed", job
+    assert job["stored"] == 0 and job["total"] == 3
+    assert "落盘" in (job["pause_reason"] or "")
+
+
+def test_metadata_job_is_not_held_to_the_store_guard(tmp_path):
+    """只存元数据的任务本来就不落盘，stored=0 是正常的，仍应算完成。"""
+    env = env_with_files(tmp_path)
+    jid = create(env, mode="latest_n", n=3).json()["id"]
+    job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(env.token)).json()
+    assert job["status"] == "done", job
+    assert job["stored"] == 0 and job["total"] == 3
+
+
 def test_request_refresh_queues_once_and_skips_unfinished(tmp_path):
     """下载撞上「直链全失效」时请求重扫：同一任务只排一次，没跑完的任务不排。"""
     lister = LinkLister()
@@ -417,7 +443,8 @@ def test_request_refresh_queues_once_and_skips_unfinished(tmp_path):
     # 第二次不再排：一个人点了下载，几个人同时点不该开好几个浏览器
     assert svc.request_refresh(uid, jid) == "busy"
     job = env.client.get(f"/v2/creators/jobs/{jid}", headers=hdr(token)).json()
-    assert job["status"] == "pending", "排上重扫后任务应回到待跑，交给后台执行"
+    # 重扫是维护动作：不改任务终态（原来会先置 pending，跑完再标成 done）
+    assert job["status"] == "done", "换地址不该改动任务状态"
     assert job["total"] == 3
 
 

@@ -536,8 +536,10 @@ export function CreatorsPage() {
           {openId === j.id ? '收起条目 ▴' : '显示条目'}
         </button>
         {/* 只有抖音需要「换地址」：直链是扫描时存下的签名地址，放久了会被 CDN 拒。
-            B 站每次下载都会现解析，这个按钮对它没有意义，所以不显示。 */}
-        {(j.status === 'done' || j.status === 'cancelled') && j.platform === 'douyin' ? (
+            B 站每次下载都会现解析，这个按钮对它没有意义，所以不显示。
+            只给「已完成」：已取消的任务不在下载，地址过期无所谓；而且以前对已取消的
+            任务点它会把任务标成「已完成」，落盘阶段却一条都没跑。 */}
+        {j.status === 'done' && j.platform === 'douyin' ? (
           <button
             type="button"
             class="text-btn"
@@ -613,7 +615,7 @@ export function CreatorsPage() {
 
           {/* 动态字段：跟着选取方式走，不留一个用不上的输入框 */}
           {mode === 'latest_n' && (
-            <div class={errs.n ? 'field is-bad' : 'field'}>
+            <div class={errs.n ? 'field field-n is-bad' : 'field field-n'}>
               <span>条数</span>
               <Stepper
                 value={n}
@@ -861,9 +863,10 @@ export function CreatorsPage() {
         {shownJobs.length > 0 ? (
           <div class="table-wrap">
             <table class="table cr-table">
-              {/* 「博主」那列不给宽度：table-layout: fixed 下只有 auto 列会吃掉剩余宽度 */}
+              {/* 九列全部写死宽度：博主改成固定宽，昵称超出就在格子里横向滚，
+                  不再让它当弹性列把状态列顶到右边去 */}
               <colgroup>
-                {COLS.map((c) => (c.cls === 'c-who' ? <col /> : <col style={{ width: `var(--${c.cls})` }} />))}
+                {COLS.map((c) => <col style={{ width: `var(--${c.cls})` }} />)}
               </colgroup>
               <thead>
                 <tr>
@@ -909,8 +912,8 @@ export function CreatorsPage() {
                             ? <BytesCell n={j.estimated_bytes} />
                             : <span class="muted">—</span>}
                         </td>
-                        <td class="c-at" title={`发起于 ${fmtDateTime(j.created_at)}`}>
-                          <DateTimeCell at={j.created_at} secs={false} />
+                      <td class="c-at" title={`发起于 ${fmtDateTime(j.created_at)}`}>
+                        <DateTimeCell at={j.created_at} />
                           <div class="sub">{relTime(j.created_at)}</div>
                         </td>
                         <td class="c-ops">{rowOps(j)}</td>

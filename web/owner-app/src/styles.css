@@ -1198,13 +1198,20 @@ td.zero .bytes-u { color: inherit; }
 .ext-row > .field { margin: 0; }
 .ext-kind { flex: 0 0 160px; width: 160px; }
 .ext-url { flex: 1 1 320px; min-width: 0; }
-/* 第二行：控件按 180px 起排，能放几个放几个；日期区间要够宽，独占一整行 */
+/* 第二行：用 flex 而不是 grid —— 「条数」只装一个数字加两个按钮，要按内容定宽，
+   不能让栅格把剩余宽度摊给它（那样加号和数字之间会空出一大块）。
+   其余字段 `flex: 1 1 180px` 平分剩下的宽度，动态字段增减时自动重排。 */
 .ext-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  display: flex; flex-wrap: wrap; align-items: flex-start;
   gap: 16px; margin-top: 16px;
 }
-.ext-grid > .field { margin: 0; }
-.ext-grid > .field-wide { grid-column: 1 / -1; }
+.ext-grid > .field { flex: 1 1 180px; min-width: 0; margin: 0; }
+/* 条数/起点序号这类纯数字控件：固定窄宽，省下的宽度让给右边的三个下拉 */
+.ext-grid > .field-n { flex: 0 0 132px; }
+/* 步进框在窄格里要把输入框撑开，否则 30+52+30 只占 112，右边会留一条空 */
+.ext-grid > .field-n .stepper { width: 100%; }
+.ext-grid > .field-n .stepper .stepper-input { flex: 1 1 auto; width: auto; min-width: 3rem; }
+.ext-grid > .field-wide { flex: 1 1 100%; }
 .ext-form .field > span { font-size: 0.8rem; color: var(--muted); }
 .ext-form input[type="text"], .ext-form .select-trigger, .ext-form input.date-input {
   height: 36px; min-height: 36px; padding: 0 10px;
@@ -1315,14 +1322,15 @@ td.zero .bytes-u { color: inherit; }
   height: 36px; padding: 0 10px; background: var(--surface); border-radius: 8px;
 }
 
-/* ---- 任务表格 ---- *//* 列宽：除「博主」外全部写死，「博主」留 auto 吃掉剩余宽度（table-layout: fixed 下
-   只有 auto 列会伸展，写死宽度的列按比例摊分——那样每列都会跟着变宽）。
-   8 个写死列合计 872px，min-width 992 就是给「博主」留 120px；
-   1280 屏表格区可视 1036px，所以这一档不出现横向滚动（1280 下博主实际 164px）。 */
+/* ---- 任务表格 ---- *//* 列宽：九列全部写死，合计 1032px 就是 min-width（1280 屏内容区实际只有 1036，
+   这一档刚好不出现横向滚动）。「博主」不再是弹性列——昵称很短，弹性列会吃成 400 多
+   像素，把状态列推到右边去；改成固定 150px，昵称超出就在格子里横向滚。
+   九列都写死时，宽屏多出来的宽度由浏览器按比例摊给每一列（Chrome 的行为）：
+   1536 视口放大 1.25 倍、1920 放大 1.6 倍，博主落到 ~190 / ~240。 */
 .cr-table {
-  --c-no: 40px; --c-st: 76px; --c-sel: 104px; --c-out: 124px;
-  --c-prog: 120px; --c-bytes: 88px; --c-at: 128px; --c-ops: 192px;
-  min-width: 992px; table-layout: fixed; border: 0; border-radius: 0; background: none;
+  --c-no: 40px; --c-who: 150px; --c-st: 76px; --c-sel: 104px; --c-out: 116px;
+  --c-prog: 112px; --c-bytes: 88px; --c-at: 156px; --c-ops: 190px;
+  min-width: 1032px; table-layout: fixed; border: 0; border-radius: 0; background: none;
 }
 .cr-table th, .cr-table td {
   padding: 8px 6px; vertical-align: middle; white-space: nowrap; height: 56px;
@@ -1336,9 +1344,14 @@ td.zero .bytes-u { color: inherit; }
    `display:grid; min-height:76vh`，`td.center` 一旦命中它，单元格就不再是 table-cell。 */
 .cr-table th.mid, .cr-table td.mid { text-align: center; }
 .cr-table .mid { font-variant-numeric: tabular-nums; }
-/* 博主：昵称一行（加粗、过长省略）+「平台 · 用户 ID」一行（普通字体、等宽数字） */
+/* 博主：昵称一行（加粗、超出就在格子里横向滚）+「平台 · 用户 ID」一行。
+   右侧加一道 16px 渐隐：长昵称被裁掉时能看出「后面还有」，短昵称不受影响。 */
 .cr-table .who-name {
-  font-weight: 650; line-height: 1.4; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 650; line-height: 1.4;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
 .cr-table .who-sub {
   font-size: 0.78rem; color: var(--muted); line-height: 1.4;
@@ -1346,6 +1359,10 @@ td.zero .bytes-u { color: inherit; }
 }
 .cr-table .c-sel, .cr-table .c-out { overflow: hidden; text-overflow: ellipsis; }
 .cr-table .sub { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+/* 日期与占用：数字、单位、时分秒同一字号，只靠颜色区分。用 `.cr-table` 前缀限住作用范围，
+   权限管理页那几列是按 0.84em / 0.86em 量好宽度的，不能跟着变。 */
+.cr-table .dt-t { font-size: inherit; }
+.cr-table .bytes-u { font-size: inherit; }
 /* 操作列：和占用列之间留 20px，两个表头不挤成一块；三个槽位单行不折 */
 .cr-table .c-ops { padding-left: 20px; padding-right: 8px; }
 .cr-table th.c-ops { padding-left: 22px; }
