@@ -50,6 +50,18 @@ async function chooseSelect(ariaLabel: string, label: string) {
   await click(opt);
 }
 
+/** 排序：点右侧箭头展开四位字段，再点其中一个（左半只翻方向，不给选项）。 */
+async function chooseSort(label: string) {
+  await click(document.querySelector('button[aria-label="选择排序依据"]') as HTMLElement);
+  const opt = Array.from(document.querySelectorAll('.sort-menu .select-opt'))
+    .find((o) => (o.querySelector('.select-label')?.textContent || '').trim() === label);
+  if (!opt) throw new Error(`排序里没有「${label}」`);
+  await click(opt);
+}
+
+/** 排序控件左半：显示当前字段与方向，点一下翻转正倒序。 */
+const sortFlip = () => document.querySelector('.sort-split .sort-field') as HTMLElement;
+
 /** 批量条上的按钮：行内也有「删除」，所以不能直接用 button('删除')。 */
 function batchButton(label: string): HTMLButtonElement {
   const b = Array.from(document.querySelectorAll('.selectbar button'))
@@ -134,16 +146,25 @@ describe('媒体库与播放', () => {
     await typeInto(document.querySelector('input[type="search"]')!, '');
     await until(() => titles().length === 3);
 
-    // 平台：本机导入只剩那一条
-    await chooseSelect('按平台筛选', '本机导入');
+    // 平台：手机导入只剩那一条
+    await chooseSelect('按平台筛选', '手机导入');
     await until(() => titles().length === 1);
     expect(titles()).toEqual(['长的那条']);
 
     await chooseSelect('按平台筛选', '全部平台');
     await until(() => titles().length === 3);
 
-    // 时长：长→短
-    await chooseSelect('排序方式', '时长（长→短）');
+    // 排序：换字段时回到该字段的默认方向（时长默认长→短）
+    await chooseSort('时长');
+    await until(() => titles()[0] === '长的那条');
+    expect(titles()).toEqual(['长的那条', '中间那条', '曲目 1']);
+
+    // 左半点一下 = 反序，再点一下 = 转回来
+    expect(sortFlip().textContent).toContain('时长');
+    await click(sortFlip());
+    await until(() => titles()[0] === '曲目 1');
+    expect(titles()).toEqual(['曲目 1', '中间那条', '长的那条']);
+    await click(sortFlip());
     await until(() => titles()[0] === '长的那条');
     expect(titles()).toEqual(['长的那条', '中间那条', '曲目 1']);
 
@@ -161,6 +182,9 @@ describe('媒体库与播放', () => {
   });
 
   test('播放：单击一行展开播放条，再点一下收起', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
+      return Promise.resolve();
+    });
     server(ownerRoutes({ [LIST]: { json: { items: [track(1)], count: 1 } } }));
     mount('/library');
     await until(() => text().includes('曲目 1'));
@@ -276,10 +300,18 @@ describe('媒体库与播放', () => {
     expect(clicked[0]).toMatch(/\/api\/v2\/media\/1\?download=1$/);
   });
 
-  test('行内按钮：播放、下载、删文件、删除都在，删文件不删条目', async () => {
+  test('行内按钮：播放、下载、删除三个，播放点了就直接出声', async () => {
+    const played: string[] = [];
+    const paused: string[] = [];
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
+      played.push(this.getAttribute('src') || '');
+      return Promise.resolve();
+    });
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (this: HTMLMediaElement) {
+      paused.push(this.getAttribute('src') || '');
+    });
     server(ownerRoutes({
       [LIST]: { json: { items: [track(1)], count: 1 } },
-      'DELETE /v2/tracks/1/file': { json: track(1, { has_file: false, storage: 'metadata', bytes: 0 }) },
       'DELETE /v2/tracks/1': { json: { ok: true, id: 1, deleted: true } },
     }));
     mount('/library');
@@ -289,23 +321,22 @@ describe('媒体库与播放', () => {
     expect(actions).not.toBeNull();
     // 下载是真的链接（带 ?download=1），不是按钮
     expect(actions.querySelector('a')!.getAttribute('href')).toBe('/api/v2/media/1?download=1');
-    for (const label of ['播放', '删文件', '删除']) {
-      expect(Array.from(actions.querySelectorAll('button')).some((b) => b.textContent?.trim() === label)).toBe(true);
-    }
+    // 「删文件」已经并进「删除」，一行只剩播放和删除两个按钮
+    expect(Array.from(actions.querySelectorAll('button')).map((b) => b.textContent?.trim()))
+      .toEqual(['播放', '删除']);
 
-    // 播放按钮立刻展开播放条（不用等双击窗口）
+    // 播放：点一下展开并直接开始播，不用再点播放器自带的播放键
     await click(Array.from(actions.querySelectorAll('button')).find((b) => b.textContent?.trim() === '播放')!);
-    await until(() => document.querySelector('audio') !== null);
+    await until(() => played.length === 1);
+    expect(played[0]).toBe('/api/v2/media/1');
+    expect(document.querySelector('audio')).not.toBeNull();
 
-    // 删文件：只清服务器上的文件，条目还在列表里，状态变「只记清单 / 无文件」
-    vi.stubGlobal('confirm', () => true);
-    await click(Array.from(actions.querySelectorAll('button')).find((b) => b.textContent?.trim() === '删文件')!);
-    await until(() => text().includes('只记清单'));
-    expect(callKeys()).toContain('DELETE /v2/tracks/1/file');
-    expect(text()).toContain('曲目 1');
-    expect(callKeys()).not.toContain('DELETE /v2/tracks/1');
+    // 再点一下变暂停，但这一条仍然展开着
+    await click(Array.from(actions.querySelectorAll('button')).find((b) => b.textContent?.trim() === '暂停')!);
+    expect(paused).toEqual(['/api/v2/media/1']);
+    expect(document.querySelector('audio')).not.toBeNull();
 
-    // 删除整条：只问一次"确定删除吗"，删完从列表消失
+    // 删除：只问一次"确定删除吗"，删完从列表消失
     let asked = '';
     vi.stubGlobal('confirm', (msg: string) => { asked = msg; return true; });
     await click(Array.from(document.querySelectorAll('.track-actions button'))
@@ -313,6 +344,7 @@ describe('媒体库与播放', () => {
     expect(asked).toBe('确定删除《曲目 1》吗？');
     await until(() => text().includes('媒体库里还没有内容'));
     expect(callKeys()).toContain('DELETE /v2/tracks/1');
+    expect(callKeys()).not.toContain('DELETE /v2/tracks/1/file');
   });
 
   test('筛选器分两行排、底部说明已去掉', async () => {
@@ -324,7 +356,9 @@ describe('媒体库与播放', () => {
     const rows = Array.from(document.querySelectorAll('.filter-row'));
     expect(rows).toHaveLength(2);
     expect(rows[0]!.querySelector('input[type="search"]')).not.toBeNull();
-    expect(rows[0]!.querySelectorAll('.select')).toHaveLength(2);
+    // 平台是自绘下拉，排序是自己的拆分控件（左翻方向 + 右选字段）
+    expect(rows[0]!.querySelectorAll('.select')).toHaveLength(1);
+    expect(rows[0]!.querySelector('.sort-split')).not.toBeNull();
     expect(rows[1]!.querySelectorAll('input[type="date"]')).toHaveLength(2);
 
     // 那段"单击一行播放，双击标题改名…"的说明文字不再显示

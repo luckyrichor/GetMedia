@@ -202,7 +202,7 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 .track { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 13px; }
 .track.on { border-color: var(--accent); }
 
-/* 一行 = 勾选框 + 序号 + 内容 + 行内按钮（播放/下载/删文件/删除） */
+/* 一行 = 勾选框 + 序号 + 内容 + 行内按钮（播放/下载/删除） */
 .track-row { display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
 /* 勾选框与序号是一对"行首标记"，间距收紧到 4px，别让它们隔着半行空着 */
 .track-pick { flex: none; display: flex; padding-top: 4px; margin-right: -2px; }
@@ -230,8 +230,33 @@ audio.player-media { background: none; }
 .filter-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .filter-row .search { flex: 1 1 14rem; }
 .filter-select { flex: none; width: 12rem; }
-.filter-select.sort { width: 13rem; }
 .filter-row.dates .search.date { flex: none; width: 9.5rem; }
+
+/* 排序控件：左半「按什么排 + ↑↓」，右半一小格只管展开字段列表。
+   两半拼成一个输入框的样子（外框一起圆角），中间不画分隔线，免得看着像两个控件。 */
+.sort-split { position: relative; flex: none; display: flex; width: 12rem; }
+.sort-split:has(.select-menu) { z-index: 50; }
+.sort-split .sort-field,
+.sort-split .sort-caret {
+  font: inherit; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); min-height: 38px;
+  display: inline-flex; align-items: center; cursor: pointer;
+}
+.sort-split .sort-field {
+  flex: 1 1 auto; min-width: 0; gap: 6px; padding: 0 8px 0 10px;
+  border-radius: 8px 0 0 8px; justify-content: space-between;
+}
+.sort-split .sort-caret {
+  flex: none; width: 1.9rem; justify-content: center;
+  border-left: 0; border-radius: 0 8px 8px 0; color: var(--muted); font-size: 0.8rem;
+}
+.sort-split .sort-field:hover,
+.sort-split .sort-caret:hover { border-color: var(--accent); }
+.sort-split.on .sort-field,
+.sort-split.on .sort-caret { border-color: var(--accent); }
+.sort-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sort-arrow { color: var(--accent); font-size: 0.82rem; flex: none; }
+.sort-menu { left: auto; right: 0; min-width: 11rem; }
 .date-field, .check-field { display: flex; align-items: center; gap: 6px; flex: none; }
 .check-field { margin-left: 4px; }
 .selectbar { margin-top: 0; }

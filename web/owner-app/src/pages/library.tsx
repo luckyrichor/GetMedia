@@ -1,14 +1,15 @@
 /** 5c：媒体库与播放。
  *
- * 行内保留四个入口：**播放 / 暂停、下载、删文件、删除**（都在每一行右侧）。
- * 在此之上才是"省点击"的快捷方式：
+ * 行内保留三个入口：**播放 / 暂停、下载、删除**（都在每一行右侧）。
  *
- * - 单击一行 = 播放/收起这一条（播放条就在这一行里面）；
+ * - 「删除」**只有一个**：`local` 条目删文件 + 写墓碑，只有清单的条目只写墓碑，
+ *   这是服务端按平台分叉的实现细节，界面上不再分成两个按钮。
+ * - 单击一行 = 播放 / 收起这一条（播放条就在这一行里面，点「播放」直接出声）；
  * - 双击标题 = 就地改名（不再单独放「改名」按钮）；
  * - 勾选（可多选）之后，上方出现批量条：批量下载、删除。
  *
- * 「删除」只有一个按钮，点下去只问一次"真要删吗"，不解释服务端到底怎么删——
- * `local` 条目会连服务器上的备份文件一起删掉，平台条目只写墓碑，这是实现细节。
+ * 排序是一个拆开的控件：左边是"按什么排"（点一下就正序/倒序互换），右边箭头才展开
+ * 四位候选（入库时间、时长、标题、文件大小）——换字段时方向回到该字段的默认方向。
  *
  * 下拉用 `../select` 的自绘下拉而不是原生 `<select>`：macOS/Windows 的原生弹出层会盖住
  * 控件本身，点开就看不见"现在选的是哪个"。
@@ -28,23 +29,33 @@ const STORAGE_LABEL: Record<Track['storage'], string> = {
   metadata: '只记清单',
 };
 
-type SortKey = 'created_desc' | 'created_asc' | 'duration_desc' | 'duration_asc' | 'title' | 'bytes_desc';
+type SortField = 'created' | 'duration' | 'title' | 'bytes';
+type SortDir = 'asc' | 'desc';
 
-const SORTS: { key: SortKey; label: string }[] = [
-  { key: 'created_desc', label: '入库时间（新→旧）' },
-  { key: 'created_asc', label: '入库时间（旧→新）' },
-  { key: 'duration_desc', label: '时长（长→短）' },
-  { key: 'duration_asc', label: '时长（短→长）' },
-  { key: 'title', label: '标题（A→Z）' },
-  { key: 'bytes_desc', label: '文件大小（大→小）' },
+const SORT_FIELDS: {
+  key: SortField;
+  label: string;
+  /** 选中这个字段时用哪个方向（不是记住上一次的方向：换字段意味着换意图） */
+  dir: SortDir;
+  dirLabel: Record<SortDir, string>;
+}[] = [
+  { key: 'created', label: '入库时间', dir: 'desc', dirLabel: { desc: '新→旧', asc: '旧→新' } },
+  { key: 'duration', label: '时长', dir: 'desc', dirLabel: { desc: '长→短', asc: '短→长' } },
+  { key: 'title', label: '标题', dir: 'asc', dirLabel: { desc: 'Z→A', asc: 'A→Z' } },
+  { key: 'bytes', label: '文件大小', dir: 'desc', dirLabel: { desc: '大→小', asc: '小→大' } },
 ];
 
 const PLATFORMS = [
   { value: 'all', label: '全部平台' },
-  { value: 'local', label: '本机导入' },
+  { value: 'local', label: '手机导入' },
   { value: 'bilibili', label: 'B 站' },
   { value: 'douyin', label: '抖音' },
 ];
+
+/** 行里那行小字显示平台，别把 `local` 这种内部值直接摊给用户看。 */
+function platformLabel(p: string): string {
+  return PLATFORMS.find((x) => x.value === p)?.label ?? p;
+}
 
 /** 双击判定窗口：这段时间内的单击先不播，等它过期才播。 */
 const DBLCLICK_MS = 220;
@@ -59,13 +70,18 @@ export function LibraryPage() {
   const [onlyFile, setOnlyFile] = useState(false);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
-  const [sort, setSort] = useState<SortKey>('created_desc');
+  const [sortField, setSortField] = useState<SortField>('created');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [playing, setPlaying] = useState<number | null>(null);
+  /** 展开着的那个播放器是否处于暂停：跟着媒体元素自己的 play/pause 事件走。 */
+  const [paused, setPaused] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState('');
   const clickTimer = useRef<number | null>(null);
+  /** 挂在当前展开的播放器上：暂停/继续要直接操作媒体元素，不能靠重渲染。 */
+  const mediaRef = useRef<HTMLMediaElement | null>(null);
   /** 改名提交中：防止"回车保存"和"失焦保存"各发一次 PATCH。 */
   const committing = useRef(false);
 
@@ -104,17 +120,21 @@ export function LibraryPage() {
       if (!needle) return true;
       return `${t.title} ${t.uploader ?? ''} ${t.video_id}`.toLowerCase().includes(needle);
     });
+    const dir = sortDir === 'asc' ? 1 : -1;
     return rows.sort((a, b) => {
-      switch (sort) {
-        case 'created_asc': return a.created_at - b.created_at || a.id - b.id;
-        case 'duration_desc': return (b.duration_sec ?? -1) - (a.duration_sec ?? -1);
-        case 'duration_asc': return (a.duration_sec ?? Number.MAX_SAFE_INTEGER) - (b.duration_sec ?? Number.MAX_SAFE_INTEGER);
-        case 'title': return (a.title || '').localeCompare(b.title || '', 'zh-Hans-CN');
-        case 'bytes_desc': return (b.bytes || 0) - (a.bytes || 0);
-        default: return b.created_at - a.created_at || b.id - a.id;
+      switch (sortField) {
+        case 'duration':
+          return cmpNum(a.duration_sec, b.duration_sec, dir);
+        case 'bytes':
+          // 没有文件的条目没有"大小"可比，一律沉底，不跟着方向翻上来
+          return cmpNum(a.has_file ? a.bytes : null, b.has_file ? b.bytes : null, dir);
+        case 'title':
+          return dir * (a.title || '').localeCompare(b.title || '', 'zh-Hans-CN') || (a.id - b.id);
+        default:
+          return dir * (a.created_at - b.created_at) || (a.id - b.id);
       }
     });
-  }, [items, kind, q, platform, onlyFile, from, to, sort]);
+  }, [items, kind, q, platform, onlyFile, from, to, sortField, sortDir]);
 
   const pickedTracks = items.filter((t) => picked.includes(t.id));
   const allShownPicked = shown.length > 0 && shown.every((t) => picked.includes(t.id));
@@ -128,17 +148,26 @@ export function LibraryPage() {
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null;
+      setPaused(false);
       setPlaying((prev) => (prev === t.id ? null : t.id));
     }, DBLCLICK_MS);
   }
 
-  /** 行内「播放」按钮：点了就是要放，不用等双击窗口。 */
+  /** 行内「播放」按钮：点了就是要放，不用等双击窗口；已展开的那条就在播放/暂停之间切。 */
   function playNow(t: Track) {
     if (clickTimer.current) {
       window.clearTimeout(clickTimer.current);
       clickTimer.current = null;
     }
-    setPlaying((prev) => (prev === t.id ? null : t.id));
+    if (playing === t.id) {
+      // 按钮文字和这里用同一个状态源（`paused` 跟着媒体元素的 play/pause 事件走），
+      // 写着"暂停"就一定是暂停，不会出现按钮和实际播放状态各说各话。
+      if (paused) playElement(mediaRef.current, () => setPaused(true));
+      else mediaRef.current?.pause();
+      return;
+    }
+    setPaused(false);
+    setPlaying(t.id);
   }
 
   function beginRename(t: Track) {
@@ -242,21 +271,6 @@ export function LibraryPage() {
     }
   }
 
-  /** 只删服务器上的文件，条目留着：播放时重新解析，本机导入的条目之后就只剩清单。 */
-  async function dropFile(t: Track) {
-    if (!confirm(`删除《${t.title || '无标题'}》在服务器上的文件？条目会保留。`)) return;
-    setBusy(true);
-    try {
-      replace(await ownerApi.dropFile(t.id));
-      if (playing === t.id) setPlaying(null);
-      setErr('');
-    } catch (e) {
-      setErr(messageFor(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
     <>
       <h1>媒体库与播放</h1>
@@ -299,14 +313,15 @@ export function LibraryPage() {
               <div class="filter-select">
                 <Select value={platform} options={PLATFORMS} onChange={setPlatform} ariaLabel="按平台筛选" />
               </div>
-              <div class="filter-select sort">
-                <Select
-                  value={sort}
-                  options={SORTS.map((s) => ({ value: s.key, label: s.label }))}
-                  onChange={(v) => setSort(v as SortKey)}
-                  ariaLabel="排序方式"
-                />
-              </div>
+              <SortSplit
+                field={sortField}
+                dir={sortDir}
+                onField={(f) => {
+                  setSortField(f);
+                  setSortDir(SORT_FIELDS.find((x) => x.key === f)!.dir);
+                }}
+                onFlip={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+              />
             </div>
             <div class="filter-row dates">
               <label class="small muted date-field">
@@ -399,7 +414,7 @@ export function LibraryPage() {
                           </span>
                         )}
                         <span class="small muted">
-                          {t.uploader || '未知 UP 主'} · {fmtDuration(t.duration_sec)} · {t.platform} ·{' '}
+                          {t.uploader || '未知 UP 主'} · {fmtDuration(t.duration_sec)} · {platformLabel(t.platform)} ·{' '}
                           {fmtTime(t.created_at)}
                         </span>
                       </span>
@@ -412,7 +427,7 @@ export function LibraryPage() {
                     </div>
                     <div class="track-actions">
                       <button type="button" class="btn btn-ghost small" onClick={() => playNow(t)}>
-                        {playing === t.id ? '暂停' : '播放'}
+                        {playing === t.id && !paused ? '暂停' : '播放'}
                       </button>
                       {t.has_file || t.source_url ? (
                         <a class="btn btn-ghost small" href={downloadUrl(t.id)} download>下载</a>
@@ -422,11 +437,6 @@ export function LibraryPage() {
                           下载
                         </button>
                       )}
-                      <button type="button" class="btn btn-ghost small" disabled={busy || !t.has_file}
-                              title={t.has_file ? '只删服务器上的文件，条目保留' : '服务器上没有文件'}
-                              onClick={() => void dropFile(t)}>
-                        删文件
-                      </button>
                       <button type="button" class="btn btn-ghost small" disabled={busy}
                               onClick={() => void removeTrack(t)}>
                         删除
@@ -435,7 +445,9 @@ export function LibraryPage() {
                   </div>
 
                   {/* 播放条在这一行内部：点哪一首就哪一首展开，再点一下收起。 */}
-                  {playing === t.id && <Player track={t} />}
+                  {playing === t.id && (
+                    <Player track={t} mediaRef={mediaRef} onState={(on) => setPaused(!on)} />
+                  )}
                 </li>
               ))}
             </ul>
@@ -447,20 +459,141 @@ export function LibraryPage() {
   );
 }
 
+/** 数字比较：`null` 一侧永远沉底，不跟着正/倒序翻到最前面。 */
+function cmpNum(a: number | null, b: number | null, dir: number): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return (a - b) * dir;
+}
+
+/** 播放（jsdom 里 `play()` 没有实现、返回 undefined，不能直接 `.catch`）。
+ *
+ * `onFail` 用于"浏览器不放行自动播放"这种失败：让按钮退回「播放」，
+ * 而不是继续显示「暂停」却一点声音都没有。
+ */
+function playElement(el: HTMLMediaElement | null, onFail?: () => void) {
+  if (!el) return;
+  const p = el.play?.();
+  if (p && typeof p.catch === 'function') p.catch(() => onFail?.());
+}
+
 /**
- * 条目内部的播放条：只有播放器本身。
+ * 排序控件：左边"按什么排 + 方向"，点一下翻方向；右边箭头才展开字段列表。
+ *
+ * 拆成两半是因为两件事完全不同：换字段是低频动作，翻方向是高频动作，
+ * 塞进同一个下拉就得每次点开再点一次选项。
+ */
+function SortSplit({ field, dir, onField, onFlip }: {
+  field: SortField;
+  dir: SortDir;
+  onField: (f: SortField) => void;
+  onFlip: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const cur = SORT_FIELDS.find((x) => x.key === field)!;
+  const dirText = cur.dirLabel[dir];
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onScroll = () => setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open]);
+
+  return (
+    <div class={open ? 'sort-split on' : 'sort-split'} ref={root}>
+      <button
+        type="button"
+        class="sort-field"
+        aria-label={`排序依据：${cur.label}（${dirText}），点击切换正倒序`}
+        title="点击切换正序 / 倒序"
+        onClick={onFlip}
+      >
+        <span class="sort-name">{cur.label}</span>
+        <span class="sort-arrow" aria-hidden="true">{dir === 'asc' ? '↑' : '↓'}</span>
+      </button>
+      <button
+        type="button"
+        class="sort-caret"
+        aria-label="选择排序依据"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <ul class="select-menu sort-menu" role="listbox" aria-label="排序依据">
+          {SORT_FIELDS.map((f) => (
+            <li
+              key={f.key}
+              role="option"
+              aria-selected={f.key === field}
+              class={f.key === field ? 'select-opt on' : 'select-opt'}
+              onClick={() => {
+                onField(f.key);
+                setOpen(false);
+              }}
+            >
+              <span class="select-label">{f.label}</span>
+              {/* 当前这个字段跟着实际方向走，其余字段显示"选中后会用的默认方向" */}
+              <span class="select-hint">{f.dirLabel[f.key === field ? dir : f.dir]}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 条目内部的播放条。
+ *
+ * 展开即播放：原来是"先出现一个没在播的播放器，再点它自己的播放键"，
+ * 等于每次都要点两下。这里挂载后直接 `play()`；用户随后在里面暂停/继续，
+ * 通过 `onState` 把真实状态告诉外面，外面那个按钮的文字才不会对不上。
  *
  * `key` 用条目 id：切到另一首时重建 media 元素，上一首的声音立刻停。
  */
-function Player({ track }: { track: Track }) {
-  const src = mediaUrl(track.id);
+function Player({ track, mediaRef, onState }: {
+  track: Track;
+  mediaRef: { current: HTMLMediaElement | null };
+  onState: (playing: boolean) => void;
+}) {
+  const attach = (el: HTMLVideoElement | HTMLAudioElement | null) => {
+    mediaRef.current = el;
+  };
+
+  useEffect(() => {
+    playElement(mediaRef.current, () => onState(false));
+    return () => {
+      mediaRef.current = null;
+    };
+  }, [track.id]);
+
+  const common = {
+    class: 'player-media',
+    controls: true,
+    preload: 'metadata' as const,
+    src: mediaUrl(track.id),
+    onPlay: () => onState(true),
+    onPause: () => onState(false),
+  };
+
   return (
     <div class="player-inline">
-      {track.media_type === 'video' ? (
-        <video key={track.id} class="player-media" controls preload="metadata" src={src} />
-      ) : (
-        <audio key={track.id} class="player-media" controls preload="metadata" src={src} />
-      )}
+      {track.media_type === 'video'
+        ? <video key={track.id} ref={attach} {...common} />
+        : <audio key={track.id} ref={attach} {...common} />}
     </div>
   );
 }
