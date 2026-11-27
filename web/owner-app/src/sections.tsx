@@ -38,7 +38,7 @@ export const SECTIONS: Section[] = [
   },
   {
     path: '/library',
-    label: '媒体库与播放',
+    label: '媒体库',
     phase: '5c',
     done: true,
     blurb: '浏览服务器上的曲目/视频，直接播放，改标题，删文件或记录。',

@@ -1,4 +1,4 @@
-/** 5c：媒体库与播放。
+/** 5c：媒体库。
  *
  * 行内保留三个入口：**播放 / 暂停、下载、删除**（都在每一行右侧）。
  *
@@ -257,7 +257,7 @@ export function LibraryPage() {
 
   return (
     <>
-      <h1>媒体库与播放</h1>
+      <h1>媒体库</h1>
 
       {phase === 'loading' && <Loading what="媒体库" />}
       {phase === 'error' && <ErrorBox message={err} retry={() => void load()} />}

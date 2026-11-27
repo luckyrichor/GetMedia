@@ -23,7 +23,7 @@ describe('owner 认证壳', () => {
     expect(text()).toContain('1 天');
     expect(text()).toContain('200');
     // 导航齐全，且每个栏目都标了交付阶段
-    for (const label of ['反馈收件箱', '媒体库与播放', '服务器提取', '批量提取', '定时任务', 'Agent', '平台授权', '库维护', 'AI 视频']) {
+    for (const label of ['反馈收件箱', '媒体库', '服务器提取', '批量提取', '定时任务', 'Agent', '平台授权', '库维护', 'AI 视频']) {
       expect(text()).toContain(label);
     }
   });

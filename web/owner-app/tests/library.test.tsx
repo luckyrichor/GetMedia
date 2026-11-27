@@ -1,4 +1,4 @@
-/** 5c：媒体库与播放（行内按钮 + 序号、双击改名、多选批量、筛选排序）。 */
+/** 5c：媒体库（行内按钮 + 序号、双击改名、多选批量、筛选排序）。 */
 import { act } from 'preact/test-utils';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
@@ -95,7 +95,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('媒体库与播放', () => {
+describe('媒体库', () => {
   test('列表：只留音频/视频两个类型按钮，给序号与总数', async () => {
     server(ownerRoutes({
       [LIST]: { json: { items: [track(1), track(2, { media_type: 'video', storage: 'cache' })], count: 2 } },
