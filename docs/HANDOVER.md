@@ -19,7 +19,7 @@
 | 服务端 | release `20261127-5`，SQLite schema **20**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
-| 线上管理台 | `index-CTvf2nKE.js` / `style-BRm1-vZL.css`（多「权限管理」「邀请码」两页） |
+| 线上管理台 | `index-tRcS3pe4.js` / `style-CbALS6Ld.css`（多「权限管理」「邀请码」两页） |
 | 线上公开站 | `index-CHhgq2uv.js` / `style-D1jGOt3t.css` |
 | 用户 | 一个人在用（admin），手机 1 / 手机 2 两台 |
 
