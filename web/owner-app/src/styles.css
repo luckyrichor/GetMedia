@@ -981,6 +981,13 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line);
   border-radius: 12px; padding: 10px 16px; margin-bottom: 12px;
 }
+.inv-sum { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.inv-sum-k { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+.inv-sum-v {
+  font-size: 1.15rem; font-weight: 700; line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.inv-sum-u { font-size: 0.82rem; color: var(--muted); }
 .inv-gen { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
 .inv-gen-k { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
 .inv-gen-btn { height: 36px; padding: 0 14px; font-size: 0.9rem; white-space: nowrap; }
@@ -1047,9 +1054,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 
 /* 表格：5 列固定宽度，多余宽度按比例摊给各列（不会出现某一列特别空） */
 .inv-table {
-  --inv-c-state: 96px; --inv-c-created: 152px; --inv-c-expires: 152px;
-  --inv-c-user: 168px; --inv-c-used: 152px;
-  min-width: 720px; table-layout: fixed; border: 0; border-radius: 0; background: none;
+  --inv-c-created: 190px; --inv-c-count: 110px; --inv-c-expires: 190px; --inv-c-left: 320px;
+  min-width: 760px; table-layout: fixed; border: 0; border-radius: 0; background: none;
 }
 .inv-table th, .inv-table td {
   padding: 8px 6px; vertical-align: middle; white-space: nowrap; height: 56px;
@@ -1060,7 +1066,33 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .inv-table th:first-child, .inv-table td:first-child { padding-left: 16px; }
 .inv-table th:last-child, .inv-table td:last-child { padding-right: 16px; }
 .inv-table tbody tr:hover { background: var(--bg); }
-.inv-table .inv-user { overflow: hidden; text-overflow: ellipsis; }
+.inv-table .inv-count { font-variant-numeric: tabular-nums; }
+/* 剩余时间：一条细进度条 + 文字。条长 = 剩余寿命占整批寿命的比例，
+   一眼看出哪批快废了（2 小时内红、6 小时内黄，和到期时间同一套色） */
+/* 注意：这里不能用 `flex: 0 1 220px` 给条子定宽——table-layout:fixed 的单元格里，
+   inline-flex 的收缩计算会退化成 min-content，条子只剩 min-width（60px）。
+   写死 `width: 220px` 才能拿到预期宽度；窄屏靠 max-width + shrink 自己缩。 */
+.inv-left { display: inline-flex; align-items: center; gap: 10px; max-width: 100%; }
+.inv-left-track {
+  flex: 0 1 auto; width: 220px; max-width: 100%; min-width: 0;
+  height: 6px; border-radius: 999px;
+  background: var(--bg); border: 1px solid var(--line); overflow: hidden;
+}
+.inv-left-track > i { display: block; height: 100%; background: var(--accent); border-radius: 999px; }
+.inv-left.is-warn .inv-left-track > i { background: #b26a00; }
+.inv-left.is-bad .inv-left-track > i { background: #a4271c; }
+.inv-left-t { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+.inv-left.is-warn .inv-left-t { color: #8a5a00; }
+.inv-left.is-bad .inv-left-t { color: #a4271c; }
+@media (prefers-color-scheme: dark) {
+  .inv-left.is-warn .inv-left-track > i { background: #e0b567; }
+  .inv-left.is-warn .inv-left-t { color: #e0b567; }
+  .inv-left.is-bad .inv-left-track > i { background: #ef9a9a; }
+  .inv-left.is-bad .inv-left-t { color: #ef9a9a; }
+}
+/* 底部那句"保留 1 天"靠右，和左边的「共 N 个可用」分开 */
+.inv-foot-note { margin-left: auto; }
+
 /* 刚生成的几行：强调色淡底 2 秒淡出（生成后列表刷新，一眼看到新码落在哪） */
 .inv-fresh { animation: inv-fresh 2s ease-out; }
 @keyframes inv-fresh {
@@ -1087,10 +1119,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   .toast-err { border-color: #ef9a9a; color: #ef9a9a; }
 }
 
-/* 窄屏：分段控件独占一行（放不下就自己横滚），生成区另起一行靠右 */
+/* 窄屏：生成区另起一行占满，按钮靠右 */
 @media (max-width: 720px) {
   .inv-bar { align-items: stretch; }
-  .inv-bar .seg { max-width: 100%; overflow-x: auto; }
   .inv-gen { margin-left: 0; width: 100%; }
   .inv-gen-btn { margin-left: auto; }
   .inv-err { text-align: left; }
@@ -1104,10 +1135,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .badge-free { background: var(--bg); color: var(--muted); }
 .badge-full { background: #e8eefe; color: #2458d6; }
 .badge-admin { background: #e6f4ea; color: #1b5e20; }
-/* 邀请码状态：未使用中性灰、已使用蓝、已过期红（和上面的等级徽章同一套柔和底色） */
-.badge-unused { background: var(--bg); color: var(--muted); }
-.badge-used { background: #e8eefe; color: #2458d6; }
-.badge-expired { background: #fdecea; color: #a4271c; }
 
 /* ---- 状态点 ---- */
 .status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -1124,10 +1151,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .text-warn { color: #8a5a00; }
 
 @media (prefers-color-scheme: dark) {
-  .badge-free, .badge-unused { background: #1d232c; color: var(--muted); }
-  .badge-full, .badge-used { background: #1a2742; color: #9db8ff; }
+  .badge-free { background: #1d232c; color: var(--muted); }
+  .badge-full { background: #1a2742; color: #9db8ff; }
   .badge-admin { background: #14301c; color: #a5d6a7; }
-  .badge-expired { background: #3a1d1d; color: #ef9a9a; }
   .status-ok .dot { background: #66bb6a; }
   .status-warn .dot { background: #e0b567; }
   .status-bad, .menu-item.danger, .text-bad { color: #ef9a9a; }

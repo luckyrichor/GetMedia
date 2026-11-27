@@ -3,46 +3,77 @@
  * 服务端只存 HMAC，列表接口拿不到明文（只有 id / 时间 / 使用人），所以明文**只能**在
  * 生成响应里出现一次：生成成功后停在工具栏下面一块「本次生成」结果区，关掉就真的没了。
  *
- * 页面自上而下：标题 → 工具栏（状态分段 + 生成区）→ 本次生成结果（有才显示）→
- * 表格卡片（固定列宽、单行）→ 卡片底部「共 N 条」+ 分页。
- * 视觉规范（卡片、间距、分段控件、徽章、时间格式）与「权限管理」页同一套，见 styles.css 的「邀请码页」段。
+ * **只看还能用的码**：已使用 / 已过期的行服务端每小时扫一次、超过 1 天就物理删除
+ * （`service.py:sweep_invites`），在列表里最多活 24~25 小时，当不了台账；而"谁升级了"
+ * 在「权限管理」的等级 + 有效期里本来就看得到。所以这里不再给状态筛选，只查 `status=unused`。
+ *
+ * 一行 = **一批**（同一次生成的所有码 `created_at` 完全相同）：单独一个码除了时间没有任何
+ * 可辨认信息，按批看才知道"哪批还剩几个、什么时候废"。
+ *
+ * 页面自上而下：标题 → 工具栏（当前可用 + 生成区）→ 本次生成结果（有才显示）→
+ * 批次表格 → 卡片底部「共 N 个」。视觉规范与「权限管理」页同一套，见 styles.css 的「邀请码页」段。
  *
  * 用途只有一种：把免费账号升成完整版 6 个自然月。没有"注册准入"这种选项。
  */
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
-import { ownerApi, type InviteItem, type InviteState } from '../api';
-import { DateTimeCell, ErrorBox, Loading, NoAccess, Segmented, useLoad, useToast } from '../ui';
+import { ownerApi, type InviteItem } from '../api';
+import { DateTimeCell, ErrorBox, Loading, NoAccess, useLoad, useToast } from '../ui';
 
 const MIN = 1;
 const MAX = 50;
-
-const STATE_LABEL: Record<InviteState, string> = { unused: '未使用', used: '已使用', expired: '已过期' };
+/** 一次拉这么多码：未使用的码 1 天内就过期，实际不会超过这个数（服务端上限也是 200） */
+const PAGE_SIZE = 200;
 
 /** 列。宽度由 styles.css 的 `--inv-*` 变量给，`<col style="width: var(--inv-*)">` 引用
  *  （和权限管理页同一套做法：`table-layout: fixed` 下只有这一种写法在 Chrome 里稳）。 */
 const COLS: { label: string; cls: string }[] = [
-  { label: '状态', cls: 'inv-c-state' },
-  { label: '创建时间', cls: 'inv-c-created' },
+  { label: '生成时间', cls: 'inv-c-created' },
+  { label: '可用数量', cls: 'inv-c-count' },
   { label: '到期时间', cls: 'inv-c-expires' },
-  { label: '使用人', cls: 'inv-c-user' },
-  { label: '使用时间', cls: 'inv-c-used' },
+  { label: '剩余时间', cls: 'inv-c-left' },
 ];
 
-/** 生成后的行短暂高亮用的类名（2 秒后淡出，见 styles.css 的 `.inv-fresh`） */
+/** 生成后的那一批短暂高亮（2 秒后淡出，见 styles.css 的 `.inv-fresh`） */
 const FRESH_MS = 2000;
 
-type Counts = { all: number; unused: number; used: number; expired: number };
+/** 剩余时间：只剩几十分钟时给「N 分」，别显示成「0 小时 3 分」 */
+function leftText(sec: number): string {
+  if (sec <= 0) return '已过期';
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (h > 0) return `${h} 小时 ${m} 分`;
+  return `${Math.max(1, m)} 分`;
+}
 
-/** 各状态的数量：列表接口只给"当前筛选下的 total"，所以三种状态各问一次，只要一条（size=1）。
- *  「全部」= 三者相加（服务端的状态划分互斥且穷尽，加起来就是全量，省一条请求）。 */
-async function fetchCounts(): Promise<Counts> {
-  const [u, s, e] = await Promise.all([
-    ownerApi.adminInvites('unused', 1, 1),
-    ownerApi.adminInvites('used', 1, 1),
-    ownerApi.adminInvites('expired', 1, 1),
-  ]);
-  return { unused: u.total, used: s.total, expired: e.total, all: u.total + s.total + e.total };
+type Batch = {
+  /** `${created_at}|${expires_at}`：同一次生成的码这两个值完全一样 */
+  key: string;
+  createdAt: number;
+  expiresAt: number;
+  /** 这一批还剩几个没用 */
+  n: number;
+  /** 这一批码的总寿命（秒），用来算进度条；正常是 86400 */
+  life: number;
+};
+
+function toBatches(items: InviteItem[]): Batch[] {
+  const map = new Map<string, Batch>();
+  for (const it of items) {
+    const key = `${it.created_at}|${it.expires_at ?? 0}`;
+    const hit = map.get(key);
+    if (hit) hit.n += 1;
+    else {
+      map.set(key, {
+        key,
+        createdAt: it.created_at,
+        expiresAt: it.expires_at ?? 0,
+        n: 1,
+        life: Math.max(1, (it.expires_at ?? it.created_at) - it.created_at),
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) => b.createdAt - a.createdAt);
 }
 
 function download(codes: string[]): boolean {
@@ -79,46 +110,35 @@ export function InvitesPage() {
   const [busy, setBusy] = useState(false);
   const [codes, setCodes] = useState<string[] | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  const [status, setStatus] = useState('');
-  const [page, setPage] = useState(1);
-  const [counts, setCounts] = useState<Counts | null>(null);
-  const [fresh, setFresh] = useState<number[]>([]);
+  /** 刚生成的那一批的 key，用来高亮 2 秒 */
+  const [freshKey, setFreshKey] = useState<string | null>(null);
   // 换筛选/翻页保留旧列表（keep）：不抽掉表格换骨架，页面高度不变、不会跳回顶部
-  const list = useLoad(() => ownerApi.adminInvites(status, page), [status, page], { keep: true });
+  const list = useLoad(() => ownerApi.adminInvites('unused', 1, PAGE_SIZE), [], { keep: true });
 
   const n = Number(count);
   const bad = !Number.isInteger(n) || n < MIN || n > MAX;
 
-  /** 生成完要认出来的那几行：列表按 created_at 倒序，新码就在第一页最上面 */
+  /** 生成完要认出来的那一批：待高亮的码数 */
   const pendingFresh = useRef(0);
   const freshTimer = useRef<number | undefined>(undefined);
 
-  const isAdmin = me.state.k === 'ok' && me.state.data.tier === 'admin';
+  const items = list.state.k === 'ok' ? list.state.data.items : [];
+  const batches = useMemo(() => toBatches(items), [items]);
 
-  /** 数量只是锦上添花：拿不到就不显示，不该让整页报错，也不该给非管理员白发请求。 */
-  function reloadCounts() {
-    void fetchCounts().then(setCounts, () => {});
-  }
-  useEffect(() => {
-    if (isAdmin) reloadCounts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
-
-  // 生成 → 刷新列表 → 把最上面那 N 行点亮 2 秒
+  // 生成 → 刷新列表 → 把新那一批点亮 2 秒
   useEffect(() => {
     if (!pendingFresh.current) return;
     if (list.state.k === 'error') { pendingFresh.current = 0; return; }
     if (list.state.k !== 'ok') return;
     const want = pendingFresh.current;
     pendingFresh.current = 0;
-    // 只有第一页、且筛选看得见未使用的码时才有"新行"可言
-    if (page !== 1 || (status !== '' && status !== 'unused')) return;
-    const items = list.state.data.items;
-    if (!items.length) return;
-    setFresh(items.slice(0, want).map((i) => i.id));
+    // 同一次生成的所有码 created_at 一样，所以"数量对得上"的那一批就是刚生成的
+    const hit = toBatches(list.state.data.items).find((b) => b.n === want);
+    if (!hit) return;
+    setFreshKey(hit.key);
     if (freshTimer.current !== undefined) window.clearTimeout(freshTimer.current);
-    freshTimer.current = window.setTimeout(() => setFresh([]), FRESH_MS);
-  }, [list.state, page, status]);
+    freshTimer.current = window.setTimeout(() => setFreshKey(null), FRESH_MS);
+  }, [list.state]);
 
   useEffect(() => () => {
     if (freshTimer.current !== undefined) window.clearTimeout(freshTimer.current);
@@ -140,7 +160,6 @@ export function InvitesPage() {
       setCopied(null);
       pendingFresh.current = r.codes.length;
       list.reload();
-      reloadCounts();
       toast(`已生成 ${r.codes.length} 个邀请码`);
     } catch (e) {
       // 失败不动输入框里的数量，方便直接重试
@@ -183,8 +202,8 @@ export function InvitesPage() {
   }
 
   const data = list.state.k === 'ok' ? list.state.data : null;
-  const pages = data ? Math.max(1, Math.ceil(data.total / data.size)) : 1;
-  const hasFilter = status !== '';
+  const total = data?.total ?? 0;
+  const now = Math.floor(Date.now() / 1000);
 
   return (
     <>
@@ -194,19 +213,13 @@ export function InvitesPage() {
         <h1>邀请码</h1>
       </div>
 
-      {/* 工具栏：左边筛状态（带数量），右边生成。窄屏各自占一整行 */}
+      {/* 工具栏：左边是当前可用的总数，右边是生成。窄屏各自占一整行 */}
       <div class="inv-bar">
-        <Segmented
-          ariaLabel="按状态筛选"
-          value={status}
-          onChange={(k) => { setStatus(k); setPage(1); }}
-          items={[
-            { key: '', label: '全部', n: counts?.all },
-            { key: 'unused', label: '未使用', n: counts?.unused },
-            { key: 'used', label: '已使用', n: counts?.used },
-            { key: 'expired', label: '已过期', n: counts?.expired },
-          ]}
-        />
+        <div class="inv-sum">
+          <span class="inv-sum-k">当前可用</span>
+          <span class="inv-sum-v">{total}</span>
+          <span class="inv-sum-u">个</span>
+        </div>
 
         <div class="inv-gen">
           <label class="inv-gen-k" for="inv-count">生成数量</label>
@@ -276,16 +289,13 @@ export function InvitesPage() {
         {list.state.k === 'loading' ? <Loading what="邀请码" /> : null}
         {list.state.k === 'error' ? <ErrorBox message={list.state.message} retry={list.reload} /> : null}
 
-        {data && data.items.length === 0 ? (
+        {data && batches.length === 0 ? (
           <div class="empty-state">
-            <p>{hasFilter ? '没有符合条件的邀请码。' : '还没有生成过邀请码。'}</p>
-            {hasFilter ? (
-              <button type="button" class="btn small" onClick={() => { setStatus(''); setPage(1); }}>看全部</button>
-            ) : null}
+            <p>{total === 0 ? '还没有生成过邀请码。' : '当前没有可用的邀请码。'}</p>
           </div>
         ) : null}
 
-        {data && data.items.length ? (
+        {data && batches.length ? (
           <div class={list.refreshing ? 'table-wrap is-refreshing' : 'table-wrap'}>
             <table class="table inv-table">
               <colgroup>
@@ -295,32 +305,37 @@ export function InvitesPage() {
                 <tr>{COLS.map((c) => <th class={c.cls}>{c.label}</th>)}</tr>
               </thead>
               <tbody>
-                {data.items.map((i: InviteItem) => (
-                  <tr class={fresh.includes(i.id) ? 'inv-fresh' : ''}>
-                    <td><span class={`badge badge-${i.state}`}>{STATE_LABEL[i.state]}</span></td>
-                    <td><DateTimeCell at={i.created_at} /></td>
-                    <td><DateTimeCell at={i.expires_at} cls={i.state === 'expired' ? 'text-bad' : ''} /></td>
-                    <td class="inv-user" title={i.used_by ?? undefined}>{i.used_by ?? '—'}</td>
-                    <td><DateTimeCell at={i.used_at} /></td>
-                  </tr>
-                ))}
+                {batches.map((b) => {
+                  const left = b.expiresAt - now;
+                  const pct = Math.max(0, Math.min(100, (left / b.life) * 100));
+                  // 2 小时内到期标红、6 小时内标黄，其余正常色（表格和进度条同一套色）
+                  const soon = left <= 2 * 3600 ? 'bad' : left <= 6 * 3600 ? 'warn' : '';
+                  return (
+                    <tr class={b.key === freshKey ? 'inv-fresh' : ''}>
+                      <td><DateTimeCell at={b.createdAt} /></td>
+                      <td class="inv-count">{b.n} 个</td>
+                      <td><DateTimeCell at={b.expiresAt} cls={soon ? `text-${soon}` : ''} /></td>
+                      <td>
+                        <span class={soon ? `inv-left is-${soon}` : 'inv-left'}>
+                          <span class="inv-left-track"><i style={{ width: `${pct}%` }} /></span>
+                          <span class="inv-left-t">还剩 {leftText(left)}</span>
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         ) : null}
 
-        {data && data.items.length ? (
+        {data && batches.length ? (
           <div class="box-foot">
-            <span class="small muted">共 {data.total} 条</span>
-            {pages > 1 ? (
-              <span class="foot-page">
-                <button type="button" class="btn small" disabled={page <= 1}
-                        onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</button>
-                <span class="small muted">第 {data.page} / {pages} 页</span>
-                <button type="button" class="btn small" disabled={page >= pages}
-                        onClick={() => setPage((p) => p + 1)}>下一页</button>
-              </span>
-            ) : null}
+            <span class="small muted">
+              共 {total} 个可用
+              {items.length < total ? `（只显示最近 ${items.length} 个）` : ''}
+            </span>
+            <span class="small muted inv-foot-note">已使用 / 已过期的码保留 1 天后自动清理，不再列出</span>
           </div>
         ) : null}
       </div>

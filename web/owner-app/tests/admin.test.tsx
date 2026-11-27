@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act } from 'preact/test-utils';
-import { ADMIN_ME, button, calls, choose, cleanup, click, mount, ownerRoutes, server, text, until } from './harness';
+import { ADMIN_ME, button, calls, callKeys, cleanup, click, mount, ownerRoutes, server, text, until } from './harness';
 
 /** 往普通 input 里塞值：直接在 act 里派发，否则随后的 click 会拿到上一轮的 state。 */
 async function setInput(sel: string, value: string) {
@@ -395,19 +395,20 @@ describe('权限管理', () => {
 });
 
 describe('邀请码', () => {
-  /** 分段控件上的数量：页面为三种状态各发一条 `size=1` 的请求，只取 total。 */
-  const countRoutes = (unused: number, used: number, expired: number) => ({
-    'GET /v2/admin/invites?page=1&status=unused&size=1': { json: { total: unused, page: 1, size: 1, items: [] } },
-    'GET /v2/admin/invites?page=1&status=used&size=1': { json: { total: used, page: 1, size: 1, items: [] } },
-    'GET /v2/admin/invites?page=1&status=expired&size=1': { json: { total: expired, page: 1, size: 1, items: [] } },
-  });
   const GEN = '＋ 生成邀请码';
+  /** 只查未使用的码、一次拉 200 条（未使用的码 1 天内就过期，实际不会更多） */
+  const LIST = 'GET /v2/admin/invites?page=1&status=unused&size=200';
+  const unusedPage = (items: unknown[], total = items.length) => ({
+    json: { total, page: 1, size: 200, items },
+  });
+  const code = (id: number, createdAt: number, expiresAt: number) => ({
+    id, state: 'unused', created_at: createdAt, expires_at: expiresAt, used_at: null, used_by: null,
+  });
+
   test('生成 2 个：明文出现一次、可下载；关闭后明文消失', async () => {
-    const list = { json: { total: 0, page: 1, size: 50, items: [] } };
     server(ownerRoutes({
-      ...countRoutes(0, 0, 0),
       'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites?page=1': list,
+      [LIST]: unusedPage([]),
       'POST /v2/admin/invites': { json: { codes: ['AAA-111', 'BBB-222'], count: 2, expires_at: NOW + 86400 } },
     }));
     mount('/invites');
@@ -429,9 +430,8 @@ describe('邀请码', () => {
 
   test('数量越界（51）：就地提示、按钮禁用、一个请求都不发', async () => {
     server(ownerRoutes({
-      ...countRoutes(0, 0, 0),
       'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites?page=1': { json: { total: 0, page: 1, size: 50, items: [] } },
+      [LIST]: unusedPage([]),
     }));
     mount('/invites');
     await until(() => text().includes('生成数量'));
@@ -445,63 +445,43 @@ describe('邀请码', () => {
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
-  test('列表：状态徽章与使用人；未使用的码不显示明文', async () => {
+  test('列表只查未使用的码，按批次聚合成一行；没有状态列、也没有分段控件', async () => {
+    const t = NOW - 600;
     server(ownerRoutes({
-      ...countRoutes(1, 1, 0),
       'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites?page=1': {
-        json: {
-          total: 2, page: 1, size: 50,
-          items: [
-            { id: 'i1', state: 'used', created_at: NOW - 7200, expires_at: NOW - 3600, used_at: NOW - 4000, used_by: 'alice' },
-            { id: 'i2', state: 'unused', created_at: NOW - 600, expires_at: NOW + 85800, used_at: null, used_by: null },
-          ],
-        },
-      },
+      [LIST]: unusedPage([
+        code(1, t, t + 86400),            // 同一批：created_at 相同
+        code(2, t, t + 86400),
+        code(3, t - 7200, t - 7200 + 86400), // 另一批
+      ], 3),
     }));
     mount('/invites');
-    await until(() => text().includes('alice'));
-    expect(text()).toContain('luckyrichor'); // 页头账号名，确认进的是管理员会话
-    expect(document.querySelectorAll('.badge-used').length).toBe(1);
-    expect(document.querySelectorAll('.badge-unused').length).toBe(1);
-    // 列表只有元数据，没有码明文
-    expect(text()).not.toMatch(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
-  });
-  test('工具栏：分段控件带各状态数量，点一下直接切筛选（取代原来的下拉框）', async () => {
-    server(ownerRoutes({
-      ...countRoutes(3, 5, 2),
-      'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites?page=1': {
-        json: { total: 10, page: 1, size: 50, items: [
-          { id: 1, state: 'unused', created_at: NOW - 60, expires_at: NOW + 86340, used_at: null, used_by: null },
-        ] },
-      },
-      'GET /v2/admin/invites?page=1&status=used': {
-        json: { total: 5, page: 1, size: 50, items: [
-          { id: 2, state: 'used', created_at: NOW - 600, expires_at: NOW + 85800, used_at: NOW - 300, used_by: 'alice' },
-        ] },
-      },
-    }));
-    mount('/invites');
-    // 三条 size=1 的请求回来之前，分段控件上不该有数字
-    await until(() => (seg('未使用')?.textContent ?? '').includes('3'));
-    expect(seg('全部').textContent).toBe('全部10');
-    expect(seg('已使用').textContent).toBe('已使用5');
-    expect(seg('已过期').textContent).toBe('已过期2');
-    // 原来那个孤立的下拉框已经没有了，换成了同一块工具栏里的分段控件
-    expect(document.querySelector('[role="tablist"][aria-label="按状态筛选"]')).not.toBeNull();
-    expect(document.querySelector('.select-trigger')).toBeNull();
+    await until(() => document.querySelectorAll('tbody tr').length === 2);
 
-    await click(seg('已使用'));
-    await until(() => calls.some((c) => c.search.includes('status=used')));
-    await until(() => text().includes('alice'));
+    // 请求就是"未使用 + 200 条"，不再有 status 切换、也没有那三条取数量的请求
+    expect(callKeys()).toContain(LIST);
+    expect(calls.filter((c) => c.path === '/v2/admin/invites').length).toBe(1);
+
+    const heads = Array.from(document.querySelectorAll('thead th')).map((th) => (th.textContent ?? '').trim());
+    expect(heads).toEqual(['生成时间', '可用数量', '到期时间', '剩余时间']);
+    expect(document.querySelector('[role="tablist"]')).toBeNull();
+
+    const rows = Array.from(document.querySelectorAll('tbody tr'));
+    expect(rows[0]!.textContent).toContain('2 个');
+    expect(rows[1]!.textContent).toContain('1 个');
+    // 剩余时间：刚生成 10 分钟 → 还剩 23 小时多
+    expect(rows[0]!.textContent).toMatch(/还剩 2\d 小时/);
+    expect(text()).toContain('共 3 个可用');
+    // 底部说明写清了为什么只列这些
+    expect(text()).toContain('保留 1 天后自动清理');
+    // 列表里没有码明文
+    expect(text()).not.toMatch(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
   });
 
   test('步进按钮：+ / − 改数量；空值与越界都禁用生成', async () => {
     server(ownerRoutes({
-      ...countRoutes(0, 0, 0),
       'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites?page=1': { json: { total: 0, page: 1, size: 50, items: [] } },
+      [LIST]: unusedPage([]),
     }));
     mount('/invites');
     await until(() => text().includes('生成数量'));
@@ -530,40 +510,34 @@ describe('邀请码', () => {
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
-  test('生成成功：toast 回执，新生成的几行短暂高亮', async () => {
+  test('生成成功：toast 回执，新生成的那一批短暂高亮', async () => {
     let first = true;
-    const fresh = {
-      json: { total: 2, page: 1, size: 50, items: [
-        { id: 11, state: 'unused', created_at: NOW, expires_at: NOW + 86400, used_at: null, used_by: null },
-        { id: 12, state: 'unused', created_at: NOW, expires_at: NOW + 86400, used_at: null, used_by: null },
-      ] },
-    };
+    const t = NOW;
     server(ownerRoutes({
-      ...countRoutes(0, 0, 0),
       'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites?page=1': () => {
-        if (first) { first = false; return { json: { total: 0, page: 1, size: 50, items: [] } }; }
-        return fresh;
+      [LIST]: () => {
+        if (first) { first = false; return unusedPage([]); }
+        return unusedPage([code(11, t, t + 86400), code(12, t, t + 86400)], 2);
       },
-      'POST /v2/admin/invites': { json: { codes: ['AAA-111', 'BBB-222'], count: 2, expires_at: NOW + 86400 } },
+      'POST /v2/admin/invites': { json: { codes: ['AAA-111', 'BBB-222'], count: 2, expires_at: t + 86400 } },
     }));
     mount('/invites');
     await until(() => text().includes('还没有生成过邀请码'));
 
     await setInput('input#inv-count', '2');
     await click(button(GEN));
-    await until(() => document.querySelectorAll('tbody tr').length === 2);
+    await until(() => document.querySelectorAll('tbody tr').length === 1);
 
     expect(document.querySelector('.toast')?.textContent).toBe('已生成 2 个邀请码');
-    // 两行都标了 inv-fresh（2 秒后自动摘掉，见页面里的 FRESH_MS）
-    expect(document.querySelectorAll('tbody tr.inv-fresh').length).toBe(2);
+    // 一批 2 个 → 那一行打 inv-fresh（2 秒后自动摘掉，见页面里的 FRESH_MS）
+    expect(document.querySelectorAll('tbody tr.inv-fresh').length).toBe(1);
+    expect(document.querySelector('tbody tr')!.textContent).toContain('2 个');
   });
 
   test('生成失败：错误 toast、数量不清空、按钮恢复可点', async () => {
     server(ownerRoutes({
-      ...countRoutes(0, 0, 0),
       'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites?page=1': { json: { total: 0, page: 1, size: 50, items: [] } },
+      [LIST]: unusedPage([]),
       'POST /v2/admin/invites': { status: 500, json: { error: 'internal_error', message: '服务器出错了' } },
     }));
     mount('/invites');
@@ -582,9 +556,8 @@ describe('邀请码', () => {
     const write = vi.fn(async () => {});
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
     server(ownerRoutes({
-      ...countRoutes(0, 0, 0),
       'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites?page=1': { json: { total: 0, page: 1, size: 50, items: [] } },
+      [LIST]: unusedPage([]),
       'POST /v2/admin/invites': { json: { codes: ['AAA-111'], count: 1, expires_at: NOW + 86400 } },
     }));
     mount('/invites');
@@ -602,35 +575,30 @@ describe('邀请码', () => {
     expect(document.querySelector('.inv-code')?.className).toBe('inv-code');
   });
 
-  test('换状态筛选：旧列表留在原位（只淡出），不闪骨架', async () => {
+  test('生成后刷新列表：旧表格留在原位（只淡出），不闪骨架', async () => {
     let release!: (v: unknown) => void;
     const gate = new Promise((r) => { release = r; });
-    const page1 = {
-      json: {
-        total: 1, page: 1, size: 50,
-        items: [{ id: 'i1', state: 'used', created_at: NOW - 7200, expires_at: NOW - 3600, used_at: NOW - 4000, used_by: 'alice' }],
-      },
-    };
+    const one = unusedPage([code(1, NOW - 60, NOW + 86340)], 1);
     let first = true;
     server(ownerRoutes({
-      ...countRoutes(0, 1, 0),
       'GET /account/me': { json: ADMIN_ME },
-      'GET /v2/admin/invites': () => {
-        if (first) { first = false; return page1; }
+      [LIST]: () => {
+        if (first) { first = false; return one; }
         return gate as never;
       },
+      'POST /v2/admin/invites': { json: { codes: ['AAA-111'], count: 1, expires_at: NOW + 86400 } },
     }));
     mount('/invites');
-    await until(() => text().includes('alice'));
+    await until(() => document.querySelectorAll('tbody tr').length === 1);
 
-    await click(seg('已使用'));
+    await click(button(GEN));
+    await until(() => document.querySelector('.is-refreshing') !== null);
 
     expect(document.querySelector('.skeleton')).toBeNull();
     expect(document.querySelectorAll('tbody tr').length).toBe(1);
-    expect(document.querySelector('.is-refreshing')).not.toBeNull();
 
-    release(page1);
-    await until(() => text().includes('alice'));
+    release(one);
+    await until(() => document.querySelector('.is-refreshing') === null);
   });
 });
 
