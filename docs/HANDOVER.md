@@ -16,10 +16,10 @@
 | 部分 | 状态 |
 |---|---|
 | Android | free / full 两个包，`0.1.39 / versionCode 40`（tag `v0.1.39`） |
-| 服务端 | release `20261127-5`，SQLite schema **20**，运行中 |
+| 服务端 | release `20261127-7`，SQLite schema **21**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
-| 线上管理台 | `index-DqcT5X11.js` / `style-CJ5ZWNPl.css`（权限管理、邀请码、批量提取三页已按同一套规范重做） |
+| 线上管理台 | `index-DAjhUJg5.js` / `style-B8iHrlST.css`（权限管理、邀请码、批量提取、单个提取四页已按同一套规范重做） |
 | 线上公开站 | `index-CHhgq2uv.js` / `style-D1jGOt3t.css` |
 | 用户 | 一个人在用（admin），手机 1 / 手机 2 两台 |
 
