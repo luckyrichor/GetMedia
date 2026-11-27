@@ -486,3 +486,102 @@ describe('邀请码', () => {
     await until(() => text().includes('alice'));
   });
 });
+
+/** 第二轮精修：列拆分、数字列对齐、操作列固定槽位、筛选栏统一。
+ *  jsdom 没有布局，量不出"右边缘对不对齐"；这里守住的是**结构和类名**——
+ *  真正的位置关系靠浏览器量测（见 docs/STATUS.local.md 的记录）。
+ */
+describe('权限管理 · 表格列与操作列', () => {
+  async function mountRows(rows: unknown[]) {
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage(rows),
+    }));
+    mount('/accounts');
+    await until(() => document.querySelector('.accounts-table') !== null);
+  }
+
+  const row = (name: string) => Array.from(document.querySelectorAll('tbody tr'))
+    .find((tr) => tr.textContent?.includes(name))!;
+
+  test('拆成 11 列：音频 / 视频 / 列表数 / 占用 各自一列，都是纯数字', async () => {
+    await mountRows([ACCOUNT]);
+    const heads = Array.from(document.querySelectorAll('.accounts-table thead th'))
+      .map((th) => (th.textContent ?? '').trim().replace(/\s*[↑↓]$/, ''));
+    expect(heads).toEqual([
+      '登录名', '等级', '有效期', '状态', '创建时间', '最近活跃', '音频', '视频', '列表数', '占用', '操作',
+    ]);
+
+    // 四个数字列：表头与单元格都带 num（右对齐），且不再有「音频 30 · 视频 6」这种混排
+    const numTh = Array.from(document.querySelectorAll('.accounts-table thead th.num'))
+      .map((th) => (th.textContent ?? '').trim());
+    expect(numTh).toEqual(['音频', '视频', '列表数', '占用']);
+    const nums = Array.from(document.querySelectorAll('tbody td.num')).map((td) => (td.textContent ?? '').trim());
+    expect(nums).toEqual(['30', '6', '1', '1.1GB']);
+    expect(text()).not.toContain('音频 30');
+    expect(text()).not.toContain('个 ·');
+  });
+
+  test('占用列：数字与单位是两个 span，单位单独占一栏', async () => {
+    await mountRows([ACCOUNT]);
+    const bytes = document.querySelectorAll('tbody td.num')[3] as HTMLElement;
+    const spans = Array.from(bytes.children) as HTMLElement[];
+    expect(spans.map((s) => s.textContent)).toEqual(['1.1', 'GB']);
+    expect(spans[1]?.className).toBe('unit');
+  });
+
+  test('全 0 的行：数字仍是 0，只是标了 zero（淡灰）', async () => {
+    await mountRows([{ ...ACCOUNT, audio: 0, video: 0, playlists: 0, bytes: 0 }]);
+    const cells = Array.from(document.querySelectorAll('tbody td.num'));
+    expect(cells.map((td) => (td.textContent ?? '').trim())).toEqual(['0', '0', '0', '0B']);
+    expect(cells.every((td) => td.classList.contains('zero'))).toBe(true);
+  });
+
+  test('操作列固定槽位：管理员用占位顶住「改有效期」，重置密码不往左偏', async () => {
+    await mountRows([ADMIN_ROW, ACCOUNT]);
+
+    // 管理员：改有效期位置是隐藏占位，没有「更多」
+    const adminOps = row('luckyrichor').querySelector('.row-ops')!;
+    expect(adminOps.querySelector('.op-ph')!.textContent).toBe('改有效期');
+    expect(adminOps.querySelector('.menu-btn')).toBeNull();
+    expect(adminOps.querySelector('.op-ph-icon')).not.toBeNull();
+
+    // 完整版：三个槽位齐全，⋯ 是纯图标按钮
+    const ops = row('alice').querySelector('.row-ops')!;
+    const icon = ops.querySelector('.menu-btn') as HTMLElement;
+    expect(icon.className).toContain('icon');
+    expect(icon.textContent).toBe('⋯');
+    expect(icon.getAttribute('aria-label')).toBe('更多操作');
+    expect(icon.getAttribute('title')).toBe('更多操作');
+    // 占位不参与无障碍树，也不是可点按钮
+    expect(adminOps.querySelector('button.op-ph')).toBeNull();
+  });
+
+  test('「更多」里「停用」前有一条分隔线', async () => {
+    await mountRows([ACCOUNT]);
+    await click(row('alice').querySelector('.menu-btn') as HTMLElement);
+    const pop = document.querySelector('.menu-pop')!;
+    const kids = Array.from(pop.children) as HTMLElement[];
+    const sepAt = kids.findIndex((el) => el.classList.contains('menu-sep'));
+    const stopAt = kids.findIndex((el) => el.textContent === '停用');
+    expect(sepAt).toBeGreaterThanOrEqual(0);
+    expect(stopAt).toBe(sepAt + 1);
+  });
+
+  test('筛选栏：「快捷」是带边框按钮，日期框有「开始日期 / 结束日期」占位', async () => {
+    await mountRows([ACCOUNT]);
+    const quick = document.querySelector('.date-range .menu-btn') as HTMLElement;
+    expect(quick.className).toContain('boxed');
+    expect(quick.textContent).toContain('快捷');
+
+    const hints = Array.from(document.querySelectorAll('.date-range .date-hint')).map((el) => el.textContent);
+    expect(hints).toEqual(['开始日期', '结束日期']);
+  });
+
+  test('底部常显「共 N 条」：只有一页时也给总数', async () => {
+    await mountRows([ADMIN_ROW, ACCOUNT]);
+    const foot = document.querySelector('.box-foot')!;
+    expect(foot.textContent).toContain('共 2 条');
+    expect(foot.textContent).not.toContain('上一页');
+  });
+});

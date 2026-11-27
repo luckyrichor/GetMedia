@@ -15,23 +15,30 @@ import { ownerApi, type AdminAccount, type AdminAccountPage, type Tier } from '.
 import { Select } from '../select';
 import {
   DateInput, ErrorBox, Loading, Menu, Modal, NoAccess, Segmented,
-  fmtBytes, fmtDateTime, fmtTime, relTime, useLoad,
+  fmtBytesParts, fmtDateTime, fmtTime, relTime, useLoad,
 } from '../ui';
 
 const TIER_LABEL: Record<Tier, string> = { free: '免费版', full: '完整版', admin: '管理员' };
 
 /** 表格列。带 `sort` 的列点击表头排序；`w` 是固定列宽（`table-layout: fixed`），
- *  各列加起来就是表格的最小宽度，再窄就横向滚，不折行。 */
-const COLS: { label: string; sort?: string; w: number; right?: boolean }[] = [
+ *  各列加起来就是表格的最小宽度，再窄就横向滚，不折行。
+ *
+ *  `w` 缺省的那一列吃掉剩余宽度（登录名——它最需要弹性）。
+ *  四个数字列不排序：服务端只有 `tracks`（媒体总数）一个键，拆成音频/视频/列表数/占用之后
+ *  没有哪一列对得上它，挂上去反而会误导。
+ */
+const COLS: { label: string; sort?: string; w?: number; right?: boolean }[] = [
   { label: '登录名', sort: 'login_name', w: 116 },
-  { label: '等级', w: 84 },
-  { label: '有效期', sort: 'expires_at', w: 144 },
-  { label: '状态', w: 118 },
-  { label: '创建时间', sort: 'created_at', w: 140 },
-  { label: '最近活跃', sort: 'last_seen_at', w: 92 },
-  { label: '媒体', sort: 'tracks', w: 144, right: true },
-  { label: '列表 / 占用', w: 114, right: true },
-  { label: '操作', w: 214 },
+  { label: '等级', w: 68 },
+  { label: '有效期', sort: 'expires_at', w: 132 },
+  { label: '状态', w: 112 },
+  { label: '创建时间', sort: 'created_at', w: 132 },
+  { label: '最近活跃', sort: 'last_seen_at', w: 72 },
+  { label: '音频', w: 48, right: true },
+  { label: '视频', w: 48, right: true },
+  { label: '列表数', w: 52, right: true },
+  { label: '占用', w: 76, right: true },
+  { label: '操作', w: 176 },
 ];
 
 function dayStart(s: string): number | undefined {
@@ -83,17 +90,29 @@ function addMonthsTs(unix: number, months: number): number {
   return Math.floor(c.getTime() / 1000);
 }
 
+/** 日期时间两段式：日期正常色、时分淡灰小一号。有效期和创建时间共用同一套，
+ *  两列的视觉重量才一致；`tabular-nums` 让上下行的数字竖着对齐。 */
+function dtCell(unix: number, cls = '') {
+  const [d, t] = fmtTime(unix).split(' ');
+  return (
+    <span class={cls ? `dt ${cls}` : 'dt'}>
+      <span>{d}</span><span class="dt-t">{t}</span>
+    </span>
+  );
+}
+
 function expiryCell(a: AdminAccount) {
-  if (a.admin) return <span class="muted">永久</span>;
+  // 管理员的有效期没有含义（永远是管理员），留一道横线，别写「永久」让人以为也能改
+  if (a.admin) return <span class="muted">—</span>;
   if (a.tier === 'free') return <span class="muted">—</span>;
-  if (a.tier_expires_at == null) return <span>永久</span>;
+  if (a.tier_expires_at == null) return <span class="perm">永久</span>;
   const now = Math.floor(Date.now() / 1000);
   if (a.tier_expires_at <= now) return <span class="text-bad">已过期</span>;
   const soon = a.tier_expires_at - now <= 30 * 86400;
   // 列里只到分钟；鼠标停上去看秒（改有效期是精确到秒的）
   return (
-    <span class={soon ? 'text-warn' : ''} title={fmtDateTime(a.tier_expires_at)}>
-      {fmtTime(a.tier_expires_at)}
+    <span title={fmtDateTime(a.tier_expires_at)}>
+      {dtCell(a.tier_expires_at, soon ? 'text-warn' : '')}
     </span>
   );
 }
@@ -121,12 +140,13 @@ function activeText(unix: number | null): string {
   return days >= 30 ? `${days} 天前` : relTime(unix);
 }
 
-/** 创建时间：日期正常色、时分弱化，整体不用等宽字体。 */
-function timeCell(unix: number) {
-  const [d, t] = fmtTime(unix).split(' ');
+/** 占用：数字与单位拆成两个 span，单位固定宽度左对齐——不这么拆，
+ *  「1.2 GB」和「980 MB」的右边缘就对不齐（数字宽度不同，单位会被顶来顶去）。 */
+function byteCell(n: number) {
+  const p = fmtBytesParts(n);
   return (
     <>
-      <span>{d}</span> <span class="muted time-part">{t}</span>
+      <span>{p.num}</span><span class="unit">{p.unit}</span>
     </>
   );
 }
@@ -376,7 +396,11 @@ export function AccountsPage() {
       : `将设为 ${fmtDateTime(expTs)}（还剩 ${Math.max(0, Math.ceil((expTs - nowSec) / 86400))} 天）。`;
   const pages = data ? Math.max(1, Math.ceil(data.total / data.size)) : 1;
 
-  /** 行内操作：管理员只有重置密码；其余按状态给「撤销注销 / 恢复」，风险项收进「更多」。 */
+  /** 行内操作：管理员只有重置密码；其余按状态给「撤销注销 / 恢复」，风险项收进「更多」。
+   *
+   *  槽位是固定的 [改有效期] [重置密码] [⋯]：管理员行没有改有效期，用一枚隐藏的同字按钮占位，
+   *  这样三种行（有数据 / 全 0 / 管理员）的「重置密码」落在同一条竖线上，不往左偏。
+   */
   function rowOps(a: AdminAccount) {
     const openPw = () => {
       setExpFor(null);
@@ -385,29 +409,35 @@ export function AccountsPage() {
       setPw1('');
       setPw2('');
     };
-    if (a.admin) {
-      return <button type="button" class="text-btn" disabled={busy} onClick={openPw}>重置密码</button>;
-    }
     const more = [];
-    if (a.status === 'active') {
+    if (a.admin) {
+      // 管理员没有更多操作
+    } else if (a.status === 'active') {
       more.push({
         text: a.tier === 'full' ? '设为免费' : '设为完整版',
         onClick: () => { setExpFor(null); setPwFor(null); setTierFor(a); setTierMonths('6m'); },
       });
-      more.push({ text: '停用', danger: true, onClick: () => void doStatus(a, 'disabled') });
+      more.push({ text: '停用', danger: true, divider: true, onClick: () => void doStatus(a, 'disabled') });
     } else if (a.status === 'disabled') {
       more.push({ text: '恢复', onClick: () => void doStatus(a, 'active') });
     } else {
       more.push({ text: '撤销注销', onClick: () => void doRestore(a) });
-      more.push({ text: '停用', danger: true, onClick: () => void doStatus(a, 'disabled') });
+      more.push({ text: '停用', danger: true, divider: true, onClick: () => void doStatus(a, 'disabled') });
     }
     return (
       <div class="row-ops">
         {a.tier === 'full' ? (
           <button type="button" class="text-btn" disabled={busy} onClick={() => openExpiry(a)}>改有效期</button>
-        ) : null}
+        ) : (
+          // 占位：字相同、只是看不见，宽度天然一致（不写死 px，字体变了也不会错位）
+          <span class="text-btn op-ph" aria-hidden="true">改有效期</span>
+        )}
         <button type="button" class="text-btn" disabled={busy} onClick={openPw}>重置密码</button>
-        <Menu label="更多 ⋯" ariaLabel={`${a.login_name} 的更多操作`} align="right" disabled={busy} items={more} />
+        {a.admin ? (
+          <span class="op-ph-icon" aria-hidden="true" />
+        ) : (
+          <Menu variant="icon" ariaLabel="更多操作" align="right" disabled={busy} items={more} />
+        )}
       </div>
     );
   }
@@ -467,11 +497,12 @@ export function AccountsPage() {
           </span>
           <span class="date-range">
             <span class="date-label">创建时间</span>
-            <DateInput label="创建时间开始" value={from} onInput={changeFrom} />
+            <DateInput label="创建时间开始" placeholder="开始日期" value={from} onInput={changeFrom} />
             <span class="muted">至</span>
-            <DateInput label="创建时间截止" value={to} onInput={changeTo} />
+            <DateInput label="创建时间截止" placeholder="结束日期" value={to} onInput={changeTo} />
             <Menu
               label="快捷 ▾"
+              variant="boxed"
               ariaLabel="创建时间快捷范围"
               items={[
                 { text: '今天', onClick: () => applyRange(new Date(), new Date()) },
@@ -582,7 +613,7 @@ export function AccountsPage() {
           <div class={refreshing ? 'table-wrap is-refreshing' : 'table-wrap'}>
             <table class="table accounts-table">
               <colgroup>
-                {COLS.map((c) => <col style={{ width: `${c.w}px` }} />)}
+                {COLS.map((c) => <col style={c.w ? { width: `${c.w}px` } : undefined} />)}
               </colgroup>
               <thead>
                 <tr>
@@ -607,10 +638,14 @@ export function AccountsPage() {
                     <td><span class={`badge badge-${a.tier}`}>{TIER_LABEL[a.tier]}</span></td>
                     <td>{expiryCell(a)}</td>
                     <td>{statusCell(a)}</td>
-                    <td>{timeCell(a.created_at)}</td>
-                    <td class="cell-active">{activeText(a.last_seen_at)}</td>
-                    <td class="num" title={`合计 ${a.media_total}`}>音频 {a.audio} · 视频 {a.video}</td>
-                    <td class="num">{a.playlists} 个 · {fmtBytes(a.bytes)}</td>
+                    <td>{dtCell(a.created_at)}</td>
+                    <td class="cell-active" title={a.last_seen_at ? fmtDateTime(a.last_seen_at) : undefined}>
+                      {activeText(a.last_seen_at)}
+                    </td>
+                    <td class={a.audio ? 'num' : 'num zero'}>{a.audio}</td>
+                    <td class={a.video ? 'num' : 'num zero'}>{a.video}</td>
+                    <td class={a.playlists ? 'num' : 'num zero'}>{a.playlists}</td>
+                    <td class={a.bytes ? 'num' : 'num zero'}>{byteCell(a.bytes)}</td>
                     <td class="cell-ops">{rowOps(a)}</td>
                   </tr>
                 ))}
@@ -619,11 +654,17 @@ export function AccountsPage() {
           </div>
         ) : null}
 
-        {data && data.total > data.size ? (
+        {/* 「共 N 条」常显：只有一页时也告诉人一共多少；空列表交给上面的空状态说话 */}
+        {data && data.items.length ? (
           <div class="box-foot">
-            <button type="button" class="btn small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</button>
-            <span class="small muted">第 {data.page} / {pages} 页 · 共 {data.total} 条</span>
-            <button type="button" class="btn small" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>下一页</button>
+            <span class="small muted">共 {data.total} 条</span>
+            {data.total > data.size ? (
+              <span class="foot-page">
+                <button type="button" class="btn small" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>上一页</button>
+                <span class="small muted">第 {data.page} / {pages} 页</span>
+                <button type="button" class="btn small" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>下一页</button>
+              </span>
+            ) : null}
           </div>
         ) : null}
       </section>

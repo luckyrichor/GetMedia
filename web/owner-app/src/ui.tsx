@@ -135,88 +135,151 @@ export function Segmented({ items, value, onChange, ariaLabel }: {
   );
 }
 
-export interface MenuItem { text: string; onClick: () => void; danger?: boolean }
+export interface MenuItem {
+  text: string;
+  onClick: () => void;
+  danger?: boolean;
+  /** 在这一项**上方**画一条分隔线，用来隔开"危险操作"这一组。 */
+  divider?: boolean;
+}
 
-/** 小下拉菜单：低频/有风险的操作用它收起来（"更多 ⋯"、"快捷"）。
+/** 小下拉菜单：低频/有风险的操作用它收起来（行尾的「⋯」、「快捷」）。
  *
  * 弹层用 `position: fixed` + 打开时算一次坐标：表格外面套着 `overflow: auto` 的滚动容器，
  * 用 absolute 会被裁掉一半；fixed 的包含块是视口，不受祖先 overflow 影响。
+ * 下方放不下就翻到上方；`align="right"` 时右边缘与按钮右边缘对齐。
  * 滚动/点别处/Esc 都关——坐标是打开那一刻算的，滚走就不准了。
+ * 键盘：↑↓ 移动、Home/End 跳首尾、Enter 选中（按钮原生）、Esc 关闭并把焦点还给按钮。
  */
-export function Menu({ label, items, ariaLabel, align = 'left', disabled }: {
-  label: ComponentChildren;
+export function Menu({ label, items, ariaLabel, align = 'left', disabled, variant = 'ghost', title }: {
+  label?: ComponentChildren;
   items: MenuItem[];
   ariaLabel: string;
   align?: 'left' | 'right';
   disabled?: boolean;
+  /** ghost = 裸文字；boxed = 跟输入框同款边框（筛选栏的「快捷」）；icon = 32×32 图标按钮。
+   *  注意别叫 `field`：styles.css 里 `.field` 是表单行（`display: grid` + 下边距），会串味。 */
+  variant?: 'ghost' | 'boxed' | 'icon';
+  title?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const root = useRef<HTMLSpanElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
     const onScroll = () => setOpen(false);
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
     window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', onScroll);
     return () => {
       document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('resize', onScroll);
     };
   }, [open]);
 
+  // 打开后把焦点放到第一项，↑↓ 立刻可用
+  useEffect(() => {
+    if (!open) return;
+    const els = pop.current?.querySelectorAll<HTMLElement>('[role="menuitem"]');
+    els?.[active]?.focus();
+  }, [open, active]);
+
   /** 贴在按钮下方；下面放不下就翻到上方，左右按 align 对齐并夹在视口内。 */
   function toggle() {
     const r = root.current?.getBoundingClientRect();
     if (r) {
-      const w = 176;
-      const h = items.length * 34 + 10;
+      const w = 168;
+      const h = items.length * 36 + 8 + items.filter((i) => i.divider).length * 9;
       const below = r.bottom + 6;
       const top = below + h > window.innerHeight - 8 ? Math.max(8, r.top - h - 6) : below;
       const raw = align === 'right' ? r.right - w : r.left;
       const left = Math.min(Math.max(8, raw), Math.max(8, window.innerWidth - w - 8));
       setPos({ top, left });
+      setActive(0);
     }
     setOpen((v) => !v);
   }
+
+  function onMenuKey(e: KeyboardEvent) {
+    const n = items.length;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive((i) => (i + 1) % n);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((i) => (i - 1 + n) % n);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      setActive(0);
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      setActive(n - 1);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setOpen(false);
+      trigger.current?.focus();
+    } else if (e.key === 'Tab') {
+      setOpen(false);
+    }
+  }
+
+  const btnClass = ['menu-btn', variant === 'icon' ? 'icon' : '', variant === 'boxed' ? 'boxed' : '', open ? 'on' : '']
+    .filter(Boolean).join(' ');
 
   return (
     <span class="menu-wrap" ref={root}>
       <button
         type="button"
-        class={open ? 'menu-btn on' : 'menu-btn'}
+        ref={trigger}
+        class={btnClass}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={ariaLabel}
+        title={title ?? (variant === 'icon' ? ariaLabel : undefined)}
         disabled={disabled}
         onClick={toggle}
+        onKeyDown={(e) => {
+          if (!open && e.key === 'ArrowDown') {
+            e.preventDefault();
+            toggle();
+          }
+        }}
       >
-        {label}
+        {variant === 'icon' ? <span aria-hidden="true">⋯</span> : label}
       </button>
       {open ? (
-        <div class="menu-pop" role="menu" aria-label={ariaLabel} style={{ top: `${pos.top}px`, left: `${pos.left}px` }}>
-          {items.map((it) => (
-            <button
-              type="button"
-              role="menuitem"
-              class={it.danger ? 'menu-item danger' : 'menu-item'}
-              onClick={() => {
-                setOpen(false);
-                it.onClick();
-              }}
-            >
-              {it.text}
-            </button>
+        <div
+          class="menu-pop"
+          role="menu"
+          aria-label={ariaLabel}
+          ref={pop}
+          style={{ top: `${pos.top}px`, left: `${pos.left}px` }}
+          onKeyDown={onMenuKey}
+        >
+          {items.map((it, i) => (
+            <>
+              {it.divider ? <div class="menu-sep" role="separator" /> : null}
+              <button
+                type="button"
+                role="menuitem"
+                class={[it.danger ? 'menu-item danger' : 'menu-item', i === active ? 'active' : ''].filter(Boolean).join(' ')}
+                onClick={() => {
+                  setOpen(false);
+                  it.onClick();
+                }}
+                onMouseEnter={() => setActive(i)}
+              >
+                {it.text}
+              </button>
+            </>
           ))}
         </div>
       ) : null}
@@ -225,6 +288,15 @@ export function Menu({ label, items, ariaLabel, align = 'left', disabled }: {
 }
 
 const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+/** 体积拆成"数字 + 单位"两段：占用列要按数字右对齐，单位单独一栏。 */
+export function fmtBytesParts(n: number | null | undefined): { num: string; unit: string } {
+  if (n == null || !Number.isFinite(n) || n < 0) return { num: '—', unit: '' };
+  let v = n, i = 0;
+  while (v >= 1024 && i < UNITS.length - 1) { v /= 1024; i++; }
+  return { num: i === 0 ? String(v) : v.toFixed(v < 10 ? 1 : 0), unit: UNITS[i] ?? 'B' };
+}
+
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n) || n < 0) return '—';
   let v = n, i = 0;
@@ -274,24 +346,27 @@ export function relTime(unix: number | null | undefined, now = Date.now()): stri
  * 「年/月/日」，英文环境是「yyyy/mm/dd」。这些筛选框旁边本来就有「从 / 到 / 提交时间」
  * 之类的说明，那串占位纯属噪音，所以：
  *
- * - 没值也没聚焦：把内部字段涂透明，框里干干净净（styles.css 的 `input.date-input`）；
- * - 聚焦但仍没值：盖一行自己的「年/月/日」，不让系统那串英文/数字格式露出来；
+ * - 没值也没聚焦：把内部字段涂透明，盖一行调用方给的占位（「开始日期」），
+ *   框里不至于空得像坏了；
+ * - 聚焦但仍没值：换成自己的「年/月/日」，不让系统那串英文/数字格式露出来；
  * - 一按数字键就撤掉这行字、把原生字段放回来，否则看不见正在输入的数字。
  *
  * 只有数字键算"开始手输"。空框上按退格/方向键什么都不会发生，没必要把英文占位放回来。
  * 点一下直接弹日历——空着时框里什么都没写，不去瞄右下角的小图标也能用。
  */
-export function DateInput({ value, onInput, label, class: cls }: {
+export function DateInput({ value, onInput, label, placeholder, class: cls }: {
   value: string;
   onInput: (v: string) => void;
   label: string;
+  /** 没聚焦、没值时的占位文案；不给就什么都不显示（保持原来的干净空框） */
+  placeholder?: string;
   class?: string;
 }) {
   const [focused, setFocused] = useState(false);
   const [typing, setTyping] = useState(false);
-  const hint = focused && !value && !typing;
+  const hintText = value || typing ? '' : focused ? '年/月/日' : placeholder ?? '';
   return (
-    <span class={`date-wrap${hint ? ' hinting' : ''}`}>
+    <span class={`date-wrap${focused && hintText ? ' hinting' : ''}`}>
       <input
         type="date"
         class={`date-input${value ? ' has-value' : ''}${cls ? ` ${cls}` : ''}`}
@@ -317,7 +392,7 @@ export function DateInput({ value, onInput, label, class: cls }: {
           }
         }}
       />
-      {hint ? <span class="date-hint" aria-hidden="true">年/月/日</span> : null}
+      {hintText ? <span class="date-hint" aria-hidden="true">{hintText}</span> : null}
     </span>
   );
 }
