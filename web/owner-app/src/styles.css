@@ -923,11 +923,14 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .accounts-table tbody tr:hover { background: var(--bg); }
 .accounts-table .cell-name { padding-left: 12px; }
 /* 登录名是这行唯一的标识，列只有 84px（内容 66px），长一点的账号名一定被裁。
-   跟批量提取的博主昵称同一套：格子里横向滚 + 右侧渐隐，别让人只能靠 tooltip 猜。 */
+   跟批量提取的博主昵称同一套：格子里横向滚 + 右侧渐隐，别让人只能靠 tooltip 猜。
+   底部 6px 留白是给覆盖式滚动条的：macOS 的滚动条浮在容器底边上、不占布局高度，
+   不留白就直接压在文字上（单个提取的作品列踩过这个坑）。 */
 .accounts-table .cell-name .name {
   font-weight: 650; line-height: 1.4;
   overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
   overscroll-behavior-x: contain;
+  padding-bottom: 6px;
   mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
 }
@@ -1353,11 +1356,14 @@ td.zero .bytes-u { color: inherit; }
 .cr-table th.mid, .cr-table td.mid { text-align: center; }
 .cr-table .mid { font-variant-numeric: tabular-nums; }
 /* 博主：昵称一行（加粗、超出就在格子里横向滚）+「平台 · 用户 ID」一行。
-   右侧加一道 16px 渐隐：长昵称被裁掉时能看出「后面还有」，短昵称不受影响。 */
+   右侧加一道 16px 渐隐：长昵称被裁掉时能看出「后面还有」，短昵称不受影响。
+   底部 6px 留白给覆盖式滚动条——macOS 的滚动条浮在容器底边上、不占布局高度，
+   不留白就会压在昵称上（单个提取的作品列踩过这个坑）。 */
 .cr-table .who-name {
   font-weight: 650; line-height: 1.4;
   overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
   overscroll-behavior-x: contain;
+  padding-bottom: 6px;
   mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
@@ -1444,21 +1450,23 @@ td.zero .bytes-u { color: inherit; }
 }
 /* 作品：标题一行 + 作品号（失败时换成失败原因）一行。两行都可能很长，
    所以跟批量页的博主昵称用同一套办法——格子里横向滚 + 右侧 16px 渐隐提示「后面还有」，
-   而不是省略号：标题被截掉一半时，光看 tooltip 不够直观，滚一下能看到完整那句。 */
-.ex-table .t-main {
-  font-weight: 650; line-height: 1.4;
+   而不是省略号：标题被截掉一半时，光看 tooltip 不够直观，滚一下能看到完整那句。
+
+   **滚动条必须挂在两行外面这一层**（`.t-scroll`），不能各挂一行：macOS 是覆盖式滚动条，
+   它浮在滚动容器自己的底边上、不占布局高度，挂在 `.t-main` 上就直接压在标题文字上。
+   挂到外层后滚动条落在这层底部的 6px 留白里，两行文字都碰不到。
+   6px 是量过的：标题 18.4 + 副行 17.5 + 6 = 41.9，行高从 56 抬到 58，一屏少不了一行。 */
+.ex-table .t-scroll {
   overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
   overscroll-behavior-x: contain;
+  padding-bottom: 6px;
   mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
+.ex-table .t-main { font-weight: 650; line-height: 1.4; }
 .ex-table .t-sub {
   font-size: 0.78rem; color: var(--muted); line-height: 1.4;
   font-variant-numeric: tabular-nums;
-  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
-  overscroll-behavior-x: contain;
-  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
 /* 失败原因写在这一行：`.t-sub` 的灰色要压得住，所以带上同样的前缀 */
 .ex-table .t-sub.bad-text { color: #a4271c; }

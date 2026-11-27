@@ -415,14 +415,19 @@ export function ExtractPage() {
                     <tr data-job={j.id}>
                       <td class="e-no muted">{idx + 1}</td>
                       <td class="e-title">
-                        <div class="t-main" title={j.title || j.input}>{j.title || j.input}</div>
-                        {/* 失败的任务把原因写在这行（不藏在 tooltip 里）：这条列宽够，
-                            而且失败时作品号没什么用，位置让给原因更值 */}
-                        {j.status === 'failed' && j.error_detail ? (
-                          <div class="t-sub bad-text" title={j.error_detail}>{j.error_detail}</div>
-                        ) : (
-                          <div class="t-sub">{j.video_id || '—'}</div>
-                        )}
+                        {/* 两行共用一个横向滚动容器：滚动条落在「作品号 / 失败原因」那一行下方的
+                            留白里，不会像原来那样浮在标题文字上把它盖住（macOS 是覆盖式滚动条，
+                            浮在内容上方、不占布局高度，所以必须留出真实的空白给它）。 */}
+                        <div class="t-scroll">
+                          <div class="t-main" title={j.title || j.input}>{j.title || j.input}</div>
+                          {/* 失败的任务把原因写在这行（不藏在 tooltip 里）：这条列宽够，
+                              而且失败时作品号没什么用，位置让给原因更值 */}
+                          {j.status === 'failed' && j.error_detail ? (
+                            <div class="t-sub bad-text" title={j.error_detail}>{j.error_detail}</div>
+                          ) : (
+                            <div class="t-sub">{j.video_id || '—'}</div>
+                          )}
+                        </div>
                       </td>
                       <td class="e-who">
                         <div class="who-name" title={j.uploader ?? ''}>{j.uploader || '昵称未知'}</div>
