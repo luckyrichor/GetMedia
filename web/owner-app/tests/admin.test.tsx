@@ -395,9 +395,17 @@ describe('权限管理', () => {
 });
 
 describe('邀请码', () => {
+  /** 分段控件上的数量：页面为三种状态各发一条 `size=1` 的请求，只取 total。 */
+  const countRoutes = (unused: number, used: number, expired: number) => ({
+    'GET /v2/admin/invites?page=1&status=unused&size=1': { json: { total: unused, page: 1, size: 1, items: [] } },
+    'GET /v2/admin/invites?page=1&status=used&size=1': { json: { total: used, page: 1, size: 1, items: [] } },
+    'GET /v2/admin/invites?page=1&status=expired&size=1': { json: { total: expired, page: 1, size: 1, items: [] } },
+  });
+  const GEN = '＋ 生成邀请码';
   test('生成 2 个：明文出现一次、可下载；关闭后明文消失', async () => {
     const list = { json: { total: 0, page: 1, size: 50, items: [] } };
     server(ownerRoutes({
+      ...countRoutes(0, 0, 0),
       'GET /account/me': { json: ADMIN_ME },
       'GET /v2/admin/invites?page=1': list,
       'POST /v2/admin/invites': { json: { codes: ['AAA-111', 'BBB-222'], count: 2, expires_at: NOW + 86400 } },
@@ -406,7 +414,7 @@ describe('邀请码', () => {
     await until(() => text().includes('还没有生成过邀请码'));
 
     await setInput('input#inv-count', '2');
-    await click(button('生成'));
+    await click(button(GEN));
     await until(() => text().includes('已生成 2 个'));
     expect(text()).toContain('AAA-111');
     expect(text()).toContain('BBB-222');
@@ -421,6 +429,7 @@ describe('邀请码', () => {
 
   test('数量越界（51）：就地提示、按钮禁用、一个请求都不发', async () => {
     server(ownerRoutes({
+      ...countRoutes(0, 0, 0),
       'GET /account/me': { json: ADMIN_ME },
       'GET /v2/admin/invites?page=1': { json: { total: 0, page: 1, size: 50, items: [] } },
     }));
@@ -430,7 +439,7 @@ describe('邀请码', () => {
     await setInput('input#inv-count', '51');
     await until(() => text().includes('数量要是 1–50 之间的整数'));
 
-    const gen = button('生成');
+    const gen = button(GEN);
     expect(gen.disabled).toBe(true);
     await click(gen);
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
@@ -438,6 +447,7 @@ describe('邀请码', () => {
 
   test('列表：状态徽章与使用人；未使用的码不显示明文', async () => {
     server(ownerRoutes({
+      ...countRoutes(1, 1, 0),
       'GET /account/me': { json: ADMIN_ME },
       'GET /v2/admin/invites?page=1': {
         json: {
@@ -452,10 +462,146 @@ describe('邀请码', () => {
     mount('/invites');
     await until(() => text().includes('alice'));
     expect(text()).toContain('luckyrichor'); // 页头账号名，确认进的是管理员会话
-    expect(document.querySelectorAll('.tag.used').length).toBe(1);
+    expect(document.querySelectorAll('.badge-used').length).toBe(1);
+    expect(document.querySelectorAll('.badge-unused').length).toBe(1);
     // 列表只有元数据，没有码明文
     expect(text()).not.toMatch(/[A-Z0-9]{4}-[A-Z0-9]{4}/);
   });
+  test('工具栏：分段控件带各状态数量，点一下直接切筛选（取代原来的下拉框）', async () => {
+    server(ownerRoutes({
+      ...countRoutes(3, 5, 2),
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/invites?page=1': {
+        json: { total: 10, page: 1, size: 50, items: [
+          { id: 1, state: 'unused', created_at: NOW - 60, expires_at: NOW + 86340, used_at: null, used_by: null },
+        ] },
+      },
+      'GET /v2/admin/invites?page=1&status=used': {
+        json: { total: 5, page: 1, size: 50, items: [
+          { id: 2, state: 'used', created_at: NOW - 600, expires_at: NOW + 85800, used_at: NOW - 300, used_by: 'alice' },
+        ] },
+      },
+    }));
+    mount('/invites');
+    // 三条 size=1 的请求回来之前，分段控件上不该有数字
+    await until(() => (seg('未使用')?.textContent ?? '').includes('3'));
+    expect(seg('全部').textContent).toBe('全部10');
+    expect(seg('已使用').textContent).toBe('已使用5');
+    expect(seg('已过期').textContent).toBe('已过期2');
+    // 原来那个孤立的下拉框已经没有了，换成了同一块工具栏里的分段控件
+    expect(document.querySelector('[role="tablist"][aria-label="按状态筛选"]')).not.toBeNull();
+    expect(document.querySelector('.select-trigger')).toBeNull();
+
+    await click(seg('已使用'));
+    await until(() => calls.some((c) => c.search.includes('status=used')));
+    await until(() => text().includes('alice'));
+  });
+
+  test('步进按钮：+ / − 改数量；空值与越界都禁用生成', async () => {
+    server(ownerRoutes({
+      ...countRoutes(0, 0, 0),
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/invites?page=1': { json: { total: 0, page: 1, size: 50, items: [] } },
+    }));
+    mount('/invites');
+    await until(() => text().includes('生成数量'));
+
+    const input = () => document.querySelector('input#inv-count') as HTMLInputElement;
+    const inc = () => document.querySelector('button[aria-label="增加一个"]') as HTMLButtonElement;
+    const dec = () => document.querySelector('button[aria-label="减少一个"]') as HTMLButtonElement;
+
+    // 默认 1：− 已经到底，禁用
+    expect(input().value).toBe('1');
+    expect(dec().disabled).toBe(true);
+    await click(inc());
+    expect(input().value).toBe('2');
+    await click(dec());
+    expect(input().value).toBe('1');
+
+    // 上限 50：+ 禁用
+    await setInput('input#inv-count', '50');
+    expect(inc().disabled).toBe(true);
+    expect(button(GEN).disabled).toBe(false);
+
+    // 空值也算越界：提示 + 禁用，且一个请求都不发
+    await setInput('input#inv-count', '');
+    await until(() => text().includes('数量要是 1–50 之间的整数'));
+    expect(button(GEN).disabled).toBe(true);
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  test('生成成功：toast 回执，新生成的几行短暂高亮', async () => {
+    let first = true;
+    const fresh = {
+      json: { total: 2, page: 1, size: 50, items: [
+        { id: 11, state: 'unused', created_at: NOW, expires_at: NOW + 86400, used_at: null, used_by: null },
+        { id: 12, state: 'unused', created_at: NOW, expires_at: NOW + 86400, used_at: null, used_by: null },
+      ] },
+    };
+    server(ownerRoutes({
+      ...countRoutes(0, 0, 0),
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/invites?page=1': () => {
+        if (first) { first = false; return { json: { total: 0, page: 1, size: 50, items: [] } }; }
+        return fresh;
+      },
+      'POST /v2/admin/invites': { json: { codes: ['AAA-111', 'BBB-222'], count: 2, expires_at: NOW + 86400 } },
+    }));
+    mount('/invites');
+    await until(() => text().includes('还没有生成过邀请码'));
+
+    await setInput('input#inv-count', '2');
+    await click(button(GEN));
+    await until(() => document.querySelectorAll('tbody tr').length === 2);
+
+    expect(document.querySelector('.toast')?.textContent).toBe('已生成 2 个邀请码');
+    // 两行都标了 inv-fresh（2 秒后自动摘掉，见页面里的 FRESH_MS）
+    expect(document.querySelectorAll('tbody tr.inv-fresh').length).toBe(2);
+  });
+
+  test('生成失败：错误 toast、数量不清空、按钮恢复可点', async () => {
+    server(ownerRoutes({
+      ...countRoutes(0, 0, 0),
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/invites?page=1': { json: { total: 0, page: 1, size: 50, items: [] } },
+      'POST /v2/admin/invites': { status: 500, json: { error: 'internal_error', message: '服务器出错了' } },
+    }));
+    mount('/invites');
+    await until(() => text().includes('生成数量'));
+
+    await setInput('input#inv-count', '7');
+    await click(button(GEN));
+    await until(() => document.querySelector('.toast.toast-err') !== null);
+
+    expect((document.querySelector('input#inv-count') as HTMLInputElement).value).toBe('7');
+    expect(button(GEN).disabled).toBe(false);
+    expect(text()).not.toContain('已生成');
+  });
+
+  test('复制单个邀请码：写入剪贴板、图标短暂变 ✓、带「复制邀请码」提示', async () => {
+    const write = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: write }, configurable: true });
+    server(ownerRoutes({
+      ...countRoutes(0, 0, 0),
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/invites?page=1': { json: { total: 0, page: 1, size: 50, items: [] } },
+      'POST /v2/admin/invites': { json: { codes: ['AAA-111'], count: 1, expires_at: NOW + 86400 } },
+    }));
+    mount('/invites');
+    await until(() => text().includes('生成数量'));
+
+    await click(button(GEN));
+    await until(() => text().includes('AAA-111'));
+
+    const btn = document.querySelector('.inv-copy') as HTMLElement;
+    expect(btn.getAttribute('title')).toBe('复制邀请码');
+    await click(btn);
+    expect(write).toHaveBeenCalledWith('AAA-111');
+    await until(() => document.querySelector('.inv-copy')?.textContent === '✓');
+    // 邀请码本身用等宽字体，方便分 0/O、1/l
+    expect(document.querySelector('.inv-code')?.className).toBe('inv-code');
+  });
+
   test('换状态筛选：旧列表留在原位（只淡出），不闪骨架', async () => {
     let release!: (v: unknown) => void;
     const gate = new Promise((r) => { release = r; });
@@ -467,6 +613,7 @@ describe('邀请码', () => {
     };
     let first = true;
     server(ownerRoutes({
+      ...countRoutes(0, 1, 0),
       'GET /account/me': { json: ADMIN_ME },
       'GET /v2/admin/invites': () => {
         if (first) { first = false; return page1; }
@@ -476,7 +623,7 @@ describe('邀请码', () => {
     mount('/invites');
     await until(() => text().includes('alice'));
 
-    await choose('按状态筛选', '已使用');
+    await click(seg('已使用'));
 
     expect(document.querySelector('.skeleton')).toBeNull();
     expect(document.querySelectorAll('tbody tr').length).toBe(1);

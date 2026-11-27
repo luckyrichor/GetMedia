@@ -14,7 +14,7 @@ import { messageFor } from '@shared/errors';
 import { ownerApi, type AdminAccount, type AdminAccountPage, type Tier } from '../api';
 import { Select } from '../select';
 import {
-  DateInput, ErrorBox, Loading, Menu, Modal, NoAccess, Segmented,
+  DateInput, DateTimeCell, ErrorBox, Loading, Menu, Modal, NoAccess, Segmented,
   fmtBytesParts, fmtDateTime, fmtTime, relTime, useLoad,
 } from '../ui';
 
@@ -93,19 +93,9 @@ function addMonthsTs(unix: number, months: number): number {
   return Math.floor(c.getTime() / 1000);
 }
 
-/** 日期时间两段式：日期正常色、时分秒淡灰小一号。有效期和创建时间共用同一套，
- *  两列的视觉重量才一致；`tabular-nums` 让上下行的数字竖着对齐。
- *
- *  **精确到秒**：改有效期本来就是按秒设的，只显示到分钟的话，设完再改一次都看不出差别
- *  （同一分钟内两次设置会长得一模一样）。秒用更小的字号，不跟日期抢视线。 */
-function dtCell(unix: number, cls = '') {
-  const s = fmtDateTime(unix);        // 2026-11-27 08:09:15
-  return (
-    <span class={cls ? `dt ${cls}` : 'dt'}>
-      <span>{s.slice(0, 10)}</span><span class="dt-t">{s.slice(11)}</span>
-    </span>
-  );
-}
+/** 日期时间两段式（日期 + 精确到秒的时分秒）由 ui.tsx 的 `DateTimeCell` 统一提供，
+ *  邀请码页也用同一个，两页的时间看起来才是一套东西。 */
+const dtCell = (unix: number, cls = '') => <DateTimeCell at={unix} cls={cls} />;
 
 function expiryCell(a: AdminAccount) {
   // 管理员的有效期没有含义（永远是管理员），留一道横线，别写「永久」让人以为也能改

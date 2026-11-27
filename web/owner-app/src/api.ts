@@ -581,9 +581,11 @@ export const ownerApi = {
   // 邀请码（仅 admin）：明文只在生成响应里出现一次
   adminCreateInvites: (count: number) =>
     api.request<{ codes: string[]; count: number; expires_at: number }>('POST', '/v2/admin/invites', { count }),
-  adminInvites: (status = '', page = 1) => {
+  /** `size` 只给"只要一个 total"的场合用（分段控件上的各状态数量）：传 1 就只回一条。 */
+  adminInvites: (status = '', page = 1, size?: number) => {
     const p = new URLSearchParams({ page: String(page) });
     if (status) p.set('status', status);
+    if (size) p.set('size', String(size));
     return api.request<InvitePage>('GET', `/v2/admin/invites?${p.toString()}`);
   },
 

@@ -444,3 +444,47 @@ export function Field({ label, value, mono }: { label: string; value: ComponentC
     </div>
   );
 }
+
+/** 表格里的时间：日期一段（正常色）+ 时分秒一段（小一号、淡灰），精确到秒但整格不显得笨重。
+ *
+ *  `at` 为空给「—」（邀请码的到期时间 / 使用时间本来就可能是空）。
+ *  `cls` 用来整体染色，比如快到期给 `text-warn`、已过期给 `text-bad`。
+ */
+export function DateTimeCell({ at, cls }: { at: number | null | undefined; cls?: string }) {
+  if (!at) return <>—</>;
+  const s = fmtDateTime(at);
+  return (
+    <span class={cls ? `dt ${cls}` : 'dt'}>
+      <span>{s.slice(0, 10)}</span><span class="dt-t">{s.slice(11)}</span>
+    </span>
+  );
+}
+
+export type ToastKind = 'ok' | 'err';
+
+/** 轻量提示条：底部居中浮一条，到点自己消失。
+ *
+ *  用它而不是把结果塞进页面流里——生成/复制这类"一次性回执"不该把下面的内容推下去。
+ *  返回 `node` 直接放进页面，`show` 随时可以再叫。同一个页面只留一条（新的顶掉旧的）。
+ */
+export function useToast(timeout = 2600): {
+  show: (text: string, kind?: ToastKind) => void;
+  node: ComponentChildren;
+} {
+  const [t, setT] = useState<{ id: number; text: string; kind: ToastKind } | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const clear = () => {
+    if (timer.current !== undefined) window.clearTimeout(timer.current);
+    timer.current = undefined;
+  };
+  useEffect(() => clear, []);
+  const show = (text: string, kind: ToastKind = 'ok') => {
+    clear();
+    setT({ id: Date.now(), text, kind });
+    timer.current = window.setTimeout(() => setT(null), timeout);
+  };
+  const node = t ? (
+    <div class={`toast toast-${t.kind}`} role="status" aria-live="polite">{t.text}</div>
+  ) : null;
+  return { show, node };
+}

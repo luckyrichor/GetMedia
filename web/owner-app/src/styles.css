@@ -970,6 +970,132 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   }
 }
 
+/* ============================================================================
+   邀请码页
+   和权限管理页同一套：白底圆角卡片、间距只用 4/8/12/16/24、表格固定列宽单行。
+   自上而下：标题 → 工具栏（分段筛选 + 生成区）→ 本次生成结果 → 表格卡片 → 共 N 条。
+   ========================================================================== */
+/* 工具栏：左筛选、右生成；窄屏整块换行，分段控件一行、生成区一行 */
+.inv-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px 16px;
+  flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 12px; padding: 10px 16px; margin-bottom: 12px;
+}
+.inv-gen { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
+.inv-gen-k { font-size: 0.82rem; color: var(--muted); white-space: nowrap; }
+.inv-gen-btn { height: 36px; padding: 0 14px; font-size: 0.9rem; white-space: nowrap; }
+
+/* 步进输入框：白底 + 1px 浅灰边 + 8px 圆角，和筛选栏的日期框、下拉同一副样子 */
+.stepper {
+  display: inline-flex; align-items: center; height: 36px; box-sizing: border-box;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+}
+.stepper:focus-within { border-color: var(--accent); }
+.stepper.is-bad { border-color: #a4271c; }
+.stepper-btn {
+  width: 30px; height: 34px; border: 0; background: transparent; color: var(--muted);
+  font: inherit; font-size: 1rem; line-height: 1; cursor: pointer;
+}
+.stepper-btn:hover:not(:disabled) { background: var(--bg); color: var(--text); }
+.stepper-btn:disabled { opacity: 0.45; cursor: default; }
+/* 全局的 `input[type=number]` 带灰底 + 边框 + width:100%，这里必须盖掉：
+   选择器写成两级（.stepper .stepper-input）才压得住 `input[type="number"]` 的权重 */
+.stepper .stepper-input {
+  width: 3.25rem; height: 34px; padding: 0; border: 0; background: transparent; color: var(--text);
+  font: inherit; font-size: 0.9rem; text-align: center; font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield; appearance: textfield;
+}
+.stepper .stepper-input:focus-visible { outline: none; }
+/* 数字输入框自带的上下箭头挤在 3.25rem 里很难看，去掉；加减交给两边的按钮 */
+.stepper .stepper-input::-webkit-outer-spin-button,
+.stepper .stepper-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+/* 越界提示：贴在工具栏下方靠右，正好落在输入框和按钮底下，不挤在行内 */
+.inv-err { margin: 0 0 10px; text-align: right; font-size: 0.82rem; }
+
+/* 本次生成结果：明文只出现这一次，所以单独一块，给足存在感 */
+.inv-codes {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 16px; margin-bottom: 12px;
+}
+.inv-codes-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.inv-codes-head h2 { margin: 0; font-size: 0.98rem; }
+.inv-note { font-size: 0.8rem; color: #8a5a00; }
+.inv-codes-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.inv-list {
+  list-style: none; margin: 10px 0 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 6px 8px;
+  max-height: 15rem; overflow: auto;
+}
+/* 一条码一个「码条」：宽度跟着内容走，复制按钮就贴在码右边，不会飘到很远 */
+.inv-row {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 9px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+}
+/* 只有邀请码本身用等宽字体：0/O、1/l 一眼能分清 */
+.inv-code {
+  flex: none; background: transparent; padding: 0; border-radius: 0;
+  font-family: var(--mono); font-size: 0.84rem; letter-spacing: 0.04em;
+  white-space: nowrap; user-select: all;
+}
+.inv-copy {
+  flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--muted); font-size: 0.8rem; line-height: 1; cursor: pointer;
+}
+.inv-copy:hover { background: var(--surface); color: var(--text); }
+.inv-copy.on { color: #1d6b34; }
+
+/* 表格：5 列固定宽度，多余宽度按比例摊给各列（不会出现某一列特别空） */
+.inv-table {
+  --inv-c-state: 96px; --inv-c-created: 152px; --inv-c-expires: 152px;
+  --inv-c-user: 168px; --inv-c-used: 152px;
+  min-width: 720px; table-layout: fixed; border: 0; border-radius: 0; background: none;
+}
+.inv-table th, .inv-table td {
+  padding: 8px 6px; vertical-align: middle; white-space: nowrap; height: 56px;
+}
+.inv-table th { background: var(--bg); font-size: 0.78rem; }
+.inv-table td { font-size: 0.82rem; }
+/* 首尾列留出卡片内边距，和表头、行内容一起贴齐 */
+.inv-table th:first-child, .inv-table td:first-child { padding-left: 16px; }
+.inv-table th:last-child, .inv-table td:last-child { padding-right: 16px; }
+.inv-table tbody tr:hover { background: var(--bg); }
+.inv-table .inv-user { overflow: hidden; text-overflow: ellipsis; }
+/* 刚生成的几行：强调色淡底 2 秒淡出（生成后列表刷新，一眼看到新码落在哪） */
+.inv-fresh { animation: inv-fresh 2s ease-out; }
+@keyframes inv-fresh {
+  from { background: var(--info-bg); }
+  to { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .inv-fresh { animation: none; } }
+
+/* 轻量 toast：底部居中浮一条，不占页面流（生成 / 复制的回执用它） */
+.toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  z-index: 400; max-width: min(90vw, 28rem);
+  padding: 9px 14px; border-radius: 10px; font-size: 0.86rem; line-height: 1.5;
+  background: var(--surface); border: 1px solid var(--line); color: var(--text);
+  box-shadow: 0 12px 30px rgba(8, 11, 16, 0.22);
+  animation: toast-in 0.16s ease-out;
+}
+.toast-err { border-color: #a4271c; color: #a4271c; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-color-scheme: dark) {
+  .toast-err { border-color: #ef9a9a; color: #ef9a9a; }
+}
+
+/* 窄屏：分段控件独占一行（放不下就自己横滚），生成区另起一行靠右 */
+@media (max-width: 720px) {
+  .inv-bar { align-items: stretch; }
+  .inv-bar .seg { max-width: 100%; overflow-x: auto; }
+  .inv-gen { margin-left: 0; width: 100%; }
+  .inv-gen-btn { margin-left: auto; }
+  .inv-err { text-align: left; }
+}
+
 /* ---- 等级徽章：柔和底色，不用高饱和实心 ---- */
 .badge {
   display: inline-block; padding: 2px 9px; border-radius: 999px;
@@ -978,6 +1104,10 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .badge-free { background: var(--bg); color: var(--muted); }
 .badge-full { background: #e8eefe; color: #2458d6; }
 .badge-admin { background: #e6f4ea; color: #1b5e20; }
+/* 邀请码状态：未使用中性灰、已使用蓝、已过期红（和上面的等级徽章同一套柔和底色） */
+.badge-unused { background: var(--bg); color: var(--muted); }
+.badge-used { background: #e8eefe; color: #2458d6; }
+.badge-expired { background: #fdecea; color: #a4271c; }
 
 /* ---- 状态点 ---- */
 .status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -994,9 +1124,10 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .text-warn { color: #8a5a00; }
 
 @media (prefers-color-scheme: dark) {
-  .badge-free { background: #1d232c; color: var(--muted); }
-  .badge-full { background: #1a2742; color: #9db8ff; }
+  .badge-free, .badge-unused { background: #1d232c; color: var(--muted); }
+  .badge-full, .badge-used { background: #1a2742; color: #9db8ff; }
   .badge-admin { background: #14301c; color: #a5d6a7; }
+  .badge-expired { background: #3a1d1d; color: #ef9a9a; }
   .status-ok .dot { background: #66bb6a; }
   .status-warn .dot { background: #e0b567; }
   .status-bad, .menu-item.danger, .text-bad { color: #ef9a9a; }
