@@ -101,10 +101,11 @@ class LibrarySyncRoundTest {
         }
     }
 
-    /** 刚好达到门槛（v3）就放行：别把"≥"写成">"。 */
+    /** 刚好达到门槛（当前是 v5）就放行：别把"≥"写成">"。 */
     @Test fun consentedPrivacyAtMinimumPulls() = runBlocking {
         val f = Fixture(candidates = 0)
-        assertEquals(LibrarySyncRound.Outcome.Idle, f.round.run(session(privacy = 3), SyncUploadDecision.NONE))
+        assertEquals(LibrarySyncRound.Outcome.Idle,
+            f.round.run(session(privacy = LibrarySyncGate.MIN_PRIVACY_FOR_SYNC), SyncUploadDecision.NONE))
         assertEquals(1, f.pulls)
         assertEquals(0, f.uploads)
     }
@@ -157,9 +158,9 @@ class LibrarySyncRoundTest {
         assertTrue(LibrarySyncGate.maySync(session(tier = "OWNER")))
         assertFalse(LibrarySyncGate.maySync(session(tier = "free")))
         assertFalse(LibrarySyncGate.maySync(session(tier = "")))
-        assertFalse(LibrarySyncGate.maySync(session(privacy = 2)))
+        assertFalse(LibrarySyncGate.maySync(session(privacy = LibrarySyncGate.MIN_PRIVACY_FOR_SYNC - 1)))
         assertFalse(LibrarySyncGate.maySync(session(privacy = null)))
         assertFalse(LibrarySyncGate.maySync(session(consentRequired = true)))
-        assertEquals(3, LibrarySyncGate.MIN_PRIVACY_FOR_SYNC)
+        assertEquals(5, LibrarySyncGate.MIN_PRIVACY_FOR_SYNC)
     }
 }

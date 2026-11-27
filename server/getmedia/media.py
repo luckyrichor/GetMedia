@@ -284,6 +284,37 @@ class MediaStore:
         except OSError:
             log.warning("文件删除失败：%s", rel)
 
+    def user_file_names(self, user_id: str) -> set[str]:
+        """注销前收集这个账号名下的所有落盘文件名（曲库条目 + 批量条目）。
+
+        必须先取名字、再删记录：`DELETE FROM users` 会把 tracks / creator_items 一起级联删掉，
+        删完就再也找不到哪几个文件属于这个账号，文件只能一直占着盘。
+        """
+        names: set[str] = set()
+        with self.engine.begin() as c:
+            names |= {r[0] for r in c.execute(
+                text("SELECT media_path FROM tracks WHERE user_id=:u AND media_path IS NOT NULL"),
+                {"u": user_id})}
+            for mp, raw in c.execute(text(
+                    "SELECT ci.media_path, ci.files_json FROM creator_items ci"
+                    " JOIN creator_jobs cj ON cj.id=ci.job_id WHERE cj.user_id=:u"), {"u": user_id}):
+                if mp:
+                    names.add(mp)
+                names |= {m["path"] for m in _files_of(raw).values() if m.get("path")}
+        return names
+
+    def drop_names(self, names: Iterable[str]) -> int:
+        """按文件名把盘上的文件删掉（曲库与批量条目共用两个目录，逐目录试）。"""
+        n = 0
+        for base in (self.s.media_dir, self.s.cache_dir):
+            for name in names:
+                try:
+                    (base / name).unlink()
+                    n += 1
+                except OSError:
+                    pass
+        return n
+
     def _drop_one(self, c, row: dict, storage: str) -> None:
         """删掉一个落盘文件并清掉记录里的文件字段（条目本身保留）。"""
         base = self.dir_for(storage)

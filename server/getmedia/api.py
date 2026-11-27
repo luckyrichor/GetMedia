@@ -355,7 +355,7 @@ def create_app(settings: Settings, *, clock=time.time, alerts: AlertSink | None 
     from .recreations_api import register as register_recreations
     register_recreations(app, require_tier("owner"), engine, clock, media=media_store, audit=svc.audit)
 
-    ops = Ops(engine, settings, fb, alerts, clock)
+    ops = Ops(engine, settings, fb, alerts, clock, media=media_store)
     app.state.ops = ops
     if start_workers:
         fb.start_worker()

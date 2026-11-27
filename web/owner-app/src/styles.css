@@ -202,27 +202,38 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 .track { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 13px; }
 .track.on { border-color: var(--accent); }
 
-/* 一行 = 勾选框 + 序号 + 内容；行内不再放按钮，动作靠单击/双击/多选 */
-.track-row { display: flex; gap: 10px; align-items: flex-start; }
-.track-pick { flex: none; display: flex; padding-top: 4px; }
+/* 一行 = 勾选框 + 序号 + 内容 + 行内按钮（播放/下载/删文件/删除） */
+.track-row { display: flex; gap: 6px; align-items: flex-start; flex-wrap: wrap; }
+/* 勾选框与序号是一对"行首标记"，间距收紧到 4px，别让它们隔着半行空着 */
+.track-pick { flex: none; display: flex; padding-top: 4px; margin-right: -2px; }
 .track-no {
-  flex: none; min-width: 2.2rem; text-align: right; padding-top: 2px;
+  flex: none; min-width: 1.5rem; text-align: right; padding-top: 2px; margin-right: 2px;
   color: var(--muted); font-variant-numeric: tabular-nums; font-size: 0.85rem;
 }
 .track-main {
-  display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left;
+  display: flex; gap: 10px; align-items: flex-start; flex: 1 1 18rem; min-width: 0; text-align: left;
   background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0;
 }
 .track-kind { font-size: 1.1rem; color: var(--accent); width: 1.2rem; flex: none; }
 .track-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .track-title { font-weight: 550; word-break: break-word; cursor: text; }
 .track-badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* 行内按钮：靠右、紧凑；窄屏放不下就整体换到下一行（margin-left:auto 仍贴右） */
+.track-actions { flex: none; display: flex; gap: 6px; align-items: center; margin-left: auto; }
+.track-actions .btn { padding: 3px 9px; font-size: 0.82rem; }
 .player-media { width: 100%; border-radius: 8px; background: #000; }
 audio.player-media { background: none; }
 
-/* 筛选器一行：搜索、平台、排序、时间范围 */
-.filters .search { flex: 1 1 12rem; }
-.filters .search.date { flex: none; width: 9.5rem; }
+/* 筛选器分两行：第一行搜索 + 平台 + 排序，第二行时间范围 + 只看有文件。
+   一行塞五个控件时日期会自己掉到下一行、只掉一半，看着像排版坏了。 */
+.filters { display: grid; gap: 8px; margin: 10px 0; }
+.filter-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.filter-row .search { flex: 1 1 14rem; }
+.filter-select { flex: none; width: 12rem; }
+.filter-select.sort { width: 13rem; }
+.filter-row.dates .search.date { flex: none; width: 9.5rem; }
+.date-field, .check-field { display: flex; align-items: center; gap: 6px; flex: none; }
+.check-field { margin-left: 4px; }
 .selectbar { margin-top: 0; }
 
 /* 播放条贴在条目内部（那一行下方），占满宽度。 */

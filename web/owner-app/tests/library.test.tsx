@@ -1,4 +1,4 @@
-/** 5c：媒体库与播放（行内无按钮版：序号、双击改名、多选批量、筛选排序）。 */
+/** 5c：媒体库与播放（行内按钮 + 序号、双击改名、多选批量、筛选排序）。 */
 import { act } from 'preact/test-utils';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
@@ -39,12 +39,23 @@ async function typeInto(el: Element, value: string) {
   });
 }
 
-async function chooseSelect(ariaLabel: string, value: string) {
-  const el = document.querySelector(`select[aria-label="${ariaLabel}"]`) as HTMLSelectElement;
-  await act(async () => {
-    el.value = value;
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-  });
+/** 自绘下拉：先点开触发器，再点选项（原生 select 的弹出层会盖住控件，页面已不用它）。 */
+async function chooseSelect(ariaLabel: string, label: string) {
+  const trigger = document.querySelector(`button[aria-label="${ariaLabel}"]`) as HTMLElement;
+  if (!trigger) throw new Error(`找不到下拉：${ariaLabel}`);
+  await click(trigger);
+  const opt = Array.from(document.querySelectorAll('.select-opt'))
+    .find((o) => (o.textContent || '').trim() === label);
+  if (!opt) throw new Error(`下拉 ${ariaLabel} 里没有「${label}」`);
+  await click(opt);
+}
+
+/** 批量条上的按钮：行内也有「删除」，所以不能直接用 button('删除')。 */
+function batchButton(label: string): HTMLButtonElement {
+  const b = Array.from(document.querySelectorAll('.selectbar button'))
+    .find((x) => (x.textContent || '').trim() === label);
+  if (!b) throw new Error(`批量条上没有「${label}」`);
+  return b as HTMLButtonElement;
 }
 
 async function check(el: Element, on = true) {
@@ -124,15 +135,15 @@ describe('媒体库与播放', () => {
     await until(() => titles().length === 3);
 
     // 平台：本机导入只剩那一条
-    await chooseSelect('按平台筛选', 'local');
+    await chooseSelect('按平台筛选', '本机导入');
     await until(() => titles().length === 1);
     expect(titles()).toEqual(['长的那条']);
 
-    await chooseSelect('按平台筛选', 'all');
+    await chooseSelect('按平台筛选', '全部平台');
     await until(() => titles().length === 3);
 
     // 时长：长→短
-    await chooseSelect('排序方式', 'duration_desc');
+    await chooseSelect('排序方式', '时长（长→短）');
     await until(() => titles()[0] === '长的那条');
     expect(titles()).toEqual(['长的那条', '中间那条', '曲目 1']);
 
@@ -201,8 +212,8 @@ describe('媒体库与播放', () => {
     mount('/library');
     await until(() => text().includes('曲目 1'));
 
-    // 没勾选时没有删除入口（行内已不放按钮）
-    expect(() => button('删除')).toThrow();
+    // 没勾选时批量条上没有任何动作（行内的「删除」只作用于这一条）
+    expect(document.querySelector('.selectbar button')).toBeNull();
 
     const boxes = Array.from(document.querySelectorAll('.track-pick input'));
     await check(boxes[0]!);
@@ -213,11 +224,11 @@ describe('媒体库与播放', () => {
       expect(msg).toBe('确定删除选中的 1 项吗？');
       return false;
     });
-    await click(button('删除'));
+    await click(batchButton('删除'));
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
 
     vi.stubGlobal('confirm', () => true);
-    await click(button('删除'));
+    await click(batchButton('删除'));
     // 列表按入库时间倒序：第一个勾选框对应曲目 2
     await until(() => !text().includes('曲目 2'));
     expect(text()).toContain('曲目 1');
@@ -237,7 +248,7 @@ describe('媒体库与播放', () => {
 
     await check(document.querySelector('input[aria-label="全选当前列表"]') as Element);
     await until(() => text().includes('已选 3 项'));
-    await click(button('删除'));
+    await click(batchButton('删除'));
     await until(() => text().includes('媒体库里还没有内容'));
     expect(callKeys().filter((k) => k.startsWith('DELETE')).length).toBe(3);
   });
@@ -260,9 +271,65 @@ describe('媒体库与播放', () => {
 
     await check(document.querySelector('input[aria-label="全选当前列表"]') as Element);
     await until(() => text().includes('已选 2 项'));
-    await click(button('批量下载'));
+    await click(batchButton('批量下载'));
     await until(() => clicked.length === 1);
     expect(clicked[0]).toMatch(/\/api\/v2\/media\/1\?download=1$/);
+  });
+
+  test('行内按钮：播放、下载、删文件、删除都在，删文件不删条目', async () => {
+    server(ownerRoutes({
+      [LIST]: { json: { items: [track(1)], count: 1 } },
+      'DELETE /v2/tracks/1/file': { json: track(1, { has_file: false, storage: 'metadata', bytes: 0 }) },
+      'DELETE /v2/tracks/1': { json: { ok: true, id: 1, deleted: true } },
+    }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+
+    const actions = document.querySelector('.track-actions')!;
+    expect(actions).not.toBeNull();
+    // 下载是真的链接（带 ?download=1），不是按钮
+    expect(actions.querySelector('a')!.getAttribute('href')).toBe('/api/v2/media/1?download=1');
+    for (const label of ['播放', '删文件', '删除']) {
+      expect(Array.from(actions.querySelectorAll('button')).some((b) => b.textContent?.trim() === label)).toBe(true);
+    }
+
+    // 播放按钮立刻展开播放条（不用等双击窗口）
+    await click(Array.from(actions.querySelectorAll('button')).find((b) => b.textContent?.trim() === '播放')!);
+    await until(() => document.querySelector('audio') !== null);
+
+    // 删文件：只清服务器上的文件，条目还在列表里，状态变「只记清单 / 无文件」
+    vi.stubGlobal('confirm', () => true);
+    await click(Array.from(actions.querySelectorAll('button')).find((b) => b.textContent?.trim() === '删文件')!);
+    await until(() => text().includes('只记清单'));
+    expect(callKeys()).toContain('DELETE /v2/tracks/1/file');
+    expect(text()).toContain('曲目 1');
+    expect(callKeys()).not.toContain('DELETE /v2/tracks/1');
+
+    // 删除整条：只问一次"确定删除吗"，删完从列表消失
+    let asked = '';
+    vi.stubGlobal('confirm', (msg: string) => { asked = msg; return true; });
+    await click(Array.from(document.querySelectorAll('.track-actions button'))
+      .find((b) => b.textContent?.trim() === '删除')!);
+    expect(asked).toBe('确定删除《曲目 1》吗？');
+    await until(() => text().includes('媒体库里还没有内容'));
+    expect(callKeys()).toContain('DELETE /v2/tracks/1');
+  });
+
+  test('筛选器分两行排、底部说明已去掉', async () => {
+    server(ownerRoutes({ [LIST]: { json: { items: [track(1)], count: 1 } } }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+
+    // 第一行：搜索 + 平台 + 排序；第二行：起止日期 + 只看有文件
+    const rows = Array.from(document.querySelectorAll('.filter-row'));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.querySelector('input[type="search"]')).not.toBeNull();
+    expect(rows[0]!.querySelectorAll('.select')).toHaveLength(2);
+    expect(rows[1]!.querySelectorAll('input[type="date"]')).toHaveLength(2);
+
+    // 那段"单击一行播放，双击标题改名…"的说明文字不再显示
+    expect(text()).not.toContain('单击一行播放');
+    expect(text()).not.toContain('列表最多取 10000 条');
   });
 
   test('空库与读取失败两种状态', async () => {

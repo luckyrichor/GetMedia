@@ -1,12 +1,17 @@
 /** 5c：媒体库与播放。
  *
- * 这一版把"每行一串按钮"收掉了：**行内不再有按钮**，所有动作都从条目本身出发——
+ * 行内保留四个入口：**播放 / 暂停、下载、删文件、删除**（都在每一行右侧）。
+ * 在此之上才是"省点击"的快捷方式：
  *
  * - 单击一行 = 播放/收起这一条（播放条就在这一行里面）；
- * - 双击标题 = 就地改名；
- * - 勾选（可多选）之后，底部出现批量条：批量下载、删除。
+ * - 双击标题 = 就地改名（不再单独放「改名」按钮）；
+ * - 勾选（可多选）之后，上方出现批量条：批量下载、删除。
  *
- * 这样一眼看过去只有"音频 / 视频"两个类型按钮和几个筛选器，列表本身是干净的。
+ * 「删除」只有一个按钮，点下去只问一次"真要删吗"，不解释服务端到底怎么删——
+ * `local` 条目会连服务器上的备份文件一起删掉，平台条目只写墓碑，这是实现细节。
+ *
+ * 下拉用 `../select` 的自绘下拉而不是原生 `<select>`：macOS/Windows 的原生弹出层会盖住
+ * 控件本身，点开就看不见"现在选的是哪个"。
  *
  * 数据仍全部走当前账号的 `/v2/tracks`；播放交给 `<audio>/<video>` 取 `/v2/media/{id}`
  * （服务端支持 Range，拖动进度条不会重下整段）；下载是同一个地址加 `?download=1`。
@@ -14,6 +19,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { downloadUrl, mediaUrl, ownerApi, type MediaType, type Track } from '../api';
+import { Select } from '../select';
 import { Chips, Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading } from '../ui';
 
 const STORAGE_LABEL: Record<Track['storage'], string> = {
@@ -31,6 +37,13 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: 'duration_asc', label: '时长（短→长）' },
   { key: 'title', label: '标题（A→Z）' },
   { key: 'bytes_desc', label: '文件大小（大→小）' },
+];
+
+const PLATFORMS = [
+  { value: 'all', label: '全部平台' },
+  { value: 'local', label: '本机导入' },
+  { value: 'bilibili', label: 'B 站' },
+  { value: 'douyin', label: '抖音' },
 ];
 
 /** 双击判定窗口：这段时间内的单击先不播，等它过期才播。 */
@@ -119,6 +132,15 @@ export function LibraryPage() {
     }, DBLCLICK_MS);
   }
 
+  /** 行内「播放」按钮：点了就是要放，不用等双击窗口。 */
+  function playNow(t: Track) {
+    if (clickTimer.current) {
+      window.clearTimeout(clickTimer.current);
+      clickTimer.current = null;
+    }
+    setPlaying((prev) => (prev === t.id ? null : t.id));
+  }
+
   function beginRename(t: Track) {
     if (clickTimer.current) {
       window.clearTimeout(clickTimer.current);
@@ -180,7 +202,23 @@ export function LibraryPage() {
     }
   }
 
-  /** 删除：只有一次确认，不解释服务端怎么做——用户要确认的是"真的不要了"。 */
+  /** 删除整条：只有一次确认，不解释服务端到底怎么删。 */
+  async function removeTrack(t: Track) {
+    if (!confirm(`确定删除《${t.title || '无标题'}》吗？`)) return;
+    setBusy(true);
+    try {
+      await ownerApi.deleteTrack(t.id);
+      setItems((prev) => prev.filter((x) => x.id !== t.id));
+      setPicked((prev) => prev.filter((id) => id !== t.id));
+      setPlaying((prev) => (prev === t.id ? null : prev));
+      setErr('');
+    } catch (e) {
+      setErr(messageFor(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removePicked() {
     const list = pickedTracks;
     if (list.length === 0) return;
@@ -200,6 +238,21 @@ export function LibraryPage() {
       setItems((prev) => prev.filter((t) => !removed.has(t.id)));
       setPicked((prev) => prev.filter((id) => !removed.has(id)));
       if (playing != null && removed.has(playing)) setPlaying(null);
+      setBusy(false);
+    }
+  }
+
+  /** 只删服务器上的文件，条目留着：播放时重新解析，本机导入的条目之后就只剩清单。 */
+  async function dropFile(t: Track) {
+    if (!confirm(`删除《${t.title || '无标题'}》在服务器上的文件？条目会保留。`)) return;
+    setBusy(true);
+    try {
+      replace(await ownerApi.dropFile(t.id));
+      if (playing === t.id) setPlaying(null);
+      setErr('');
+    } catch (e) {
+      setErr(messageFor(e));
+    } finally {
       setBusy(false);
     }
   }
@@ -233,39 +286,45 @@ export function LibraryPage() {
             <span class="small muted">共 {items.length} 条</span>
           </div>
 
-          <div class="toolbar filters">
-            <input
-              class="search"
-              type="search"
-              placeholder="搜标题、UP 主、作品号"
-              value={q}
-              onInput={(e) => setQ((e.target as HTMLInputElement).value)}
-              aria-label="搜索媒体库"
-            />
-            <select class="search" value={platform} onChange={(e) => setPlatform((e.target as HTMLSelectElement).value)}
-                    aria-label="按平台筛选">
-              <option value="all">全部平台</option>
-              <option value="local">本机导入</option>
-              <option value="bilibili">B 站</option>
-              <option value="douyin">抖音</option>
-            </select>
-            <select class="search" value={sort} onChange={(e) => setSort((e.target as HTMLSelectElement).value as SortKey)}
-                    aria-label="排序方式">
-              {SORTS.map((s) => <option value={s.key}>{s.label}</option>)}
-            </select>
-            <label class="small muted">
-              从 <input class="search date" type="date" value={from} aria-label="起始日期"
+          <div class="filters">
+            <div class="filter-row">
+              <input
+                class="search"
+                type="search"
+                placeholder="搜标题、UP 主、作品号"
+                value={q}
+                onInput={(e) => setQ((e.target as HTMLInputElement).value)}
+                aria-label="搜索媒体库"
+              />
+              <div class="filter-select">
+                <Select value={platform} options={PLATFORMS} onChange={setPlatform} ariaLabel="按平台筛选" />
+              </div>
+              <div class="filter-select sort">
+                <Select
+                  value={sort}
+                  options={SORTS.map((s) => ({ value: s.key, label: s.label }))}
+                  onChange={(v) => setSort(v as SortKey)}
+                  ariaLabel="排序方式"
+                />
+              </div>
+            </div>
+            <div class="filter-row dates">
+              <label class="small muted date-field">
+                从
+                <input class="search date" type="date" value={from} aria-label="起始日期"
                        onInput={(e) => setFrom((e.target as HTMLInputElement).value)} />
-            </label>
-            <label class="small muted">
-              到 <input class="search date" type="date" value={to} aria-label="结束日期"
+              </label>
+              <label class="small muted date-field">
+                到
+                <input class="search date" type="date" value={to} aria-label="结束日期"
                        onInput={(e) => setTo((e.target as HTMLInputElement).value)} />
-            </label>
-            <label class="small muted">
-              <input type="checkbox" checked={onlyFile} aria-label="只看服务器有文件的"
-                     onChange={(e) => setOnlyFile((e.target as HTMLInputElement).checked)} />
-              只看有文件
-            </label>
+              </label>
+              <label class="small muted check-field">
+                <input type="checkbox" checked={onlyFile} aria-label="只看服务器有文件的"
+                       onChange={(e) => setOnlyFile((e.target as HTMLInputElement).checked)} />
+                只看有文件
+              </label>
+            </div>
           </div>
 
           <div class="toolbar selectbar">
@@ -351,6 +410,28 @@ export function LibraryPage() {
                           : <span class="tag">无文件</span>}
                       </span>
                     </div>
+                    <div class="track-actions">
+                      <button type="button" class="btn btn-ghost small" onClick={() => playNow(t)}>
+                        {playing === t.id ? '暂停' : '播放'}
+                      </button>
+                      {t.has_file || t.source_url ? (
+                        <a class="btn btn-ghost small" href={downloadUrl(t.id)} download>下载</a>
+                      ) : (
+                        <button type="button" class="btn btn-ghost small" disabled
+                                title="这条没有来源链接，服务器也取不到流，无法下载">
+                          下载
+                        </button>
+                      )}
+                      <button type="button" class="btn btn-ghost small" disabled={busy || !t.has_file}
+                              title={t.has_file ? '只删服务器上的文件，条目保留' : '服务器上没有文件'}
+                              onClick={() => void dropFile(t)}>
+                        删文件
+                      </button>
+                      <button type="button" class="btn btn-ghost small" disabled={busy}
+                              onClick={() => void removeTrack(t)}>
+                        删除
+                      </button>
+                    </div>
                   </div>
 
                   {/* 播放条在这一行内部：点哪一首就哪一首展开，再点一下收起。 */}
@@ -360,10 +441,6 @@ export function LibraryPage() {
             </ul>
           )}
           {err && <div class="alert warn small">{err}</div>}
-          <p class="small muted">
-            单击一行播放，双击标题改名；勾选后可以批量下载或删除。列表最多取 10000 条，
-            更早的条目请用搜索或时间范围定位。
-          </p>
         </>
       )}
     </>

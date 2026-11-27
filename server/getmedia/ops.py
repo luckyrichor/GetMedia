@@ -30,8 +30,10 @@ RETENTION_TARGETS: tuple[tuple[str, str, str], ...] = (
 
 
 class Ops:
-    def __init__(self, engine: Engine, settings: Settings, fb, alerts, clock=time.time):
+    def __init__(self, engine: Engine, settings: Settings, fb, alerts, clock=time.time, media=None):
         self.engine, self.s, self.fb, self.alerts, self.clock = engine, settings, fb, alerts, clock
+        # 注销要连盘上的文件一起收：记录级联删掉之后，文件名就再也查不回来了
+        self.media = media
 
     def now(self) -> int:
         return int(self.clock())
@@ -59,6 +61,8 @@ class Ops:
             due = [r[0] for r in c.execute(text("SELECT user_id FROM deletion_requests WHERE executed_at IS NULL AND execute_at<=:n"), {"n": now})]
         for uid in due:
             self._ledger_append(uid, now)  # 先写台账（含 fsync），再删库：崩溃后可重放
+            # 文件要"先记名字、删完记录再删盘"：记录一旦级联删掉，就再也对不上是哪几个文件了
+            names = self.media.user_file_names(uid) if self.media else set()
             with self.engine.begin() as c:
                 self.fb.delete_for_user(c, uid)
                 c.execute(text("DELETE FROM heartbeats WHERE user_id=:u"), {"u": uid})
@@ -68,6 +72,8 @@ class Ops:
                 c.execute(text("DELETE FROM users WHERE id=:u"), {"u": uid})  # sessions/recovery/consents 级联
                 c.execute(text("INSERT OR IGNORE INTO deletion_ledger(user_id,deleted_at) VALUES(:u,:n)"), {"u": uid, "n": now})
                 c.execute(text("UPDATE deletion_requests SET executed_at=:n WHERE user_id=:u"), {"u": uid, "n": now})
+            if names and self.media:
+                self.media.drop_names(names)
         return len(due)
 
     def restore_account(self, user_id: str) -> bool:

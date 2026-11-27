@@ -86,6 +86,30 @@ def test_cooldown_delete_clears_tracks(open_reg):
     assert q(env, "select count(*) from deletion_ledger where user_id=?", uid)[0][0] == 1
 
 
+def test_cooldown_delete_removes_media_files_too(open_reg):
+    """注销后盘上的文件也要删干净。
+
+    记录是随 `DELETE FROM users` 级联走的，文件靠 `media_path` 指向——记录一删，就再也没人
+    知道那几个文件属于谁，只能永远占着盘。所以 `run_deletions` 必须"先记名字、再删记录、最后删盘"。
+    """
+    env = open_reg
+    tok = make_owner(env)
+    r = env.client.post("/v2/tracks", headers=hdr(tok), json={
+        "platform": "local", "video_id": "loc_feedface", "page": 1, "media_type": "audio",
+        "title": "注销时该删掉的文件", "uploader": None, "duration_sec": 5.0, "source_url": ""})
+    assert r.status_code == 200, r.text
+    up = env.client.post(f"/v2/tracks/{r.json()['track']['id']}/file", headers=hdr(tok),
+                         files={"file": ("a.mp3", b"x" * 4096, "application/octet-stream")})
+    assert up.status_code == 200, up.text
+    files = [p for p in (env.tmp / "media").iterdir() if p.is_file()]
+    assert len(files) == 1
+
+    assert env.client.request("DELETE", "/account/me", json={"password": PW}, headers=hdr(tok)).status_code == 200
+    env.clock.advance(8 * 86400)
+    assert env.app.state.ops.run_deletions() == 1
+    assert not files[0].exists(), "注销后服务器上的文件必须一起删掉"
+
+
 def test_cli_restore_account_in_cooldown(u):
     env, tok = u
     env.client.request("DELETE", "/account/me", json={"password": PW}, headers=hdr(tok))

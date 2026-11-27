@@ -86,19 +86,21 @@ def test_stale_consent_body_rejected(open_reg):
     t = register(env).json()["session"]["token"]
     d = env.client.get("/v2/legal").json()["documents"]
     old = {k: {"version": d[k]["version"], "sha256": d[k]["sha256"]} for k in d}
-    _bump(env, "user-agreement.md", version=2, extra="\nv2\n")
+    # 版本号必须相对当前值算：写死数字的话，协议一升版这条就变成"同版本改文本"，测的就不是这件事了
+    _bump(env, "user-agreement.md", version=d["user_agreement"]["version"] + 1, extra="\n新版\n")
     r = env.client.post("/account/consent", headers=hdr(t), json=old)
     assert r.status_code == 409 and r.json()["code"] == "legal_outdated"
 
 
 def test_version_rollback_rejected(open_reg):
     env = open_reg
-    _bump(env, "user-agreement.md", version=2, extra="\nv2\n")
-    assert env.client.get("/v2/legal").json()["documents"]["user_agreement"]["version"] == 2
+    want = env.client.get("/v2/legal").json()["documents"]["user_agreement"]["version"] + 1
+    _bump(env, "user-agreement.md", version=want, extra="\n新版\n")
+    assert env.client.get("/v2/legal").json()["documents"]["user_agreement"]["version"] == want
     shutil.copy(env.tmp / ".." / "x", env.tmp / "unused") if False else None
     p = _file(env)
-    p.write_text(p.read_text(encoding="utf-8").replace("版本：v2", "版本：v1"), encoding="utf-8")
-    assert env.client.get("/v2/legal").json()["documents"]["user_agreement"]["version"] == 2
+    p.write_text(p.read_text(encoding="utf-8").replace(f"版本：v{want}", f"版本：v{want - 1}"), encoding="utf-8")
+    assert env.client.get("/v2/legal").json()["documents"]["user_agreement"]["version"] == want
     assert any(k == "legal_hash_mismatch" for k, _ in env.alerts.items)
 
 
