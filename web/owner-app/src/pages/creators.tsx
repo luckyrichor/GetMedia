@@ -702,9 +702,6 @@ export function CreatorsPage() {
               }))}
               onChange={(v) => { setFormats(v as FormatKey[]); clearPreview(); }}
             />
-            {storage === 'metadata' ? (
-              <em class="field-hint">只存元数据不下载文件，这一项不生效</em>
-            ) : null}
           </div>
         </div>
 
@@ -958,7 +955,6 @@ function ProgCell({ job }: { job: CreatorJob }) {
   const done = job.done || 0;
   const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
   const barTone = job.status === 'cancelled' ? 'idle' : job.status === 'failed' ? 'bad' : 'info';
-  const onServer = job.storage === 'cache' || job.storage === 'archive';
   const tip = `已抓 ${done} / ${total || '?'}`
     + (job.failed > 0 ? `，${job.failed} 条失败` : '')
     + (job.pause_reason ? `；暂停原因：${job.pause_reason}` : '');
@@ -972,11 +968,10 @@ function ProgCell({ job }: { job: CreatorJob }) {
       {total > 0 && done < total ? (
         <span class={`prog-bar tone-${barTone}`}><i style={{ width: `${pct}%` }} /></span>
       ) : null}
-      {onServer ? (
-        <span class="prog-sub">已存服务器 {job.stored}{total ? ` / ${total}` : ''}</span>
-      ) : job.failed > 0 ? (
-        <span class="prog-sub bad">{job.failed} 条失败</span>
-      ) : null}
+      {/* 这里曾经给「服务器存储」的任务多显示一行「已存服务器 N / M」。已删：
+          服务端把 media_path 和 download_state='done' 写在同一条 UPDATE 里
+          （creator_jobs.py:1092），两个计数恒等 → 副行永远是主行的复制。 */}
+      {job.failed > 0 ? <span class="prog-sub bad">{job.failed} 条失败</span> : null}
     </div>
   );
 }

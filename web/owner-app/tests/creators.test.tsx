@@ -433,7 +433,7 @@ describe('批量提取：任务表格与行内操作', () => {
     expect(jobRows()[1]!.querySelector('.c-bytes')!.textContent).toContain('300');
   });
 
-  test('服务器存档：进度第二行给「已存服务器 N / M」，占用 tooltip 带上实际占用', async () => {
+  test('服务器存档：进度不再重复「已存服务器 N / M」，占用 tooltip 带上实际占用', async () => {
     server(ownerRoutes({
       [JOBS]: {
         json: {
@@ -456,7 +456,10 @@ describe('批量提取：任务表格与行内操作', () => {
       },
     }));
     mount('/creators');
-    await until(() => text().includes('已存服务器 12 / 20'));
+    await until(() => jobRows().length === 1);
+    // done 与 stored 由服务端同一条 UPDATE 写入，数值恒等，副行只是重复主行
+    expect(text()).not.toContain('已存服务器');
+    expect(jobRows()[0]!.querySelector('.prog-sub')).toBeNull();
     expect(rowText()).toContain('服务器缓存');
     // 列里显示的是估算值，服务器上实际占多少进 tooltip
     expect(jobRows()[0]!.querySelector('.c-bytes')!.getAttribute('title')).toContain('240 MB');

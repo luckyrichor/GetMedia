@@ -1220,7 +1220,6 @@ td.zero .bytes-u { color: inherit; }
 .field.is-bad input, .field.is-bad .select-trigger,
 .field.is-bad input.date-input, .field.is-bad .stepper { border-color: #a4271c; }
 .field-err { font-style: normal; font-size: 0.78rem; line-height: 1.4; color: #a4271c; }
-.field-hint { font-style: normal; font-size: 0.78rem; line-height: 1.4; color: var(--muted); }
 @media (prefers-color-scheme: dark) {
   .field.is-bad input, .field.is-bad .select-trigger,
   .field.is-bad input.date-input, .field.is-bad .stepper { border-color: #ef9a9a; }
