@@ -3,6 +3,7 @@ package com.getmedia.app.player
 import android.content.Intent
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import kotlinx.coroutines.*
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
@@ -68,7 +69,12 @@ class PlaybackService : MediaSessionService() {
  *
  * 这里不接管命令回调（回调里返回成功会继续执行默认行为，返回失败又会把错误报给通知栏），
  * 而是在播放器外面包一层，把这两个方法直接换成"切到相邻项"。其余全部原样转发。
+ *
+ * `ForwardingPlayer` 与它转发的那两个方法都标了 `@UnstableApi`，Media3 要求显式 opt-in。
+ * 用 `androidx.annotation.OptIn` 而不是 kotlin 的 `OptIn`：这条检查来自 androidx lint，
+ * 只认前者。
  */
+@androidx.annotation.OptIn(UnstableApi::class)
 private class AdjacentSkipPlayer(player: Player) : ForwardingPlayer(player) {
     override fun seekToPrevious() = seekToPreviousMediaItem()
     override fun seekToNext() = seekToNextMediaItem()
