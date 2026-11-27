@@ -245,7 +245,12 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 }
 .meta-tag.t-dur { --tag-bg: #f4f0fe; --tag-line: #dcd2fb; --tag-ink: #6535c9; }
 .meta-tag.t-time { --tag-bg: #e8f7f8; --tag-line: #bcebef; --tag-ink: #0d6d77; }
-.meta-tag.t-store { --tag-bg: #fdf4e6; --tag-line: #f5ddb3; --tag-ink: #96601a; }
+/* 存放方式同理按最长值「元数据」（3 个字）定宽，存储 / 缓存两个字居中留白，
+   三种取值等宽，最后一个「文件大小 / 无文件」的起点才不会跟着跳。 */
+.meta-tag.t-store {
+  --tag-bg: #fdf4e6; --tag-line: #f5ddb3; --tag-ink: #96601a;
+  min-width: calc(3em + 16px); text-align: center;
+}
 .meta-tag.t-size {
   --tag-bg: #eaf6ee; --tag-line: #c2e6ce; --tag-ink: #1b6b39;
   font-weight: 600; font-variant-numeric: tabular-nums;
