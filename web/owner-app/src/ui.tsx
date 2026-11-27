@@ -208,6 +208,45 @@ export function DateInput({ value, onInput, label, class: cls }: {
   );
 }
 
+/** 覆盖整页的对话框：点遮罩或按 Esc 关闭，打开期间锁住背景滚动、焦点挪进来。
+ *
+ * 没用原生 `<dialog>`：`showModal()` 在 jsdom 里不可用，测试就没法断言"到底弹出来了没有"。
+ */
+export function Modal({ title, onClose, children }: {
+  title: string;
+  onClose: () => void;
+  children: ComponentChildren;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  useEffect(() => {
+    close.current = onClose;
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close.current();
+    };
+    document.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    // 打开就把焦点挪进来，Tab 不会先跑到背后的表格上
+    box.current?.querySelector<HTMLElement>('input, button, select, textarea')?.focus();
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prev;
+    };
+  }, []);
+  return (
+    <div class="modal-mask" onClick={() => close.current()}>
+      <div class="modal" role="dialog" aria-modal="true" aria-label={title} ref={box}
+           onClick={(e) => e.stopPropagation()}>
+        <h2>{title}</h2>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export function Field({ label, value, mono }: { label: string; value: ComponentChildren; mono?: boolean }) {
   return (
     <div class="kv">

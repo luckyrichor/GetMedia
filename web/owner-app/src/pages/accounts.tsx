@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { ownerApi, type AdminAccount, type AdminAccountPage, type Tier } from '../api';
 import { Select } from '../select';
-import { DateInput, Empty, ErrorBox, Loading, NoAccess, fmtBytes, fmtDateTime, fmtTime, relTime, useLoad } from '../ui';
+import { DateInput, Empty, ErrorBox, Loading, Modal, NoAccess, fmtBytes, fmtDateTime, fmtTime, relTime, useLoad } from '../ui';
 
 const TIER_LABEL: Record<Tier, string> = { free: '免费版', full: '完整版', admin: '管理员' };
 const ALL_TIERS: Tier[] = ['free', 'full', 'admin'];
@@ -206,6 +206,8 @@ export function AccountsPage() {
   /** 打开「改有效期」：预填当前到期时间；本来就是永久就先把输入框填成 6 个月后，方便直接改。 */
   function openExpiry(a: AdminAccount) {
     const now = Math.floor(Date.now() / 1000);
+    setTierFor(null);
+    setPwFor(null);
     setExpFor(a);
     setExpPermanent(a.tier_expires_at == null);
     setExpValue(toLocalInput(a.tier_expires_at ?? addMonthsTs(now, 6)));
@@ -377,15 +379,7 @@ export function AccountsPage() {
       ) : null}
 
       {expFor ? (
-        <div class="card">
-          <h2>设置「{expFor.login_name}」的有效期</h2>
-          <p class="muted">
-            当前：
-            {expFor.tier_expires_at
-              ? `${fmtDateTime(expFor.tier_expires_at)}（${expFor.tier_expires_at > nowSec ? '还剩 ' + Math.ceil((expFor.tier_expires_at - nowSec) / 86400) + ' 天' : '已过期'}）`
-              : '永久'}
-            。改成更晚的时间就是延长，改成更早的时间就是缩短；原本永久的也能改成有期限。
-          </p>
+        <Modal title={`设置「${expFor.login_name}」的有效期`} onClose={() => setExpFor(null)}>
           <div class="filter-row">
             <label><input type="radio" name="expmode" checked={!expPermanent} onChange={() => setExpPermanent(false)} /> 指定到期时间</label>
             <label><input type="radio" name="expmode" checked={expPermanent} onChange={() => setExpPermanent(true)} /> 永久</label>
@@ -413,12 +407,11 @@ export function AccountsPage() {
               <p class="small muted">{expPreview}</p>
             </>
           )}
-          <p class="muted">保存后立即生效（等级每次请求都按库里的到期时间算），该账号不需要重新登录。</p>
-          <div class="filter-row">
+          <div class="filter-row modal-actions">
             <button type="button" class="btn" disabled={busy} onClick={() => void doExpiry()}>保存</button>
             <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => setExpFor(null)}>取消</button>
           </div>
-        </div>
+        </Modal>
       ) : null}
 
       {pwFor ? (
@@ -488,7 +481,7 @@ export function AccountsPage() {
                       ) : (
                         <>
                           <button type="button" class="btn small" disabled={busy}
-                                  onClick={() => { setTierFor(a); setTierMonths('6m'); }}>
+                                  onClick={() => { setExpFor(null); setTierFor(a); setTierMonths('6m'); }}>
                             {a.tier === 'full' ? '设为免费' : '设为完整版'}
                           </button>
                           {a.tier === 'full' ? (
@@ -498,7 +491,7 @@ export function AccountsPage() {
                         </>
                       )}
                       <button type="button" class="btn btn-ghost small" disabled={busy}
-                              onClick={() => { setPwFor(a); setPw1(''); setPw2(''); }}>
+                              onClick={() => { setExpFor(null); setPwFor(a); setPw1(''); setPw2(''); }}>
                         重置密码
                       </button>
                     </div>

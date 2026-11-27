@@ -192,9 +192,10 @@ describe('权限管理', () => {
     await click(button('改有效期'));
     await until(() => text().includes('设置「alice」的有效期'));
 
+    // 是弹窗，不是页面里插一块
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     const input = document.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     expect(input.value).toBe(localInput(ACCOUNT.tier_expires_at));   // 预填 = 现在的到期时间
-    expect(text()).toContain('改成更晚的时间就是延长');
 
     await setInput('input[type="datetime-local"]', '2027-03-15T09:08:07');
     await click(button('保存'));
@@ -204,7 +205,7 @@ describe('权限管理', () => {
       expires_at: Math.floor(new Date('2027-03-15T09:08:07').getTime() / 1000),
     });
     await until(() => text().includes('有效期已改为'));
-    expect(text()).toContain('不需要重新登录');
+    expect(document.querySelector('[role="dialog"]')).toBeNull();    // 存完自动关掉
   });
 
   test('改有效期：选「永久」时发 null；免费版行没有这个按钮', async () => {
@@ -230,6 +231,43 @@ describe('权限管理', () => {
 
     const post = calls.find((c) => c.method === 'POST')!;
     expect(post.body).toEqual({ expires_at: null });
+  });
+
+  test('改有效期是弹窗：Esc 关闭、点遮罩关闭、点弹窗内部不关，打开时锁住背景滚动', async () => {
+    server(ownerRoutes({
+      'GET /account/me': { json: ADMIN_ME },
+      'GET /v2/admin/accounts': accountsPage([ACCOUNT]),
+    }));
+    mount('/accounts');
+    await until(() => text().includes('改有效期'));
+
+    const open = async () => {
+      await click(button('改有效期'));
+      await until(() => document.querySelector('[role="dialog"]') !== null);
+    };
+
+    // Esc
+    await open();
+    expect(document.body.style.overflow).toBe('hidden');
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    await until(() => document.querySelector('[role="dialog"]') === null);
+    expect(document.body.style.overflow).toBe('');
+
+    // 点弹窗内部不关
+    await open();
+    await click(document.querySelector('[role="dialog"]') as HTMLElement);
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    // 点遮罩关
+    await click(document.querySelector('.modal-mask') as HTMLElement);
+    await until(() => document.querySelector('[role="dialog"]') === null);
+
+    // 取消按钮也关
+    await open();
+    await click(button('取消'));
+    await until(() => document.querySelector('[role="dialog"]') === null);
   });
 });
 
