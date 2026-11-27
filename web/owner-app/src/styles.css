@@ -212,12 +212,25 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
 }
 .track-main {
   display: flex; gap: 10px; align-items: flex-start; flex: 1 1 18rem; min-width: 0; text-align: left;
-  background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 0;
+  background: none; border: 0; color: inherit; font: inherit; padding: 0;
 }
 .track-kind { font-size: 1.1rem; color: var(--accent); width: 1.2rem; flex: none; }
 .track-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .track-title { font-weight: 550; word-break: break-word; cursor: text; }
-.track-badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* 标题下面那排元信息做成一串小标签：平台、作者、时长、入库时间、文件大小（或「无文件」）。
+   每格自带边框与底色，扫一眼就知道哪格是什么，不用靠「·」去数。 */
+.track-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.meta-tag {
+  display: inline-block; max-width: 20rem; padding: 1px 7px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  color: var(--muted); font-size: 0.76rem; line-height: 1.55;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+}
+.meta-tag.plat { color: var(--accent); border-color: var(--accent); background: var(--info-bg); }
+/* 存放方式（存储/缓存/元数据）：跟大小一样用实心底色，别被当成可有可无的说明 */
+.meta-tag.store { color: var(--text); background: var(--side); border-color: var(--line); }
+.meta-tag.size { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.meta-tag.none { border-style: dashed; }
 /* 行内按钮：靠右、紧凑；窄屏放不下就整体换到下一行（margin-left:auto 仍贴右） */
 .track-actions { flex: none; display: flex; gap: 6px; align-items: center; margin-left: auto; }
 .track-actions .btn { padding: 3px 9px; font-size: 0.82rem; }
@@ -268,7 +281,6 @@ audio.player-media { background: none; }
 }
 
 @media (max-width: 760px) {
-  .track-badges { display: none; }
   .thumbs img { width: 96px; height: 96px; }
 }
 

@@ -181,25 +181,64 @@ describe('媒体库与播放', () => {
     expect(calls.length).toBe(before);
   });
 
-  test('播放：单击一行展开播放条，再点一下收起', async () => {
+  test('播放：只有行内「播放」按钮能播，点内容区不播', async () => {
+    const played: string[] = [];
     vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
+      played.push(this.getAttribute('src') || '');
       return Promise.resolve();
     });
     server(ownerRoutes({ [LIST]: { json: { items: [track(1)], count: 1 } } }));
     mount('/library');
     await until(() => text().includes('曲目 1'));
 
+    // 标题 + 元信息这一整块只是用来看的：点了不播，播放条也不出现
     await click(document.querySelector('.track-main') as Element);
-    // 双击判定窗口过了才播
+    expect(played).toEqual([]);
+    expect(document.querySelector('audio')).toBeNull();
+
+    // 播放按钮：展开播放条并直接开始，不用再点播放器自带的播放键
+    const playBtn = Array.from(document.querySelectorAll('.track-actions button'))
+      .find((b) => b.textContent?.trim() === '播放')!;
+    await click(playBtn);
     await until(() => document.querySelector('audio') !== null);
+    expect(played).toEqual(['/api/v2/media/1']);
     expect(document.querySelector('audio')!.getAttribute('src')).toBe('/api/v2/media/1');
+
     // 播放条在这一行内部，不在列表顶部
     const row = Array.from(document.querySelectorAll('.track')).find((li) => li.querySelector('.player-inline'));
     expect(row!.querySelector('.track-title')!.textContent).toBe('曲目 1');
     expect(document.querySelector('.tracks > .player-inline')).toBeNull();
+  });
 
-    await click(document.querySelector('.track-main') as Element);
-    await until(() => document.querySelector('audio') === null);
+  test('元信息：平台、作者、时长、入库时间、文件大小各占一个标签，没文件写「无文件」', async () => {
+    server(ownerRoutes({
+      [LIST]: {
+        json: {
+          items: [
+            track(1, { platform: 'douyin', uploader: '诗和远方つ.', duration_sec: 276, bytes: 3 * 1024 * 1024 }),
+            track(2, { has_file: false, storage: 'metadata', bytes: 0 }),
+          ],
+          count: 2,
+        },
+      },
+    }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+
+    const rowOf = (title: string) => Array.from(document.querySelectorAll('.track'))
+      .find((li) => li.querySelector('.track-title')?.textContent === title)!;
+    const tags = (title: string) => Array.from(rowOf(title).querySelectorAll('.meta-tag'))
+      .map((e) => (e.textContent || '').trim());
+
+    // 顺序：存放方式、平台、作者、时长、入库时间、大小
+    const t1 = tags('曲目 1');
+    expect(t1.slice(0, 4)).toEqual(['存储', '抖音', '诗和远方つ.', '4:36']);
+    expect(t1[4]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(t1[5]).toBe('3.0 MB');
+
+    // 没文件的：同一位置写「无文件」；只有清单的条目存放方式写「元数据」
+    expect(tags('曲目 2')[0]).toBe('元数据');
+    expect(tags('曲目 2').at(-1)).toBe('无文件');
   });
 
   test('改名：双击标题就地编辑，PATCH 只带 title', async () => {

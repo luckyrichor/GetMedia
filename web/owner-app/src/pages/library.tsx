@@ -4,12 +4,13 @@
  *
  * - 「删除」**只有一个**：`local` 条目删文件 + 写墓碑，只有清单的条目只写墓碑，
  *   这是服务端按平台分叉的实现细节，界面上不再分成两个按钮。
- * - 单击一行 = 播放 / 收起这一条（播放条就在这一行里面，点「播放」直接出声）；
+ * - **只有「播放」按钮能播**：点条目的标题/信息区不会播（那里只看不点，双击标题是改名），
+ *   播放条就展开在这一行里面，点「播放」直接出声、再点变「暂停」；
  * - 双击标题 = 就地改名（不再单独放「改名」按钮）；
  * - 勾选（可多选）之后，上方出现批量条：批量下载、删除。
  *
  * 排序是一个拆开的控件：左边是"按什么排"（点一下就正序/倒序互换），右边箭头才展开
- * 四位候选（入库时间、时长、标题、文件大小）——换字段时方向回到该字段的默认方向。
+ * 四位候选（时间、时长、标题、文件大小）——换字段时方向回到该字段的默认方向。
  *
  * 下拉用 `../select` 的自绘下拉而不是原生 `<select>`：macOS/Windows 的原生弹出层会盖住
  * 控件本身，点开就看不见"现在选的是哪个"。
@@ -26,7 +27,7 @@ import { Chips, Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading } from 
 const STORAGE_LABEL: Record<Track['storage'], string> = {
   archive: '存储',
   cache: '缓存',
-  metadata: '只记清单',
+  metadata: '元数据',
 };
 
 type SortField = 'created' | 'duration' | 'title' | 'bytes';
@@ -39,7 +40,7 @@ const SORT_FIELDS: {
   dir: SortDir;
   dirLabel: Record<SortDir, string>;
 }[] = [
-  { key: 'created', label: '入库时间', dir: 'desc', dirLabel: { desc: '新→旧', asc: '旧→新' } },
+  { key: 'created', label: '时间', dir: 'desc', dirLabel: { desc: '新→旧', asc: '旧→新' } },
   { key: 'duration', label: '时长', dir: 'desc', dirLabel: { desc: '长→短', asc: '短→长' } },
   { key: 'title', label: '标题', dir: 'asc', dirLabel: { desc: 'Z→A', asc: 'A→Z' } },
   { key: 'bytes', label: '文件大小', dir: 'desc', dirLabel: { desc: '大→小', asc: '小→大' } },
@@ -56,9 +57,6 @@ const PLATFORMS = [
 function platformLabel(p: string): string {
   return PLATFORMS.find((x) => x.value === p)?.label ?? p;
 }
-
-/** 双击判定窗口：这段时间内的单击先不播，等它过期才播。 */
-const DBLCLICK_MS = 220;
 
 export function LibraryPage() {
   const [items, setItems] = useState<Track[]>([]);
@@ -79,7 +77,6 @@ export function LibraryPage() {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState('');
-  const clickTimer = useRef<number | null>(null);
   /** 挂在当前展开的播放器上：暂停/继续要直接操作媒体元素，不能靠重渲染。 */
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   /** 改名提交中：防止"回车保存"和"失焦保存"各发一次 PATCH。 */
@@ -98,9 +95,6 @@ export function LibraryPage() {
 
   useEffect(() => {
     void load();
-    return () => {
-      if (clickTimer.current) window.clearTimeout(clickTimer.current);
-    };
   }, []);
 
   const audioN = items.filter((t) => t.media_type === 'audio').length;
@@ -143,22 +137,9 @@ export function LibraryPage() {
     setItems((prev) => prev.map((t) => (t.id === next.id ? next : t)));
   }
 
-  /** 单击延迟一点点再播：双击改名时不要顺手把这首也放起来。 */
-  function togglePlay(t: Track) {
-    if (clickTimer.current) window.clearTimeout(clickTimer.current);
-    clickTimer.current = window.setTimeout(() => {
-      clickTimer.current = null;
-      setPaused(false);
-      setPlaying((prev) => (prev === t.id ? null : t.id));
-    }, DBLCLICK_MS);
-  }
-
-  /** 行内「播放」按钮：点了就是要放，不用等双击窗口；已展开的那条就在播放/暂停之间切。 */
+  /** 行内「播放」按钮是唯一的播放入口（点条目的文字区不再触发）；
+   *  同一条再点一下就是暂停 / 继续。 */
   function playNow(t: Track) {
-    if (clickTimer.current) {
-      window.clearTimeout(clickTimer.current);
-      clickTimer.current = null;
-    }
     if (playing === t.id) {
       // 按钮文字和这里用同一个状态源（`paused` 跟着媒体元素的 play/pause 事件走），
       // 写着"暂停"就一定是暂停，不会出现按钮和实际播放状态各说各话。
@@ -171,10 +152,6 @@ export function LibraryPage() {
   }
 
   function beginRename(t: Track) {
-    if (clickTimer.current) {
-      window.clearTimeout(clickTimer.current);
-      clickTimer.current = null;
-    }
     setEditing(t.id);
     setDraft(t.title);
   }
@@ -383,13 +360,7 @@ export function LibraryPage() {
                              onChange={(e) => pick(t.id, (e.target as HTMLInputElement).checked)} />
                     </label>
                     <span class="track-no">{index + 1}</span>
-                    <div
-                      class="track-main"
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => togglePlay(t)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') togglePlay(t); }}
-                    >
+                    <div class="track-main">
                       <span class="track-kind" aria-hidden="true">{t.media_type === 'audio' ? '♪' : '▣'}</span>
                       <span class="track-body">
                         {editing === t.id ? (
@@ -413,16 +384,16 @@ export function LibraryPage() {
                             {t.title || '(无标题)'}
                           </span>
                         )}
-                        <span class="small muted">
-                          {t.uploader || '未知 UP 主'} · {fmtDuration(t.duration_sec)} · {platformLabel(t.platform)} ·{' '}
-                          {fmtTime(t.created_at)}
+                        <span class="track-meta">
+                          <span class="meta-tag store">{STORAGE_LABEL[t.storage]}</span>
+                          <span class="meta-tag plat">{platformLabel(t.platform)}</span>
+                          <span class="meta-tag">{t.uploader || '未知 UP 主'}</span>
+                          <span class="meta-tag">{fmtDuration(t.duration_sec)}</span>
+                          <span class="meta-tag">{fmtTime(t.created_at)}</span>
+                          {t.has_file
+                            ? <span class="meta-tag size">{fmtBytes(t.bytes)}</span>
+                            : <span class="meta-tag none">无文件</span>}
                         </span>
-                      </span>
-                      <span class="track-badges">
-                        <span class="tag">{STORAGE_LABEL[t.storage]}</span>
-                        {t.has_file
-                          ? <span class="tag ok">有文件 {fmtBytes(t.bytes)}</span>
-                          : <span class="tag">无文件</span>}
                       </span>
                     </div>
                     <div class="track-actions">
