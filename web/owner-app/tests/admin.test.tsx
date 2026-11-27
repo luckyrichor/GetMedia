@@ -204,8 +204,9 @@ describe('权限管理', () => {
     expect(post.body).toEqual({
       expires_at: Math.floor(new Date('2027-03-15T09:08:07').getTime() / 1000),
     });
-    await until(() => text().includes('有效期已改为'));
-    expect(document.querySelector('[role="dialog"]')).toBeNull();    // 存完自动关掉
+    // 存完直接关弹窗，不再弹成功提示（表格里那一行变了就是反馈）
+    await until(() => document.querySelector('[role="dialog"]') === null);
+    expect(text()).not.toContain('有效期已改为');
   });
 
   test('改有效期：选「永久」时发 null；免费版行没有这个按钮', async () => {

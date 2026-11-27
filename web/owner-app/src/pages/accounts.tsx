@@ -226,12 +226,8 @@ export function AccountsPage() {
     }
     setBusy(true);
     try {
-      const r = await ownerApi.adminSetExpiry(expFor.id, ts);
-      setFlash({
-        kind: 'ok',
-        text: `${expFor.login_name} 的有效期已改为 ${r.tier_expires_at ? fmtDateTime(r.tier_expires_at) : '永久'}`
-          + '；立即生效，该账号不需要重新登录',
-      });
+      await ownerApi.adminSetExpiry(expFor.id, ts);
+      // 不弹成功提示：弹窗一关、表格里那一行的有效期就变了，本身就是反馈
       setExpFor(null);
       reload();
     } catch (e) {
