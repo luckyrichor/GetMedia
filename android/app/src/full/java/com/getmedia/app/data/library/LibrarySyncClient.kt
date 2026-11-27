@@ -7,11 +7,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /**
  * 上传通道：`POST /v2/tracks`（P0-2 阶段 1 的服务端接口）。
@@ -37,6 +41,16 @@ interface LibraryWriteTransport {
 }
 
 /**
+ * 本机文件上传通道：`POST /v2/tracks/{id}/file`（multipart）。
+ *
+ * 与 [LibraryUploadTransport] 分开：那条路只传 8 个字段的元数据，这条路要传几百 MB 的
+ * 二进制，超时、断流、限流的表现完全不同，混在一个接口里会让两边的错误处理互相牵制。
+ */
+interface LocalFileUploadTransport {
+    suspend fun uploadFile(trackId: Long, file: File): CloudTrack
+}
+
+/**
  * 真实实现。`owner` 通道、`X-GetMedia-Session` 认证，与服务器提取同一套约定。
  *
  * 服务端限流 60/分：撞上就按 `Retry-After` 退避一次，再撞就整批停（由 [LibraryUploader] 决定），
@@ -46,10 +60,24 @@ class LibrarySyncClient(
     baseUrl: String = BuildConfig.OWNER_SERVER_BASE,
     private val client: OkHttpClient = AccountApi.defaultClient(),
     private val token: () -> String? = SessionStore::token,
-) : LibraryUploadTransport, LibraryWriteTransport, MetaWriteTransport {
+) : LibraryUploadTransport, LibraryWriteTransport, MetaWriteTransport, LocalFileUploadTransport {
 
     private val base = baseUrl.trimEnd('/')
     private val json = "application/json; charset=utf-8".toMediaType()
+
+    /** 上传文件用二进制流：服务端不解析内容，类型只影响它给的后缀兜底。 */
+    private val octet = "application/octet-stream".toMediaType()
+
+    /**
+     * 传文件单独一个客户端：默认的 30 秒写超时是按"几百字节 JSON"定的，
+     * 一个 300 MB 的视频在移动网络上要传好几分钟，用默认值必然半路失败。
+     */
+    private val uploadClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .writeTimeout(15, TimeUnit.MINUTES)
+            .readTimeout(2, TimeUnit.MINUTES)
+            .build()
+    }
 
     init { require(base.startsWith("https://") || AccountApi.ALLOW_TEST_HTTP) { "只允许 HTTPS" } }
 
@@ -145,8 +173,25 @@ class LibrarySyncClient(
             call(request) { text -> LibrarySyncJson.singleTrack(text) }
         }
 
-    private fun <T> call(request: Request, parse: (String) -> T): T = try {
-        client.newCall(request).execute().use { response ->
+    override suspend fun uploadFile(trackId: Long, file: File): CloudTrack = withContext(Dispatchers.IO) {
+        // 文件名只用来给后缀：服务端会自己生成 uuid 前缀的落盘名，不看这里的名字
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", file.name, file.asRequestBody(octet))
+            .build()
+        val request = Request.Builder()
+            .url((base + PATH + "/" + trackId + "/file").toHttpUrl())
+            .header("Accept", "application/json")
+            .header("X-GetMedia-Session", session())
+            .post(body)
+            .build()
+        call(uploadClient, request) { text -> LibrarySyncJson.singleTrack(text) }
+    }
+
+    private fun <T> call(request: Request, parse: (String) -> T): T = call(client, request, parse)
+
+    private fun <T> call(http: OkHttpClient, request: Request, parse: (String) -> T): T = try {
+        http.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
                 throw LibrarySyncJson.error(

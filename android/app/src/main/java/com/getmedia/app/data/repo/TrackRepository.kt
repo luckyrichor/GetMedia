@@ -10,6 +10,7 @@ import com.getmedia.app.data.backup.BackupManager
 import com.getmedia.app.data.cloud.cloudSync
 import com.getmedia.app.player.PlayerHolder
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.ArchiveState
 import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.local.TrackEntity
@@ -146,8 +147,14 @@ class TrackRepository(
                     db.withTransaction {
                         val tracks = ids.mapNotNull { trackDao.byId(it) }
                         val account = SessionStore.current.value?.loginName
-                        if (account != null && cloudIds.isNotEmpty()) {
-                            cloudSync.queueRemovals(db, account, tracks, cloudIds, System.currentTimeMillis())
+                        if (account != null && tracks.isNotEmpty()) {
+                            // 本机导入（`local`）的条目一删就是连云端备份一起删：
+                            // 那份文件本来就没有别处能取回，留着只会变成"看不见、删不掉、还占配额"的孤儿。
+                            // 平台条目仍按用户勾选（只删本机 = 不碰云端）。
+                            val wanted = cloudIds + tracks
+                                .filter { it.platform.equals("local", ignoreCase = true) }
+                                .map { it.id }
+                            cloudSync.queueRemovals(db, account, tracks, wanted, System.currentTimeMillis())
                         }
                         val playlists = db.playlistDao()
                         // Bound query size so selecting a large library cannot exceed SQLite bind limits.
@@ -168,7 +175,11 @@ class TrackRepository(
             withContext(Dispatchers.Main) { PlayerHolder.removeTracks(context, removed.map { it.id }.toSet()) }
             BackupManager.noteWrite()
             // 云端删除要重放，或者本机列表因为这次删除变了：立刻推一轮，别等下一次进前台。
-            if (cloudIds.isNotEmpty() || listsTouched) cloudSync.onLocalChange(context)
+            // 本机导入的条目即使没勾"同时从云端移除"，也已经排进删除队列（见上），所以也要推。
+            val queuedLocal = removed.any {
+                it.platform.equals("local", ignoreCase = true) && it.serverId != null
+            }
+            if (cloudIds.isNotEmpty() || listsTouched || queuedLocal) cloudSync.onLocalChange(context)
             removed.size
         }
     }
@@ -481,7 +492,9 @@ class TrackRepository(
                         trackDao.upsertLocal(TrackEntity(
                             id = id,
                             platform = "local",
-                            videoId = title,
+                            // 稳定身份：用随机编号而不是标题。标题一改（网页端、手机端都能改）
+                            // 旧身份就对不上了；这个编号从导入那一刻起不再变化。
+                            videoId = "loc_" + java.util.UUID.randomUUID(),
                             title = title,
                             uploader = null,
                             durationSec = durationOf(dest),
@@ -491,6 +504,8 @@ class TrackRepository(
                             audioSha256 = hash,
                             localPath = dest.absolutePath,
                             mediaType = (if (video) MediaKind.VIDEO else MediaKind.AUDIO).name,
+                            // 本机导入没有可重新拉取的来源，必须备份到服务器归档（登录后自动开始）
+                            archiveState = ArchiveState.PENDING.name,
                         ))
                     }
                     added++
@@ -500,6 +515,8 @@ class TrackRepository(
                 }
             }
             onProgress("导入完成：$added 个")
+            // 导入即排队上传：登录了就在后台把文件传到服务器归档；没登录/免费版这里什么也不做
+            if (added > 0) cloudSync.onLocalChange(context)
             added
         }
     }

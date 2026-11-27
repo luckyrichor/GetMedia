@@ -148,14 +148,14 @@ android {
             applicationId = appIds.getProperty("freeApplicationId")
             // 免费版与完整版各自独立安装（包名不同），版本号跟着同一代代码走，
             // 免得免费版永远停在 0.1.0 / versionCode 1，装上去连升级判断都没法做。
-            versionName = "0.1.34"
-            versionCode = 35
+            versionName = "0.1.36"
+            versionCode = 37
         }
         create("full") {
             dimension = "edition"
             applicationId = appIds.getProperty("fullApplicationId")
-            versionName = "0.1.34"
-            versionCode = 35
+            versionName = "0.1.36"
+            versionCode = 37
         }
     }
 

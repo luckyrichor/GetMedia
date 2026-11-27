@@ -73,6 +73,11 @@ class LibraryTablesMigrationTest {
         // tracks 的新列必须逐条出现在 v4 迁移里；这里只核对新增的 5 个，旧列由 1→2 负责
         listOf("serverStorage", "confirmedTitle", "pendingTitle", "pendingTitleBaseSeq", "pendingTitleGen")
             .forEach { assertTrue("tracks 迁移缺列：$it", trackV4.any { s -> s.contains("`$it`") }) }
+        // v7 的归档备份四列（本机导入的文件上传）
+        listOf("archiveState", "archiveTries", "archiveNextAt", "archiveNote").forEach {
+            assertTrue("tracks 迁移缺列：$it", AppDatabase.TRACK_MIGRATION_6_7_SQL.any { s -> s.contains("`$it`") })
+        }
+        assertEquals(7, AppDatabase.MIGRATION_6_7.endVersion)
     }
 
     /** 只要真实列名：Compose 编译器会给类插 `$stable` 静态字段，不算列。 */
@@ -112,7 +117,7 @@ class LibraryTablesMigrationTest {
             .build()
         try {
             val sqlite = db.openHelper.writableDatabase
-            assertEquals(6, sqlite.version)
+            assertEquals(7, sqlite.version)
             val tables = tableNames(sqlite)
             assertTrue("缺 track_removals：$tables", tables.contains("track_removals"))
             assertTrue("缺 library_cursor：$tables", tables.contains("library_cursor"))
@@ -186,7 +191,8 @@ class LibraryTablesMigrationTest {
         // 退回 v3：重建一份没有 v4 新列的 tracks，并只留 v3 的两张辅助表。
         // 不用 ALTER TABLE DROP COLUMN：Android 的 SQLite 在目标版本上不支持。
         val newTrackColumns = listOf("serverStorage", "confirmedTitle", "pendingTitle",
-            "pendingTitleBaseSeq", "pendingTitleGen", "metaDirty")
+            "pendingTitleBaseSeq", "pendingTitleGen", "metaDirty",
+            "archiveState", "archiveTries", "archiveNextAt", "archiveNote")
         SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
             downgradeTracks(raw, newTrackColumns, "tracks_v3")
             downgradePlaylists(raw, "playlists_v3")
@@ -198,10 +204,10 @@ class LibraryTablesMigrationTest {
         }
 
         db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7)
             .allowMainThreadQueries().build()
         try {
-            assertEquals("升级后必须是 v6", 6, db.openHelper.writableDatabase.version)
+            assertEquals("升级后必须是 v7", 7, db.openHelper.writableDatabase.version)
             assertEquals("tracks 一行都不能少、一个字段都不能变", beforeTracks, db.trackDao().allNow())
             assertEquals("播放列表归属与顺序不变", beforeItems, db.playlistDao().itemsAll())
             assertEquals("类别不变", listOf("通勤"), db.categoryDao().allNow().map { it.name })
@@ -285,7 +291,8 @@ class LibraryTablesMigrationTest {
         // 退回 v2：去掉 v4 新列，删掉 v3/v4 才有的三张表
         SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
             downgradeTracks(raw, listOf("serverStorage", "confirmedTitle", "pendingTitle",
-                "pendingTitleBaseSeq", "pendingTitleGen", "metaDirty"), "tracks_v2")
+                "pendingTitleBaseSeq", "pendingTitleGen", "metaDirty",
+                "archiveState", "archiveTries", "archiveNextAt", "archiveNote"), "tracks_v2")
             downgradePlaylists(raw, "playlists_v2")
             raw.execSQL("DROP TABLE IF EXISTS track_removals")
             raw.execSQL("DROP TABLE IF EXISTS library_cursor")
@@ -294,10 +301,10 @@ class LibraryTablesMigrationTest {
         }
 
         db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6)
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7)
             .allowMainThreadQueries().build()
         try {
-            assertEquals("必须连续升到 v6", 6, db.openHelper.writableDatabase.version)
+            assertEquals("必须连续升到 v7", 7, db.openHelper.writableDatabase.version)
             val tables = tableNames(db.openHelper.writableDatabase)
             listOf("tracks", "categories", "playlists", "playlist_items",
                 "track_removals", "library_cursor", "remote_marks").forEach {
@@ -419,13 +426,15 @@ class LibraryTablesMigrationTest {
             db.close()
         }
 
-        // 退回 v5：这个库的表结构没变，只是把"写坏了的值"留在里面，再把版本号降回去
+        // 退回 v5：先拆掉 v7 才有的四列（否则 6→7 那段 ALTER 会撞上已存在的列），
+        // 再把"写坏了的值"原样留在库里、版本号降回去。
         SQLiteDatabase.openDatabase(ctx.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
+            downgradeTracks(raw, listOf("archiveState", "archiveTries", "archiveNextAt", "archiveNote"), "tracks_v5")
             raw.version = 5
         }
 
         db = Room.databaseBuilder(ctx, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6)
+            .addMigrations(AppDatabase.MIGRATION_4_5, AppDatabase.MIGRATION_5_6, AppDatabase.MIGRATION_6_7)
             .allowMainThreadQueries().build()
         try {
             val rows = db.trackDao().allNow().associateBy { it.id }

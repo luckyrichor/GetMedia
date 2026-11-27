@@ -16,6 +16,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal
+from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -146,13 +147,16 @@ class MediaStore:
         """
         now = self.now() if now is None else now
         with self.engine.begin() as c:
+            # **不看 ``deleted``**：墓碑行只要还挂着文件就仍占着盘。平台条目被删后
+            # 缓存文件要留到过期（另一台设备可能还在播），这段占用必须算进去，
+            # 否则配额会越用越"虚"，最后写不进去却显示还有空间。
             if storage == "cache":
                 used = int(c.execute(text(
-                    "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage='cache' AND deleted=0 "
+                    "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage='cache' "
                     "AND (cache_expires_at IS NULL OR cache_expires_at>:n)"), {"n": now}).scalar_one())
             else:
                 used = int(c.execute(text(
-                    "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage=:s AND deleted=0"),
+                    "SELECT COALESCE(SUM(bytes),0) FROM tracks WHERE storage=:s"),
                     {"s": storage}).scalar_one())
             used += self._creator_used(c, storage, now)
         # AI 重建的源文件与产物不在 tracks 表里（在 media_dir/ai/<项目号>/），
@@ -216,11 +220,15 @@ class MediaStore:
 
     # ---------- 淘汰 ----------
     def _file_rows(self, c, storage: str, *, now: int, expired: bool) -> list[dict]:
-        """tracks 与批量条目里属于该池子的文件，统一成可比的行。"""
+        """tracks 与批量条目里属于该池子的文件，统一成可比的行。
+
+        tracks 一侧**不看 ``deleted``**：墓碑行的文件还在盘上，淘汰时必须能被挑中，
+        否则被删的平台条目会永远占着缓存池（local 条目的文件在删除时已即时清掉）。
+        """
         rows: list[dict] = []
         if storage == "cache":
             track_sql = ("SELECT id, media_path, bytes, COALESCE(last_access_at, updated_at) AS at"
-                         " FROM tracks WHERE storage='cache' AND deleted=0")
+                         " FROM tracks WHERE storage='cache'")
             item_sql = ("SELECT i.id, i.media_path, i.bytes, i.files_json, COALESCE(i.stored_at, 0) AS at"
                         " FROM creator_items i JOIN creator_jobs j ON j.id=i.job_id"
                         " WHERE j.storage='cache' AND i.media_path IS NOT NULL")
@@ -233,7 +241,7 @@ class MediaStore:
                 item_sql += " AND (i.store_expires_at IS NULL OR i.store_expires_at>:n)"
         else:
             track_sql = ("SELECT id, media_path, bytes, COALESCE(created_at, 0) AS at"
-                         " FROM tracks WHERE storage='archive' AND deleted=0 AND media_path IS NOT NULL")
+                         " FROM tracks WHERE storage='archive' AND media_path IS NOT NULL")
             item_sql = ("SELECT i.id, i.media_path, i.bytes, i.files_json, COALESCE(i.stored_at, 0) AS at"
                         " FROM creator_items i JOIN creator_jobs j ON j.id=i.job_id"
                         " WHERE j.storage='archive' AND i.media_path IS NOT NULL")
@@ -266,6 +274,15 @@ class MediaStore:
                 removed["rows"] += 1
                 removed["tracks" if r["kind"] == "track" else "items"] += 1
         return removed
+
+    def _unlink(self, base: Path, rel: str) -> None:
+        """删一个落盘文件；失败只记日志（记录已经决定删了，不能因为文件被占用而回滚）。"""
+        p = base / rel
+        try:
+            if p.is_file():
+                p.unlink()
+        except OSError:
+            log.warning("文件删除失败：%s", rel)
 
     def _drop_one(self, c, row: dict, storage: str) -> None:
         """删掉一个落盘文件并清掉记录里的文件字段（条目本身保留）。"""
@@ -434,14 +451,16 @@ class MediaStore:
         return self.get(user_id, track_id, include_deleted=True)
 
     def delete_for_sync(self, user_id: str, track_id: int, expected_seq: int) -> dict:
-        """手机同步专用删除：带版本前置条件，且**绝不**给归档行写墓碑（P0-2 阶段 5）。
+        """手机同步专用删除：带版本前置条件；平台归档行受保护，``local`` 行可以删。
 
         与旧 :meth:`delete` 的差别：
         - 需要 ``If-Match`` 版本，条件写在同一句 SQL 里，检查和更新之间没有空档；
-        - ``archive`` 行直接 409 ``archive_protected``：存储文件是服务器长期保留的资产，
-          手机上的一次删除不能把它从网页正常列表里抹掉；
+        - 平台条目的 ``archive`` 行直接 409 ``archive_protected``：存储文件是服务器长期
+          保留的资产，手机上的一次删除不能把它从网页正常列表里抹掉；
+        - **``platform=local`` 的行不受这条保护**：它的文件本来就是这台手机传上去的备份，
+          手机端删条目就该连云端备份一起删（用户明确要求"删除不可逆"）；
         - 已经是墓碑时返回当前行（200），重复重放幂等；
-        - 旧网页接口的 ``delete`` 行为完全不变。
+        - 旧网页接口的 ``delete`` 行为完全不变（由它自己按平台分叉）。
         """
         if expected_seq <= 0:
             raise MediaError("bad_version", "条目版本不正确")
@@ -454,16 +473,21 @@ class MediaStore:
             # 已经删了：重放同一请求不产生任何新效果，直接成功（响应丢失后的重试靠这条）
             if current["deleted"]:
                 return current
-            if current["storage"] == "archive":
+            local = (current["platform"] or "").lower() == "local"
+            if current["storage"] == "archive" and not local:
                 raise MediaError("archive_protected", "云端归档条目不能从手机端移除；如需删除请在网页端处理归档",
                                  409, extra={"track": current})
             if current["updated_seq"] != expected_seq:
                 raise MediaError("track_version_conflict", "云端条目已变化，请刷新后重试",
                                  412, extra={"track": current})
+            if local and row._mapping["media_path"]:
+                self._unlink(self.dir_for(current["storage"]), row._mapping["media_path"])
+            clear = ", media_path=NULL, bytes=0, sha256=NULL, storage='metadata', cache_expires_at=NULL" \
+                if local else ""
             seq = self._next_seq(c)
             n = c.execute(text(
-                "UPDATE tracks SET deleted=1, updated_seq=:s, updated_at=:n"
-                " WHERE id=:i AND user_id=:u AND deleted=0 AND storage<>'archive' AND updated_seq=:e"),
+                f"UPDATE tracks SET deleted=1, updated_seq=:s, updated_at=:n{clear}"
+                " WHERE id=:i AND user_id=:u AND deleted=0 AND updated_seq=:e"),
                 {"i": track_id, "u": user_id, "s": seq, "n": self.now(), "e": expected_seq}).rowcount
             if n != 1:
                 # 条件写没命中：把真实状态读出来，按同一套错误码回答（并发修改不会静默成功）
@@ -474,7 +498,7 @@ class MediaStore:
                 now = _row_to_dict(latest)
                 if now["deleted"]:
                     return now
-                if now["storage"] == "archive":
+                if now["storage"] == "archive" and (now["platform"] or "").lower() != "local":
                     raise MediaError("archive_protected", "云端归档条目不能从手机端移除；如需删除请在网页端处理归档",
                                      409, extra={"track": now})
                 raise MediaError("track_version_conflict", "云端条目已变化，请刷新后重试",
@@ -523,17 +547,31 @@ class MediaStore:
         return self.get(user_id, track_id, include_deleted=True)
 
     def delete(self, user_id: str, track_id: int) -> dict:
-        """逻辑删除：保留文件，同步时下发 tombstone。"""
+        """删除条目：平台条目只写墓碑，``platform=local`` 连文件一起真删。
+
+        平台条目（B 站/抖音）的文件是缓存或中转产物，删记录时留着让它按过期规则回收；
+        记录本身必须留成墓碑，否则另一台设备会把它当新条目推回来。
+
+        ``local`` 条目存的是用户自己导入的原件备份（archive）。这种文件没有任何地方能重新
+        拉出来，留着就是**永久占配额又永远没人读**，所以删除即真删，并清空 ``media_path`` /
+        ``bytes`` / ``sha256``。手机上的那份副本归手机自己管，服务器不碰。
+        """
         with self.engine.begin() as c:
+            row = c.execute(text("SELECT platform, media_path, storage, deleted FROM tracks"
+                                 " WHERE id=:i AND user_id=:u"),
+                            {"i": track_id, "u": user_id}).first()
+            if row is None:
+                raise MediaError("track_not_found", "媒体不存在", 404)
+            m = row._mapping
+            local = (m["platform"] or "").lower() == "local"
+            if local and m["media_path"] and not m["deleted"]:
+                self._unlink(self.dir_for(m["storage"]), m["media_path"])
             seq = self._next_seq(c)
-            n = c.execute(text("UPDATE tracks SET deleted=1, updated_seq=:s, updated_at=:n "
-                               "WHERE id=:i AND user_id=:u AND deleted=0"),
-                          {"i": track_id, "u": user_id, "s": seq, "n": self.now()}).rowcount
-            if not n:
-                row = c.execute(text("SELECT id FROM tracks WHERE id=:i AND user_id=:u"),
-                                {"i": track_id, "u": user_id}).first()
-                if row is None:
-                    raise MediaError("track_not_found", "媒体不存在", 404)
+            clear = ", media_path=NULL, bytes=0, sha256=NULL, storage='metadata', cache_expires_at=NULL" \
+                if local else ""
+            c.execute(text(f"UPDATE tracks SET deleted=1, updated_seq=:s, updated_at=:n{clear}"
+                           " WHERE id=:i AND user_id=:u AND deleted=0"),
+                      {"i": track_id, "u": user_id, "s": seq, "n": self.now()})
         return self.get(user_id, track_id, include_deleted=True)
 
     def restore(self, user_id: str, track_id: int) -> dict:
@@ -585,6 +623,48 @@ class MediaStore:
             if expected_seq is not None and updated.rowcount != 1:
                 raise MediaError("target_changed", "原条目已变更，请重新打开", 409)
         return self.get(user_id, track_id, include_deleted=True)
+
+    def save_upload(self, user_id: str, track_id: int, *, ext: str,
+                    chunks: Iterable[bytes]) -> dict:
+        """手机上传某条目的原件，落到 ``archive`` 并记账（``platform=local`` 专用）。
+
+        顺序是"先落临时文件、再腾地方、最后原子改名"：
+        上传前不知道多大，而 ``ensure_room`` 必须拿到准数才能决定淘汰多少。临时文件以
+        ``.part`` 结尾，``purge_orphans`` 会跳过它。
+
+        已经归档过的行**直接返回**（幂等）：客户端可能因为响应丢失重传同一个文件，
+        重复写只会白占一份空间、还多一次 ``updated_seq``。
+        """
+        track = self.get(user_id, track_id)
+        if track["has_file"] and track["storage"] == "archive":
+            return track
+        dest = self.dir_for("archive")
+        dest.mkdir(parents=True, exist_ok=True)
+        dest.chmod(0o700)
+        part = dest / f".upload-{uuid4().hex}.part"
+        digest, size = hashlib.sha256(), 0
+        try:
+            with open(part, "wb") as f:
+                for chunk in chunks:
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    digest.update(chunk)
+                    size += len(chunk)
+                f.flush()
+                import os as _os
+                _os.fsync(f.fileno())
+            if size <= 0:
+                raise MediaError("empty_file", "上传的文件是空的", 400)
+            self.ensure_room("archive", size)
+            filename = f"{track_id}-{uuid4().hex}.{ext}"
+            part.chmod(0o600)
+            part.replace(dest / filename)
+        except Exception:
+            part.unlink(missing_ok=True)
+            raise
+        return self.attach_file(user_id, track_id, storage="archive", filename=filename,
+                                nbytes=size, sha256=digest.hexdigest())
 
     def touch(self, track_id: int) -> None:
         with self.engine.begin() as c:

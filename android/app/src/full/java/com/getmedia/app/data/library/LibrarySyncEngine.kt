@@ -46,6 +46,8 @@ class LibrarySyncEngine(
         val removedRows: Int = 0,
         /** 本轮给多少条本机行补上了 `serverId`（[bindSameKey]）。 */
         val bound: Int = 0,
+        /** 随记录一起作废的本机副本路径（本机导入的条目被云端删除时）；事务外再删文件。 */
+        val orphanFiles: List<String> = emptyList(),
     )
 
     /**
@@ -82,6 +84,8 @@ class LibrarySyncEngine(
             val page = transport.pull(cursor, pageSize)
             pages++
             val applied = applyPage(account, page.items, cursor)
+            // 文件删除放在事务外：DB 回滚时文件不该已经没了
+            applied.orphanFiles.forEach { runCatching { java.io.File(it).delete() } }
             added += applied.added
             skipped += applied.skipped
             tombstones += applied.tombstones
@@ -104,7 +108,8 @@ class LibrarySyncEngine(
     }
 
     private data class Applied(val added: Int, val skipped: Int, val tombstones: Int, val cursor: Long,
-                               val marks: Int = 0, val removedRows: Int = 0, val bound: Int = 0)
+                               val marks: Int = 0, val removedRows: Int = 0, val bound: Int = 0,
+                               val orphanFiles: List<String> = emptyList())
 
     /** 一页一个事务：写行与写水位要么一起生效，要么一起不生效。 */
     private suspend fun applyPage(account: String, items: List<CloudTrack>, since: Long): Applied =
@@ -124,6 +129,7 @@ class LibrarySyncEngine(
             var marks = 0
             var removedRows = 0
             var bound = 0
+            val orphans = ArrayList<String>()
             val fresh = ArrayList<TrackEntity>(items.size)
             val now = nowMs()
             val aux = db.libraryAuxDao()
@@ -159,6 +165,16 @@ class LibrarySyncEngine(
                     if (row.syncState == LibraryMark.DETACHED) continue
                     // 身份必须一致；不一致就只报告，不碰这一行
                     if (row.serverId != item.id || row.restoredKey() != item.restoredKey()) continue
+                    // 本机导入的条目（`local`）：云端删了就是这条被删了，**静默**处理——
+                    // 删记录、删我们自己那份副本（用户原本那个文件从来没被引用过，不碰）。
+                    // 平台条目不走这里：它们有原链接，能重新取回，才值得问"保留还是移除"。
+                    if (row.platform.equals("local", ignoreCase = true)) {
+                        db.trackDao().removePlaylistReferences(listOf(row.id))
+                        db.trackDao().delete(row.id)
+                        row.localPath?.let { orphans += it }
+                        removedRows++
+                        continue
+                    }
                     // 先清掉待推送草稿：墓碑上再 PATCH 只会 409，草稿留着也没意义
                     if (row.pendingTitle != null) {
                         db.trackDao().updateExisting(
@@ -233,7 +249,7 @@ class LibrarySyncEngine(
             val next = (items.maxOfOrNull { it.updatedSeq } ?: since).coerceAtLeast(since)
             aux.putCursor(LibraryCursorEntity(account = account, lastPos = next, lastAt = now))
             Applied(added = added, skipped = skipped, tombstones = tombstones, cursor = next,
-                marks = marks, removedRows = removedRows, bound = bound)
+                marks = marks, removedRows = removedRows, bound = bound, orphanFiles = orphans)
         }
 
     private fun Long?.orZero(): Long = this ?: 0L

@@ -669,3 +669,79 @@ def test_sync_write_routes_require_owner(menv):
     t = _one_track(menv)
     assert menv.client.delete(f"/v2/sync/tracks/{t['id']}").status_code == 401
     assert menv.client.patch(f"/v2/sync/tracks/{t['id']}", json={"title": "x"}).status_code == 401
+
+
+# ---------- 本机导入（platform=local）上传归档 ----------
+
+def _local_track(env, *, title="本机导入", media_type="audio", video_id="loc_5f0c1d2e"):
+    r = env.client.post("/v2/tracks", headers=hdr(env.token), json={
+        "platform": "local", "video_id": video_id, "page": 1, "media_type": media_type,
+        "title": title, "uploader": None, "duration_sec": 12.5, "source_url": "",
+    })
+    assert r.status_code == 200, r.text
+    return r.json()["track"]
+
+
+def _upload(env, tid, payload, name="晴天.mp3"):
+    return env.client.post(f"/v2/tracks/{tid}/file", headers=hdr(env.token),
+                           files={"file": (name, payload, "application/octet-stream")})
+
+
+def test_upload_local_file_lands_in_archive_and_is_idempotent(menv):
+    t = _local_track(menv)
+    payload = b"local-audio-payload" * 512
+    r = _upload(menv, t["id"], payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["storage"] == "archive" and body["has_file"] is True
+    assert body["bytes"] == len(payload)
+    files = [p for p in (menv.tmp / "media").iterdir() if p.is_file()]
+    assert len(files) == 1 and files[0].read_bytes() == payload
+    assert files[0].suffix == ".mp3"
+
+    # 同一条重传：幂等，不重写文件、不动版本（响应丢失后的重试靠这条）
+    again = _upload(menv, t["id"], payload)
+    assert again.status_code == 200 and again.json()["updated_seq"] == body["updated_seq"]
+    assert len([p for p in (menv.tmp / "media").iterdir() if p.is_file()]) == 1
+
+    got = menv.client.get(f"/v2/media/{t['id']}", headers=hdr(menv.token))
+    assert got.status_code == 200 and got.content == payload
+
+
+def test_delete_local_removes_bytes_and_keeps_tombstone(menv):
+    t = _local_track(menv)
+    payload = b"to-be-deleted" * 300
+    assert _upload(menv, t["id"], payload).status_code == 200
+    file = next(p for p in (menv.tmp / "media").iterdir() if p.is_file())
+
+    dropped = menv.client.delete(f"/v2/tracks/{t['id']}", headers=hdr(menv.token))
+    assert dropped.status_code == 200 and dropped.json()["deleted"] is True
+    assert not file.exists()
+    row = menv.client.get(f"/v2/tracks/{t['id']}", headers=hdr(menv.token)).json()
+    assert row["deleted"] is True and row["has_file"] is False
+    assert row["storage"] == "metadata" and row["bytes"] == 0
+    # 归档池的占用跟着归零
+    used = menv.client.get("/v2/maintenance/storage", headers=hdr(menv.token)).json()["used"]
+    assert used["archive"] == 0
+
+
+def test_sync_delete_is_allowed_for_local_archive(menv):
+    t = _local_track(menv)
+    assert _upload(menv, t["id"], b"x" * 4096).status_code == 200
+    current = menv.client.get(f"/v2/tracks/{t['id']}", headers=hdr(menv.token)).json()
+    r = menv.client.delete(f"/v2/sync/tracks/{t['id']}",
+                           headers={**hdr(menv.token), **_im(current["updated_seq"])})
+    assert r.status_code == 200 and r.json()["deleted"] is True
+    assert [p for p in (menv.tmp / "media").iterdir() if p.is_file()] == []
+
+
+def test_upload_quota_rejects_oversized_file(tmp_path):
+    env = build(tmp_path / "tiny", archive_quota_bytes=64)
+    env.app.state.runtime.write(registration_open=True)
+    env.token = make_owner(env, name="boss")
+    t = _local_track(env)
+    r = _upload(env, t["id"], b"y" * 256)
+    assert r.status_code == 409 and r.json()["code"] == "quota_exceeded"
+    # 失败不留半成品
+    assert [p for p in (env.tmp / "media").iterdir() if p.is_file()] == []
+    assert env.client.get(f"/v2/tracks/{t['id']}", headers=hdr(env.token)).json()["has_file"] is False

@@ -15,7 +15,7 @@ from typing import Literal
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import BackgroundTasks, Depends, Header, Query, Response
+from fastapi import BackgroundTasks, Depends, File, Header, Query, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -114,6 +114,31 @@ class SyncTitleBody(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     title: str = Field(max_length=500)
+
+
+_UPLOAD_EXT = re.compile(r"^[a-z0-9]{1,8}$")
+
+
+def _upload_ext(name: str | None, media_type: str) -> str:
+    """上传文件的后缀：只认纯字母数字，认不出就按媒体类型给个默认值。
+
+    不直接用客户端给的文件名：那是拼进落盘路径的字符串，任何 ``/`` 或 ``..`` 都会
+    把文件写到目标目录之外（文件名本身另有 uuid 前缀，这里只是再兜一层）。
+    """
+    raw = (name or "").rsplit(".", 1)
+    ext = raw[1].strip().lower() if len(raw) == 2 else ""
+    if _UPLOAD_EXT.match(ext):
+        return ext
+    return "mp4" if media_type == "video" else "m4a"
+
+
+def _iter_upload(file: UploadFile, chunk: int = 1024 * 1024):
+    """按块读上传流，不把整个文件读进内存（视频动辄几百 MB）。"""
+    while True:
+        data = file.file.read(chunk)
+        if not data:
+            return
+        yield data
 
 
 def _if_match_seq(raw: str | None) -> int:
@@ -508,6 +533,30 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
             return store.remove_file(ctx.user_id, _tid(track_id))
         except MediaError as exc:
             _translate(exc)
+
+    @app.post("/v2/tracks/{track_id}/file")
+    def upload_track_file(track_id: str, file: UploadFile = File(...),
+                          ctx: AuthCtx = Depends(guard)):
+        """手机把本机导入的原件传上来（``platform=local`` 的长期备份）。
+
+        这是**手机 → 服务器**这条方向；``/v2/extract`` 是服务器自己去拉，两者互不影响。
+        落进 ``archive`` 池子、按全站配额记账，空间不够时按"最旧优先"淘汰（`ensure_room`）。
+
+        幂等：这条已经在归档里就直接回当前行，不重写文件、不动 ``updated_seq``。
+        """
+        tid = _tid(track_id)
+        try:
+            track = store.get(ctx.user_id, tid)
+            return store.save_upload(ctx.user_id, tid,
+                                     ext=_upload_ext(file.filename, track["media_type"]),
+                                     chunks=_iter_upload(file))
+        except MediaError as exc:
+            _translate(exc)
+        except OSError as exc:
+            log.warning("上传落盘失败：%s", type(exc).__name__)
+            raise ApiError(500, "write_failed", "服务器写入失败，请稍后重试") from exc
+        finally:
+            file.file.close()
 
     # ---------- 媒体流 ----------
     @app.get("/v2/media/{track_id}")

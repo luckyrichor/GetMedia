@@ -86,6 +86,22 @@ data class TrackEntity(
      * 前台轮询用云端旧值抹掉——用户看到的是收藏自己跳回去了。
      */
     @ColumnInfo(defaultValue = "0") val metaDirty: Boolean = false,
+
+    // ---------- 本机导入文件的云端备份（v7 起） ----------
+    //
+    // 只有 `platform = local`（用户自己导入的文件）才用得上：这类条目没有原始链接，
+    // 换手机时唯一的取回途径就是服务器上那份归档，所以必须真的把文件传上去。
+    //
+    // 状态取值见 [com.getmedia.app.data.local.ArchiveState]：
+    // `NONE`（不涉及）/ `PENDING`（待上传，含退避等待）/ `DONE`（已备份）/
+    // `UNABLE`（无法备份，不再自动重试）/ `EVICTED`（云端那份被空间淘汰清掉了）。
+    @ColumnInfo(defaultValue = "'NONE'") val archiveState: String = "NONE",
+    /** 连续失败次数；一轮 5 次都失败就进入冷却，冷却结束后归零重来。 */
+    @ColumnInfo(defaultValue = "0") val archiveTries: Int = 0,
+    /** 下一次允许尝试的时间（毫秒时间戳）；0 表示立即可试。 */
+    @ColumnInfo(defaultValue = "0") val archiveNextAt: Long = 0,
+    /** 一句话原因，只用于界面展示；成功或重新排队时清空。 */
+    val archiveNote: String? = null,
 )
 
 @Entity(tableName = "categories")

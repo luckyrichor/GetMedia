@@ -443,6 +443,9 @@ object LibrarySyncRunner {
                     prompt.request(account, outcome.count, manual = false)
                 }
             }
+            // ⑧ 本机导入的文件补传到归档：必须放在元数据上传之后（要 serverId 才能挂文件），
+            // 所以独立一轮，不塞进 round 里。失败按各自的退避/冷却自己重试，不拖累这一轮。
+            if (token() != null) backupLocalFiles(db, client, account)
         } finally {
             mutex.unlock()
         }
@@ -479,6 +482,8 @@ object LibrarySyncRunner {
             val db = AppDatabase.get(context)
             val client = LibrarySyncClient(token = token)
             upload(uploader(db, client, session.loginName, prefs, manual), db, session.loginName)
+            // 手动上传也要把本机导入的文件带上：否则"确认上传"只同步了清单，文件还是没备份
+            if (token() != null) backupLocalFiles(db, client, session.loginName)
         }
     }
 
@@ -508,6 +513,29 @@ object LibrarySyncRunner {
             else -> "已上传 ${summary.uploaded + summary.adopted} 项"
         }
         note(db, account, note)
+    }
+
+    /**
+     * 本机导入的文件备份到归档（`platform=local`）。
+     *
+     * 只写一句话摘要到 `library_cursor.note`：成功不打扰，失败也不弹窗——
+     * 用户在乎的是"换了手机还能不能取回"，这件事在同步设置页能看到就够。
+     */
+    private suspend fun backupLocalFiles(db: AppDatabase, client: LibrarySyncClient, account: String) {
+        val summary = try {
+            LocalArchiveBackup(db, client, account).run()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: LibrarySyncException) {
+            note(db, account, "本机文件备份未完成：${e.message}")
+            return
+        }
+        when {
+            summary.stopped != null -> note(db, account, "本机文件备份已暂停（${summary.stopReason}）")
+            summary.unable > 0 -> note(db, account, "${summary.unable} 项本机文件无法备份到云端，可到条目详情看原因")
+            summary.uploaded > 0 -> note(db, account, "${summary.uploaded} 项本机文件已备份到云端")
+            summary.evicted > 0 -> note(db, account, "${summary.evicted} 项云端备份已被清理，手机上的文件还在")
+        }
     }
 
     /** 拉到墓碑后把"云端已移除 N 项"的批量确认摆出来；用户关掉后本次进程不再重复弹。 */

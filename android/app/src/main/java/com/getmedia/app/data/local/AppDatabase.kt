@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TrackRemovalEntity::class, LibraryCursorEntity::class, RemoteMarkEntity::class,
         PlaylistRemovalEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -161,6 +161,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v6 → v7：本机导入的文件要备份到服务器归档，曲库补四个状态列。
+         *
+         * 全部是 `ALTER TABLE ADD COLUMN`，旧行按默认值读成 `NONE`（不涉及备份）。
+         * 历史 `local` 行不会因此被批量上传：它们的 `videoId` 还是标题算出来的旧身份，
+         * 用户已明确会自己清空重建，这里不猜、不迁移。
+         */
+        val TRACK_MIGRATION_6_7_SQL: List<String> = listOf(
+            "ALTER TABLE tracks ADD COLUMN `archiveState` TEXT NOT NULL DEFAULT 'NONE'",
+            "ALTER TABLE tracks ADD COLUMN `archiveTries` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE tracks ADD COLUMN `archiveNextAt` INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE tracks ADD COLUMN `archiveNote` TEXT",
+        )
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                TRACK_MIGRATION_6_7_SQL.forEach(db::execSQL)
+            }
+        }
+
         @Volatile
         private var instance: AppDatabase? = null
 
@@ -170,7 +190,8 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "getmedia.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+                    MIGRATION_6_7)
                 .addCallback(object : Callback() {
                     override fun onCreate(db: SupportSQLiteDatabase) {
                         super.onCreate(db)

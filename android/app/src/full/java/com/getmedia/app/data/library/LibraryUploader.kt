@@ -3,6 +3,7 @@ package com.getmedia.app.data.library
 import androidx.room.withTransaction
 import com.getmedia.app.data.backup.MetadataSnapshot
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.ArchiveState
 import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.local.TrackEntity
@@ -116,6 +117,11 @@ class LibraryUploader(
                 // 建库接口只收 8 个字段，不带收藏与类别；这一行若有本机整理信息，
                 // 标成待推送，让同一轮的整理信息推送把它补上去（没有整理信息就不用多打一次 PATCH）。
                 metaDirty = current.favorite || current.localCategoryId != MetadataSnapshot.DEFAULT_CATEGORY_ID,
+                // 本机导入的条目：元数据一落地就有地方挂文件了，排进备份队列
+                // （真正的上传由 [LocalArchiveBackup] 在同一轮里接着做）。
+                archiveState = if (current.platform.equals("local", ignoreCase = true) &&
+                    ArchiveState.of(current.archiveState) == ArchiveState.NONE
+                ) ArchiveState.PENDING.name else current.archiveState,
                 updatedAtMs = nowMs(),
             ),
         )
@@ -132,8 +138,10 @@ class LibraryUploader(
         if (!SyncState.mayUploadToLibrary(SyncState.of(t.syncState), hasFile)) return false
         // 别的账号的行：不推。null 是本机新增（还没归属），可以推。
         if (t.accountKey != null && t.accountKey != account) return false
-        // 没有原始链接 / 键不全的行传上去也是个查不回来的空壳
-        if (t.sourceUrl.isNullOrBlank()) return false
+        // 没有原始链接 / 键不全的行传上去也是个查不回来的空壳。
+        // **本机导入（local）例外**：它本来就没有作品页链接，文件就是唯一来源，
+        // 服务器上那份归档才是换机时的取回途径。
+        if (t.sourceUrl.isNullOrBlank() && !t.platform.equals("local", ignoreCase = true)) return false
         if (t.platform.isBlank() || MetadataSnapshot.videoIdOf(t).isBlank()) return false
         return true
     }

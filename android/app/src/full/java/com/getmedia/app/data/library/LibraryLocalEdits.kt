@@ -14,7 +14,9 @@ import com.getmedia.app.data.local.TrackRemovalEntity
  * - 账号匹配；
  * - 状态是 `SYNCED` 或 `PENDING_UP`（`RESTORED` / `DETACHED` / 纯本机都不算）；
  * - 不是本机剪辑派生行（`sourceTrackId` / `locallyEdited`）；
- * - 已知是 `archive` 的不入队（服务端也会拒绝，这里只是少发一次必然被拒的请求）。
+ * - 平台条目的 `archive` 行不入队（服务端也会拒绝，这里只是少发一次必然被拒的请求）；
+ *   **本机导入（`local`）的归档行可以删**——那份文件就是这台手机传上去的备份，
+ *   手机端删条目就该连云端备份一起删。
  *
  * 删除的入队调用发生在 [com.getmedia.app.data.repo.TrackRepository.removeAll] 的事务里：
  * 队列写入与删行、播放列表引用清理同生共死，不会出现"行删了但删除没记下来"。
@@ -27,12 +29,16 @@ object LibraryLocalEdits {
         if (track.serverSeq == null || track.serverSeq <= 0) return false
         if (track.accountKey != account) return false
         if (track.syncState != SyncState.SYNCED.name && track.syncState != LibraryMark.PENDING_UP) return false
-        if (track.serverStorage == "archive") return false
+        if (track.serverStorage == "archive" && !isLocal(track)) return false
         if (track.sourceTrackId != null || track.locallyEdited) return false
         return track.restoredKey() != null
     }
 
-    fun isKnownArchive(track: TrackEntity): Boolean = track.serverStorage == "archive"
+    /** 归档行里只有"平台资产"受保护；本机导入的那份是用户自己的备份，可以删。 */
+    fun isKnownArchive(track: TrackEntity): Boolean =
+        track.serverStorage == "archive" && !isLocal(track)
+
+    private fun isLocal(track: TrackEntity): Boolean = track.platform.equals("local", ignoreCase = true)
 
     /**
      * 入队；调用方必须已经在 Room 事务里。返回实际入队的条数。
