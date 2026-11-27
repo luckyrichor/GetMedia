@@ -151,6 +151,13 @@ export function LibraryPage() {
     setPlaying(t.id);
   }
 
+  /** 收起这一条的播放条：先停声再卸载，按钮回到「播放」，下次点从头开始。 */
+  function closePlayer() {
+    mediaRef.current?.pause();
+    setPlaying(null);
+    setPaused(false);
+  }
+
   function beginRename(t: Track) {
     setEditing(t.id);
     setDraft(t.title);
@@ -415,9 +422,11 @@ export function LibraryPage() {
                     </div>
                   </div>
 
-                  {/* 播放条在这一行内部：点哪一首就哪一首展开，再点一下收起。 */}
+                  {/* 播放条在这一行内部：点哪一首就哪一首展开，条上「收起」把它收回去。 */}
                   {playing === t.id && (
-                    <Player track={t} mediaRef={mediaRef} onState={(on) => setPaused(!on)} />
+                    <Player track={t} mediaRef={mediaRef}
+                            onState={(on) => setPaused(!on)}
+                            onClose={closePlayer} />
                   )}
                 </li>
               ))}
@@ -535,10 +544,11 @@ function SortSplit({ field, dir, onField, onFlip }: {
  *
  * `key` 用条目 id：切到另一首时重建 media 元素，上一首的声音立刻停。
  */
-function Player({ track, mediaRef, onState }: {
+function Player({ track, mediaRef, onState, onClose }: {
   track: Track;
   mediaRef: { current: HTMLMediaElement | null };
   onState: (playing: boolean) => void;
+  onClose: () => void;
 }) {
   /** 自己这一份引用：换到上面那条时，旧播放器的卸载清理可能晚于新播放器挂载，
    *  共享引用会被清空，所以播哪个元素必须以自己的为准。 */
@@ -569,6 +579,12 @@ function Player({ track, mediaRef, onState }: {
 
   return (
     <div class="player-inline">
+      <div class="player-head">
+        <span class="player-now" title={track.title}>
+          {track.media_type === 'video' ? '正在播放视频' : '正在播放'}：{track.title}
+        </span>
+        <button type="button" class="btn btn-ghost small" onClick={onClose}>收起</button>
+      </div>
       {track.media_type === 'video'
         ? <video key={track.id} ref={attach} {...common} />
         : <audio key={track.id} ref={attach} {...common} />}

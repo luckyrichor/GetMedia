@@ -279,6 +279,14 @@ audio.player-media { background: none; }
   margin-top: 10px; padding: 8px 10px;
   background: var(--side); border: 1px solid var(--line); border-radius: 8px;
 }
+/* 播放条顶部：左边「正在播放：标题」，右边「收起」。标题过长按一行省略，不挤按钮。 */
+.player-head {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+}
+.player-now {
+  flex: 1; min-width: 0; font-size: 0.82rem; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 @media (max-width: 760px) {
   .thumbs img { width: 96px; height: 96px; }

@@ -210,6 +210,45 @@ describe('媒体库与播放', () => {
     expect(document.querySelector('.tracks > .player-inline')).toBeNull();
   });
 
+  test('收起：点播放条上的「收起」停声并卸掉播放器，按钮回到「播放」', async () => {
+    const played: string[] = [];
+    const paused: string[] = [];
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(function (this: HTMLMediaElement) {
+      played.push(this.getAttribute('src') || '');
+      return Promise.resolve();
+    });
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(function (this: HTMLMediaElement) {
+      paused.push(this.getAttribute('src') || '');
+    });
+    server(ownerRoutes({ [LIST]: { json: { items: [track(1)], count: 1 } } }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+
+    const actionBtn = (label: string) => Array.from(document.querySelectorAll('.track-actions button'))
+      .find((b) => b.textContent?.trim() === label)!;
+
+    await click(actionBtn('播放'));
+    await until(() => document.querySelector('.player-inline') !== null);
+    // 播放条顶上有「正在播放：标题」，收起按钮也在那里（不塞进行内按钮区）
+    expect(document.querySelector('.player-now')!.textContent).toContain('曲目 1');
+    // 「收起」在播放条上，不挤进行内按钮区（这条夹具没有文件、没有来源链接，所以没有「下载」）
+    expect(Array.from(document.querySelectorAll('.track-actions button'))
+      .map((b) => b.textContent?.trim())).toEqual(['暂停', '删除']);
+
+    await click(Array.from(document.querySelectorAll('.player-head button'))
+      .find((b) => b.textContent?.trim() === '收起')!);
+
+    // 先停声，再把播放器卸掉；行内按钮回到「播放」，不停在「暂停」
+    expect(paused).toEqual(['/api/v2/media/1']);
+    expect(document.querySelector('.player-inline')).toBeNull();
+    expect(actionBtn('播放')).toBeTruthy();
+
+    // 收起后再点播放是重新开始，不是接着上次的进度
+    await click(actionBtn('播放'));
+    await until(() => document.querySelector('.player-inline') !== null);
+    expect(played).toEqual(['/api/v2/media/1', '/api/v2/media/1']);
+  });
+
   test('元信息：平台、作者、时长、入库时间、文件大小各占一个标签，没文件写「无文件」', async () => {
     server(ownerRoutes({
       [LIST]: {
