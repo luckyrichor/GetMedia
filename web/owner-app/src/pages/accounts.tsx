@@ -239,7 +239,6 @@ export function AccountsPage() {
           <div class="card"><div class="muted small">账号总数</div><div class="stat">{data?.total ?? 0}</div></div>
           <div class="card"><div class="muted small">免费版</div><div class="stat">{s.free}</div></div>
           <div class="card"><div class="muted small">完整版</div><div class="stat">{s.full}</div></div>
-          <div class="card"><div class="muted small">管理员</div><div class="stat">{s.admin}</div></div>
           <div class="card"><div class="muted small">30 天内到期</div><div class="stat">{s.expiring_30d}</div></div>
           <div class="card"><div class="muted small">已停用 / 待注销</div><div class="stat">{s.disabled} / {s.pending_deletion}</div></div>
         </div>
