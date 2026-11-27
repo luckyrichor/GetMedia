@@ -48,7 +48,7 @@ const SORT_FIELDS: {
 
 const PLATFORMS = [
   { value: 'all', label: '全部平台' },
-  { value: 'local', label: '手机导入' },
+  { value: 'local', label: '导入' },
   { value: 'bilibili', label: 'B 站' },
   { value: 'douyin', label: '抖音' },
 ];

@@ -146,8 +146,8 @@ describe('媒体库', () => {
     await typeInto(document.querySelector('input[type="search"]')!, '');
     await until(() => titles().length === 3);
 
-    // 平台：手机导入只剩那一条
-    await chooseSelect('按平台筛选', '手机导入');
+    // 平台：导入只剩那一条
+    await chooseSelect('按平台筛选', '导入');
     await until(() => titles().length === 1);
     expect(titles()).toEqual(['长的那条']);
 

@@ -234,16 +234,22 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
   background: var(--tag-bg, var(--bg)); color: var(--tag-ink, var(--muted));
   font-size: 0.76rem; line-height: 1.55;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+  /* 时间 / 时长 / 大小都是数字：等宽数字才不会因为 8 和 1 的宽度差让每行错开两三个像素 */
+  font-variant-numeric: tabular-nums;
 }
 /* 五种颜色固定跟着语义走，不跟着位置轮换：换个排序也不会"这条的时间变成蓝色"。
    顺序恰好是 平台→时长→时间→存放→大小，相邻三格颜色天然不同。 */
-/* 平台这一格按最长的「手机导入」（4 个字）定宽：两个字时居中、两边留白，
-   这样每行的平台列等宽，后面几个标签的起点才对得齐。em 跟着标签字号走，不用写死 px。 */
+/* 平台这一格按两个字（抖音 / 导入）定宽，两个字时居中、两边留白；
+   「B 站」内容宽度约 1.9em，也放得下。这样每行平台列等宽，后面几个标签的起点才对得齐。
+   em 跟着标签字号走，将来调字号不用重算。 */
 .meta-tag.t-plat {
   --tag-bg: #eaf1fe; --tag-line: #c6d7f8; --tag-ink: #1c47b0;
-  min-width: calc(4em + 16px); text-align: center;   /* 4 字 + 左右 padding 14px + 边框 2px */
+  min-width: calc(2em + 16px); text-align: center;   /* 2 字 + 左右 padding 14px + 边框 2px */
 }
-.meta-tag.t-dur { --tag-bg: #f4f0fe; --tag-line: #dcd2fb; --tag-ink: #6535c9; }
+.meta-tag.t-dur {
+  --tag-bg: #f4f0fe; --tag-line: #dcd2fb; --tag-ink: #6535c9;
+  min-width: calc(3.8em + 16px); text-align: center;   /* 按最长的「1:02:03」定宽 */
+}
 .meta-tag.t-time { --tag-bg: #e8f7f8; --tag-line: #bcebef; --tag-ink: #0d6d77; }
 /* 存放方式同理按最长值「元数据」（3 个字）定宽，存储 / 缓存两个字居中留白，
    三种取值等宽，最后一个「文件大小 / 无文件」的起点才不会跟着跳。 */
@@ -255,6 +261,10 @@ code { font-family: var(--mono); font-size: 0.88em; background: var(--bg); paddi
   --tag-bg: #eaf6ee; --tag-line: #c2e6ce; --tag-ink: #1b6b39;
   font-weight: 600; font-variant-numeric: tabular-nums;
 }
+/* 最后一格同样定宽：文件大小与「无文件」等宽，短的值居中，
+   不然最后一位会跟着内容左右跳。4.5em 是按最长的「1023 MB」量的
+   （4 位数字 + 单位，fmtBytes 到 1024 就进下一单位，所以不会再长）。 */
+.meta-tag.t-size, .meta-tag.t-none { min-width: calc(4.5em + 16px); text-align: center; }
 /* 「无文件」保持虚线、不上色：它是"没有"这件事，不该跟有内容的信息抢眼 */
 .meta-tag.t-none { border-style: dashed; --tag-bg: transparent; --tag-ink: var(--muted); }
 @media (prefers-color-scheme: dark) {
