@@ -206,7 +206,9 @@ export function AgentPage() {
               {convs.map((c) => (
                 <li class={curId === c.id ? 'conv on' : 'conv'}>
                   <button type="button" class="conv-main" onClick={() => void open(c.id)}>
-                    <span class="ellipsis">{c.title || '未命名'}</span>
+                    {/* 侧栏只有 320px，长标题按一行省略；完整标题进 tooltip
+                        （这里不放横向滚动条：会把右边的相对时间挤成一条缝） */}
+                    <span class="ellipsis" title={c.title || undefined}>{c.title || '未命名'}</span>
                     <span class="small muted nowrap">{relTime(c.updated_at)}</span>
                   </button>
                   <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => void dropConv(c)}>

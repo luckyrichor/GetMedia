@@ -535,6 +535,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .col { min-width: 0; }
 .col-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .convs, .mems { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 4px; }
+/* 栅格项默认 `min-width: auto`：长标题会把整行撑到 526px，卡片直接压到右边的对话区上。
+   加 `min-width: 0` 才能让里面的 `.ellipsis` 真正生效（标题按一行省略 + tooltip）。 */
+.conv, .mem { min-width: 0; }
 .conv { display: flex; gap: 4px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
 .conv.on { border-color: var(--accent); }
 .conv-main {
@@ -919,8 +922,14 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .accounts-table .mid { font-variant-numeric: tabular-nums; }
 .accounts-table tbody tr:hover { background: var(--bg); }
 .accounts-table .cell-name { padding-left: 12px; }
+/* 登录名是这行唯一的标识，列只有 84px（内容 66px），长一点的账号名一定被裁。
+   跟批量提取的博主昵称同一套：格子里横向滚 + 右侧渐隐，别让人只能靠 tooltip 猜。 */
 .accounts-table .cell-name .name {
-  font-weight: 650; line-height: 1.4; overflow: hidden; text-overflow: ellipsis;
+  font-weight: 650; line-height: 1.4;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+  mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
 }
 .accounts-table .cell-name .sub { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
 /* 0 值淡灰：一片 0 的账号一眼就能跳过，不用逐个读数字 */
@@ -1433,14 +1442,23 @@ td.zero .bytes-u { color: inherit; }
   --e-out: 116px; --e-bytes: 88px; --e-at: 156px; --e-ops: 120px;
   min-width: 1028px;
 }
-/* 作品：标题一行（超出省略，完整标题进 tooltip）+ 作品号一行 */
+/* 作品：标题一行 + 作品号（失败时换成失败原因）一行。两行都可能很长，
+   所以跟批量页的博主昵称用同一套办法——格子里横向滚 + 右侧 16px 渐隐提示「后面还有」，
+   而不是省略号：标题被截掉一半时，光看 tooltip 不够直观，滚一下能看到完整那句。 */
 .ex-table .t-main {
   font-weight: 650; line-height: 1.4;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
 .ex-table .t-sub {
   font-size: 0.78rem; color: var(--muted); line-height: 1.4;
-  font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
 }
 /* 失败原因写在这一行：`.t-sub` 的灰色要压得住，所以带上同样的前缀 */
 .ex-table .t-sub.bad-text { color: #a4271c; }
