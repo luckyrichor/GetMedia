@@ -14,8 +14,8 @@ import { messageFor } from '@shared/errors';
 import { ownerApi, type AdminAccount, type AdminAccountPage, type Tier } from '../api';
 import { Select } from '../select';
 import {
-  DateInput, DateTimeCell, ErrorBox, Loading, Menu, Modal, NoAccess, Segmented,
-  fmtBytesParts, fmtDateTime, fmtTime, relTime, useLoad,
+  BytesCell, DateRange, DateTimeCell, ErrorBox, Loading, Menu, Modal, NoAccess, Segmented,
+  fmtDateTime, fmtTime, relTime, useLoad,
 } from '../ui';
 
 const TIER_LABEL: Record<Tier, string> = { free: '免费版', full: '完整版', admin: '管理员' };
@@ -53,18 +53,6 @@ function dayEnd(s: string): number | undefined {
   if (!s) return undefined;
   const t = new Date(`${s}T23:59:59`).getTime();
   return Number.isFinite(t) ? Math.floor(t / 1000) : undefined;
-}
-
-/** 本地时区的 `YYYY-MM-DD`，也就是 `input[type=date]` 的取值格式。
- *  日期框、表格里的创建时间、`dayStart/dayEnd` 三者都按本地时区解释，口径一致。 */
-function ymd(d: Date): string {
-  const two = (x: number) => String(x).padStart(2, '0');
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-}
-function daysAgo(n: number): Date {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
 }
 
 /** epoch 秒 → `<input type="datetime-local" step="1">` 认的字符串（本地时间，不带时区）。 */
@@ -131,21 +119,7 @@ function activeText(unix: number | null): string {
   return days >= 30 ? `${days} 天前` : relTime(unix);
 }
 
-/** 占用：数字和单位作为**一个整体**在列里居中。
- *
- *  外面这层是固定宽度的 inline-grid：左格数字右对齐、右格单位左对齐且宽度固定——
- *  不这么拆，「229 MB」和「0 B」的数字右边缘就对不齐（数字位数不同，单位会被顶来顶去）。
- *  容器本身居中，所以整列的视觉中心落在"数字+单位"这个整体上，而不是贴着单元格右边缘。
- */
-function byteCell(n: number) {
-  const p = fmtBytesParts(n);
-  return (
-    <span class="bytes">
-      <span class="bytes-n">{p.num}</span>
-      <span class="bytes-u">{p.unit}</span>
-    </span>
-  );
-}
+/** 占用：数字和单位作为**一个整体**在列里居中（`BytesCell`，批量提取页的占用列也用它）。 */
 
 export function AccountsPage() {
   const me = useLoad(() => ownerApi.me());
@@ -231,28 +205,10 @@ export function AccountsPage() {
     setPage(1);
   }
 
-  /** 手填起始日期时若晚于结束日期，直接把两个框对调，别让人对着倒置的区间猜结果。 */
-  function changeFrom(v: string) {
-    setPage(1);
-    if (v && to && v > to) {
-      setFrom(to);
-      setTo(v);
-      return;
-    }
-    setFrom(v);
-  }
-  function changeTo(v: string) {
-    setPage(1);
-    if (v && from && v < from) {
-      setTo(from);
-      setFrom(v);
-      return;
-    }
-    setTo(v);
-  }
-  function applyRange(f: Date, t: Date) {
-    setFrom(ymd(f));
-    setTo(ymd(t));
+  /** 日期范围：对调与「快捷」都由公共组件 `DateRange` 处理，这里只管回第一页。 */
+  function changeRange(f: string, t: string) {
+    setFrom(f);
+    setTo(t);
     setPage(1);
   }
 
@@ -491,27 +447,7 @@ export function AccountsPage() {
               { value: '', label: '有无数据都看' }, { value: '1', label: '有曲目' }, { value: '0', label: '无曲目' },
             ]} />
           </span>
-          <span class="date-range">
-            <span class="date-label">创建时间</span>
-            <DateInput label="创建时间开始" placeholder="开始日期" value={from} onInput={changeFrom} />
-            <span class="muted">至</span>
-            <DateInput label="创建时间截止" placeholder="结束日期" value={to} onInput={changeTo} />
-            <Menu
-              label="快捷 ▾"
-              variant="boxed"
-              ariaLabel="创建时间快捷范围"
-              items={[
-                { text: '今天', onClick: () => applyRange(new Date(), new Date()) },
-                { text: '近 7 天', onClick: () => applyRange(daysAgo(6), new Date()) },
-                { text: '近 30 天', onClick: () => applyRange(daysAgo(29), new Date()) },
-                {
-                  text: '本月',
-                  onClick: () => applyRange(new Date(new Date().getFullYear(), new Date().getMonth(), 1), new Date()),
-                },
-                { text: '清除日期', onClick: () => { setFrom(''); setTo(''); setPage(1); } },
-              ]}
-            />
-          </span>
+          <DateRange label="创建时间" from={from} to={to} onChange={changeRange} />
           {hasFilter ? (
             <button type="button" class="text-btn filter-reset" onClick={resetFilters}>重置筛选</button>
           ) : null}
@@ -644,7 +580,7 @@ export function AccountsPage() {
                     <td class={a.audio ? 'mid' : 'mid zero'}>{a.audio}</td>
                     <td class={a.video ? 'mid' : 'mid zero'}>{a.video}</td>
                     <td class={a.playlists ? 'mid' : 'mid zero'}>{a.playlists}</td>
-                    <td class={a.bytes ? 'mid' : 'mid zero'}>{byteCell(a.bytes)}</td>
+                    <td class={a.bytes ? 'mid' : 'mid zero'}><BytesCell n={a.bytes} /></td>
                     <td class="cell-ops">{rowOps(a)}</td>
                   </tr>
                 ))}

@@ -467,26 +467,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .job.off { opacity: 0.72; }
 .job.on { border-color: var(--accent); }
 .job-head { display: flex; gap: 8px; align-items: center; }
-.job-no {
-  flex: none; display: inline-flex; align-items: center; justify-content: center;
-  min-width: 1.4rem; height: 1.4rem; padding: 0 5px;
-  border-radius: 999px; border: 1px solid transparent;
-  background: var(--accent);   /* 主题蓝作底，比淡蓝更醒目 */
-  font-size: 0.78rem; font-variant-numeric: tabular-nums;
-  font-weight: 600; color: var(--accent-ink);   /* 配套反色，明暗主题都清晰 */
-}
-.job-hide {
-  flex: none; margin-left: 2px;
-  background: #fff1f0; border: 1px solid #f0a49c; border-radius: 7px;
-  padding: 3px 9px; font: inherit; font-size: 0.78rem; line-height: 1.25;
-  color: #a4271c; cursor: pointer;
-}
-.job-hide:hover { background: #a4271c; border-color: #a4271c; color: #fff; }
-.job-hide:focus-visible { outline: 2px solid #a4271c; outline-offset: 1px; }
-@media (prefers-color-scheme: dark) {
-  .job-hide { background: #2b1a19; border-color: #f0a49c; color: #f0a49c; }
-  .job-hide:hover { background: #f0a49c; border-color: #f0a49c; color: #1a0d0c; }
-}
 .job .small + .small { margin-top: 2px; }
 .grow { flex: 1; min-width: 0; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -536,7 +516,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .pager { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
 .pager .btn, .pager .pager-gap { padding: 3px 9px; font-size: 0.82rem; }
 .pager .btn:disabled { opacity: 0.45; }
-.pager .pager-on { cursor: default; }
+.pager .pager-on {
+  cursor: default; background: var(--info-bg); border-color: var(--accent); color: var(--accent);
+}
 .pager .pager-gap { color: var(--muted); }
 /* 「下一页」固定在最右端：页码提示用 margin-left:auto 右推，下一页作为末尾元素位置恒定，
    不随中间页码按钮数量变化而左右漂移。 */
@@ -776,6 +758,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
    左右内边距从 22px 收到 16px：1280 屏下这是"表格不横滚"的关键 12px。 */
 .content-wide { max-width: 84rem; }
 .content.content-wide { padding-left: 16px; padding-right: 16px; }
+/* 批量提取：表格 9 列、卡片要铺满，干脆不设上限（宽屏上右边不留空） */
+.content-full { max-width: none; }
+.content.content-full { padding-left: 16px; padding-right: 16px; }
 
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px; }
 .page-head h1 { margin: 0; }
@@ -849,6 +834,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 .text-btn:hover { background: var(--info-bg); }
 .text-btn:disabled { color: var(--muted); background: none; cursor: default; }
+/* 顶栏「退出」这类不该抢眼的动作：灰字，hover 才浮出浅底 */
+.text-btn.muted { color: var(--muted); }
+.text-btn.muted:hover { color: var(--text); background: var(--bg); }
 /* 固定槽位 [改有效期] [重置密码] [⋯]：管理员行用隐藏的同字按钮占位，
    三种行的「重置密码」落在同一条竖线上 */
 .row-ops { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
@@ -937,19 +925,19 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .accounts-table .cell-name .sub { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
 /* 0 值淡灰：一片 0 的账号一眼就能跳过，不用逐个读数字 */
 .accounts-table td.zero { color: var(--muted); }
-/* 占用列：数字和单位是**一个整体**，在列里居中。
+/* 占用列：数字和单位是**一个整体**，在列里居中（`BytesCell`，权限管理与批量提取共用）。
    容器是固定宽度的两格 inline-grid——左格数字右对齐（4.5ch 放得下 4 位数）、
    右格单位左对齐（2em 固定宽，够放 KB/MB/GB）。这样「229 MB」和「0 B」的数字右边缘在同一条竖线上，
    而整体又居中，不会像右对齐那样贴着单元格右边缘。
    宽度必须小于单元格内容宽（1280 屏占用列 82px − 左右 12px 内边距 = 70px）：
    一旦超了，居中就失效——Chrome 会把溢出的 inline 盒子贴到左边，整列看起来偏右 2px。 */
-.accounts-table .bytes {
+.bytes {
   display: inline-grid; grid-template-columns: 4.5ch 2em; column-gap: 4px;
   align-items: baseline;
 }
-.accounts-table .bytes-n { text-align: right; font-variant-numeric: tabular-nums; }
-.accounts-table .bytes-u { text-align: left; font-size: 0.86em; color: var(--muted); }
-.accounts-table td.zero .bytes-u { color: inherit; }
+.bytes-n { text-align: right; font-variant-numeric: tabular-nums; }
+.bytes-u { text-align: left; font-size: 0.86em; color: var(--muted); }
+td.zero .bytes-u { color: inherit; }
 /* 日期时间两段式：日期正常色，时分秒淡灰再小一号（精确到秒，见 accounts.tsx 的 dtCell） */
 .dt { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dt-t { margin-left: 3px; font-size: 0.84em; color: var(--muted); }
@@ -1101,16 +1089,24 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 @media (prefers-reduced-motion: reduce) { .inv-fresh { animation: none; } }
 
-/* 轻量 toast：底部居中浮一条，不占页面流（生成 / 复制的回执用它） */
+/* 轻量 toast：底部居中浮一条，不占页面流（生成 / 复制 / 隐藏的回执用它） */
 .toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
   z-index: 400; max-width: min(90vw, 28rem);
+  display: flex; align-items: center; gap: 10px;
   padding: 9px 14px; border-radius: 10px; font-size: 0.86rem; line-height: 1.5;
   background: var(--surface); border: 1px solid var(--line); color: var(--text);
   box-shadow: 0 12px 30px rgba(8, 11, 16, 0.22);
   animation: toast-in 0.16s ease-out;
 }
 .toast-err { border-color: #a4271c; color: #a4271c; }
+/* toast 里的撤销按钮：跟文字同一行，不把提示条撑成两行 */
+.toast-act {
+  flex: none; border: 0; background: none; color: var(--accent);
+  font: inherit; font-size: 0.86rem; font-weight: 650;
+  padding: 2px 6px; border-radius: 6px; cursor: pointer;
+}
+.toast-act:hover { background: var(--info-bg); }
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, 6px); }
   to { opacity: 1; transform: translate(-50%, 0); }
@@ -1175,6 +1171,231 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   .filter-line .date-wrap { flex: 1 1 8rem; }
   /* 日期区间整行独占，内部再换行；不然「快捷」会被挤出卡片右边缘 */
   .date-range { flex: 1 1 100%; }
-  /* 日期区间整行独占，内部再换行；不然「快捷」会被挤出卡片右边缘 */
-  .date-range { flex: 1 1 100%; }
+}
+
+/* ============================================================================
+   批量提取页
+   与「权限管理」「邀请码」同一套规范：白底圆角卡片、间距只用 4/8/12/16/24、
+   表格固定列宽单行。自上而下：标题 + 一行提示 → 提取表单 → 批量任务标题 →
+   筛选栏（两行）→ 任务表格卡片 + 底部「共 N 条」。
+   ========================================================================== */
+.page-sub { margin: 4px 0 0; font-size: 0.875rem; color: var(--muted); }
+/* 区块标题 + 右侧总数（批量任务 / 表格底部共用这一行的节奏） */
+.sec-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 12px; }
+.sec-head h2 { margin: 0; font-size: 1.05rem; }
+.sec-n {
+  margin-left: auto; font-size: 0.82rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 提取表单：一块白卡，控件统一 36px 白底浅灰边 ---- */
+.ext-form {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px; margin-bottom: 20px;
+}
+/* 第一行：类型下拉定宽 160，链接输入吃掉剩下的宽度 */
+.ext-row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.ext-row > .field { margin: 0; }
+.ext-kind { flex: 0 0 160px; width: 160px; }
+.ext-url { flex: 1 1 320px; min-width: 0; }
+/* 第二行：控件按 180px 起排，能放几个放几个；日期区间要够宽，独占一整行 */
+.ext-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px; margin-top: 16px;
+}
+.ext-grid > .field { margin: 0; }
+.ext-grid > .field-wide { grid-column: 1 / -1; }
+.ext-form .field > span { font-size: 0.8rem; color: var(--muted); }
+.ext-form input[type="text"], .ext-form .select-trigger, .ext-form input.date-input {
+  height: 36px; min-height: 36px; padding: 0 10px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+}
+.ext-form input.date-input { padding: 0 8px; width: 8.75rem; }
+.ext-form .date-hint { background: var(--surface); }
+/* 起点序号 + 方向并排：两个控件加起来只占一格，第二行才不会掉到第三行去 */
+.field-inline { display: flex; gap: 8px; align-items: center; }
+.field-inline .select { flex: 1 1 auto; min-width: 0; }
+.field-inline .stepper { flex: none; }
+/* 校验红：边框变红 + 下面一行红字（红字不占位时不留空行） */
+.field.is-bad input, .field.is-bad .select-trigger,
+.field.is-bad input.date-input, .field.is-bad .stepper { border-color: #a4271c; }
+.field-err { font-style: normal; font-size: 0.78rem; line-height: 1.4; color: #a4271c; }
+.field-hint { font-style: normal; font-size: 0.78rem; line-height: 1.4; color: var(--muted); }
+@media (prefers-color-scheme: dark) {
+  .field.is-bad input, .field.is-bad .select-trigger,
+  .field.is-bad input.date-input, .field.is-bad .stepper { border-color: #ef9a9a; }
+  .field-err { color: #ef9a9a; }
+}
+/* 底部一行：左复选框，右两个按钮（「开始提取」是全页唯一实心主按钮） */
+.ext-foot { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+.ext-foot .check { margin: 0; }
+.ext-acts { display: flex; gap: 8px; margin-left: auto; }
+/* 次要按钮：白底 + 浅灰边 + 深色字，跟主按钮拉开权重 */
+.btn-outline {
+  background: var(--surface); border: 1px solid var(--line); color: var(--text);
+}
+.btn-outline:hover:not(:disabled) { border-color: var(--muted); background: var(--bg); }
+
+/* ---- 预览结果：一条淡蓝信息条（失败换成淡红） ---- */
+.info-bar {
+  display: grid; gap: 6px; margin-top: 16px; padding: 10px 12px;
+  border-radius: 8px; background: var(--info-bg); border: 1px solid #c6d7f8;
+  font-size: 0.85rem;
+}
+.info-bar.bad { background: #fdecea; border-color: #f0a49c; color: #a4271c; }
+.info-main { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+.info-main strong { font-weight: 650; }
+.info-who { color: var(--muted); }
+.info-list { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 0.8rem; color: var(--muted); }
+.info-list > span {
+  max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (prefers-color-scheme: dark) {
+  .info-bar { border-color: #2c4272; }
+  .info-bar.bad { border-color: #7a3b36; color: #ef9a9a; }
+}
+
+/* ---- 状态淡色标签（无描边） ---- */
+.pill {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 0.78rem; line-height: 1.5; white-space: nowrap;
+  background: var(--bg); color: var(--muted);
+}
+.pill.tone-info { background: #eaf1fe; color: #1c47b0; }
+.pill.tone-ok { background: #e6f4ea; color: #1b5e20; }
+.pill.tone-warn { background: #fdf4e6; color: #8a5a00; }
+.pill.tone-bad { background: #fdecea; color: #a4271c; }
+@media (prefers-color-scheme: dark) {
+  .pill { background: #1d232c; color: var(--muted); }
+  .pill.tone-info { background: #1a2742; color: #9db8ff; }
+  .pill.tone-ok { background: #14301c; color: #a5d6a7; }
+  .pill.tone-warn { background: #2a2113; color: #e8c489; }
+  .pill.tone-bad { background: #3a1d1d; color: #ef9a9a; }
+}
+
+/* ---- 字段说明的小 ⓘ：悬停或聚焦才展开 ---- */
+.field-k { display: inline-flex; align-items: center; gap: 4px; }
+.tip-i {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border-radius: 50%; cursor: help;
+  font-size: 0.7rem; line-height: 1; color: var(--muted);
+  border: 1px solid var(--line); background: var(--surface);
+}
+.tip-i:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tip-pop {
+  position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%);
+  z-index: 120; width: 17rem; padding: 8px 10px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--line); color: var(--text);
+  box-shadow: 0 10px 26px rgba(8, 11, 30, 0.16);
+  font-size: 0.78rem; font-weight: 400; line-height: 1.55; white-space: normal;
+  display: none;
+}
+.tip-i:hover .tip-pop, .tip-i:focus .tip-pop { display: block; }
+
+/* 第一行要塞下「状态分段（7 段约 550px）+ 昵称 + 用户 ID」：昵称的基准宽度压到 8rem，
+   多出来的宽度靠 flex-grow 补满。用默认的 16rem 基准时用户 ID 会被挤到第二行去。 */
+.cr-filters .filter-line .search { flex: 1 1 8rem; min-width: 6rem; }
+/* 第二行要塞下四个下拉 + 发起时间（两个日期框 + 快捷）+ 最右的「重置筛选」：
+   下拉收到 108px 就够（「全部平台」四个字），省下的宽度正好留给重置按钮 */
+.cr-filters .filter-line .select-trigger { min-width: 6.75rem; max-width: 8.5rem; }
+/* 第二行要塞下四个下拉 + 发起时间（两个日期框 + 快捷）+ 最右的「重置筛选」：
+   下拉收到 108px 就够（「全部平台」四个字），省下的宽度正好留给重置按钮 */
+.cr-filters .filter-line .select-trigger { min-width: 6.75rem; max-width: 8.5rem; }
+/* 第一行要塞下「状态分段（7 段约 550px）+ 昵称 + 用户 ID」：昵称的基准宽度压到 8rem，
+   多出来的宽度靠 flex-grow 补满。用默认的 16rem 基准时用户 ID 会被挤到第二行去。 */
+.cr-filters .filter-line .search { flex: 1 1 8rem; min-width: 6rem; }
+/* 第二行要塞下四个下拉 + 发起时间（两个日期框 + 快捷）+ 最右的「重置筛选」：
+   下拉收到 108px 就够（「全部平台」四个字），省下的宽度正好留给重置按钮 */
+.cr-filters .filter-line .select-trigger { min-width: 6.75rem; max-width: 8.5rem; }
+/* 第二行要塞下四个下拉 + 发起时间（两个日期框 + 快捷）+ 最右的「重置筛选」：
+   下拉收到 108px 就够（「全部平台」四个字），省下的宽度正好留给重置按钮 */
+.cr-filters .filter-line .select-trigger { min-width: 6.75rem; max-width: 8.5rem; }
+/* 用户 ID 输入框定宽 200px：昵称那边是弹性的，ID 位数可预期，不必跟着伸 */
+.f-uid { flex: 0 0 200px; }
+.f-uid input {
+  height: 36px; padding: 0 10px; background: var(--surface); border-radius: 8px;
+}
+
+/* ---- 任务表格 ---- *//* 列宽：除「博主」外全部写死，「博主」留 auto 吃掉剩余宽度（table-layout: fixed 下
+   只有 auto 列会伸展，写死宽度的列按比例摊分——那样每列都会跟着变宽）。
+   8 个写死列合计 872px，min-width 992 就是给「博主」留 120px；
+   1280 屏表格区可视 1036px，所以这一档不出现横向滚动（1280 下博主实际 164px）。 */
+.cr-table {
+  --c-no: 40px; --c-st: 76px; --c-sel: 104px; --c-out: 124px;
+  --c-prog: 120px; --c-bytes: 88px; --c-at: 128px; --c-ops: 192px;
+  min-width: 992px; table-layout: fixed; border: 0; border-radius: 0; background: none;
+}
+.cr-table th, .cr-table td {
+  padding: 8px 6px; vertical-align: middle; white-space: nowrap; height: 56px;
+}
+.cr-table th { background: var(--bg); font-size: 0.78rem; }
+.cr-table td { font-size: 0.82rem; }
+.cr-table th:first-child, .cr-table td:first-child { padding-left: 16px; }
+.cr-table th:last-child, .cr-table td:last-child { padding-right: 16px; }
+.cr-table tbody tr:hover { background: var(--bg); }
+/* 数字列（进度、占用）居中；类名用 `mid` 而不是 `center`——门页的 `.center` 是
+   `display:grid; min-height:76vh`，`td.center` 一旦命中它，单元格就不再是 table-cell。 */
+.cr-table th.mid, .cr-table td.mid { text-align: center; }
+.cr-table .mid { font-variant-numeric: tabular-nums; }
+/* 博主：昵称一行（加粗、过长省略）+「平台 · 用户 ID」一行（普通字体、等宽数字） */
+.cr-table .who-name {
+  font-weight: 650; line-height: 1.4; overflow: hidden; text-overflow: ellipsis;
+}
+.cr-table .who-sub {
+  font-size: 0.78rem; color: var(--muted); line-height: 1.4;
+  font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis;
+}
+.cr-table .c-sel, .cr-table .c-out { overflow: hidden; text-overflow: ellipsis; }
+.cr-table .sub { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+/* 操作列：和占用列之间留 20px，两个表头不挤成一块；三个槽位单行不折 */
+.cr-table .c-ops { padding-left: 20px; padding-right: 8px; }
+.cr-table th.c-ops { padding-left: 22px; }
+.cr-table .row-ops { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; }
+.cr-table .row-ops .text-btn { padding: 4px 5px; font-size: 0.82rem; }
+
+/* 进度：数字「已抓 / 总数」左右分格对齐，斜杠居中；未跑完时下面补一条细进度条 */
+.prog { display: inline-flex; flex-direction: column; align-items: center; gap: 4px; max-width: 100%; }
+.prog-n {
+  display: inline-grid; grid-template-columns: 4ch auto 4ch;
+  align-items: baseline; font-variant-numeric: tabular-nums;
+}
+.prog-l { text-align: right; }
+.prog-s { padding: 0 2px; color: var(--muted); }
+.prog-r { text-align: left; }
+.prog-bar {
+  display: block; width: 80px; max-width: 100%; height: 4px;
+  border-radius: 999px; background: var(--bg); overflow: hidden;
+}
+.prog-bar > i { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+.prog-bar.tone-bad > i { background: #a4271c; }
+.prog-bar.tone-idle > i { background: var(--muted); }
+.prog-sub { font-size: 0.76rem; color: var(--muted); white-space: nowrap; }
+.prog-sub.bad { color: #a4271c; }
+@media (prefers-color-scheme: dark) {
+  .prog-bar.tone-bad > i { background: #ef9a9a; }
+  .prog-sub.bad { color: #ef9a9a; }
+}
+
+/* 展开的条目：整行子区域，浅灰底 + 细线分隔，内容铺满九列 */
+.cr-table tr.job-sub > td {
+  padding: 0 16px 14px; height: auto; white-space: normal; background: var(--bg);
+}
+.cr-table tr.job-sub .items { border-top: 0; margin-top: 0; padding-top: 0; }
+
+/* 刚建好的任务行：强调色淡底 2 秒淡出（列表刷新后一眼看到它落在哪） */
+.cr-table tr.job-fresh { animation: job-fresh 2s ease-out; }
+@keyframes job-fresh {
+  from { background: var(--info-bg); }
+  to { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .cr-table tr.job-fresh { animation: none; } }
+
+/* 窄屏：状态分段（7 段约 550px）比内容区还宽，让它自己换行，别把整页顶出横向滚动 */
+@media (max-width: 900px) {
+  .cr-filters .filter-line > .seg { flex-wrap: wrap; height: auto; width: 100%; }
+}
+@media (max-width: 720px) {
+  .ext-kind { flex: 1 1 100%; width: auto; }
+  .ext-acts { margin-left: 0; width: 100%; justify-content: flex-end; }
+  .info-list > span { max-width: 100%; }
 }

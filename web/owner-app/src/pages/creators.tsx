@@ -4,7 +4,12 @@
  * 建任务走 `/v2/creators/jobs`；任务由服务端跑，页面只轮询进度。
  * 抖音列表走浏览器桥接（页面自己算签名）；未配置桥接时会被 Argus 挡，页面对此给解释，不把它说成"网络问题"。
  * 条目支持直接下载到本机：服务端用扫描时存下的播放地址转发，不落盘、不经过手机。
+ *
+ * 页面自上而下：标题 + 一行提示 → 提取表单 → 「批量任务」标题（右侧共 N 条）→
+ * 筛选栏（两行）→ 任务表格卡片 + 底部「共 N 条」。视觉规范与「权限管理」「邀请码」同一套，
+ * 见 styles.css 的「批量提取页」段。
  */
+import { Fragment } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import {
@@ -12,18 +17,20 @@ import {
   type JobStorage, type MediaType, type SelectionMode,
 } from '../api';
 import {
-  FORMAT, FORMATS_OF, FORMAT_TIP, ITEM, JOB, SELECTION, STORAGE, STORAGE_DESC, TONE, platformName,
+  FORMAT, FORMATS_OF, FORMAT_TIP, JOB, SELECTION, STORAGE, STORAGE_DESC, platformName,
 } from '../labels';
 import { MultiSelect, Select } from '../select';
 import {
-  DateInput, Empty, ErrorBox, fmtBytes, fmtDateTime, fmtDuration, fmtTime, Loading, relTime,
+  BytesCell, DateInput, DateRange, DateTimeCell, ErrorBox, Loading, Menu, Segmented, Stepper,
+  fmtBytes, fmtDateTime, fmtDuration, fmtTime, relTime, useToast, type MenuItem,
 } from '../ui';
 
 /** 三种存放方式（旧的 phone 已并入「只记清单」，不再出现在选项里）。 */
 const STORAGE_OPTS: JobStorage[] = ['metadata', 'cache', 'archive'];
 
 /** 「不再显示」只作用于这台设备的这个浏览器：任务本身还在服务端跑，只是不再占列表位置。
- *  记在 localStorage 里，刷新后依然隐藏；清站点数据或用别的设备会重新出现，所以下面留了「恢复显示」。 */
+ *  记在 localStorage 里，刷新后依然隐藏；清站点数据或用别的设备会重新出现，
+ *  所以隐藏后 toast 里留一个「撤销」，列表底部也留了「恢复显示」。 */
 const HIDDEN_KEY = 'getmedia.creators.hiddenJobs';
 
 function readHidden(): number[] {
@@ -101,44 +108,27 @@ export function normalizeCreatorInput(raw: string, kind: CreatorKind): string {
 
 const NUMERIC_ID = /^\d{1,20}$/;
 
+/** 条数与起始序号的上限：只在输入校验和步进按钮上用，不改变服务端行为。 */
+const MAX_N = 100000;
+const MAX_START = 500;
+
 /** 任务抓的是谁：昵称取不到就说「昵称未知」，不猜也不空着。 */
 function nickName(j: CreatorJob): string {
   return (j.creator_name || '').trim() || '昵称未知';
 }
 
-/** 平台号的前缀：抖音号 / B站号（连写）。后面跟带框的数字，见下方渲染。 */
-const ID_LABEL: Record<string, string> = { douyin: '抖音号', bilibili: 'B站号' };
-
-/** 用户当初填的是号码时，单独做个标签，一眼看出这批是「按号抓的」。
- *  填的是主页链接时没有号码可写（链接本身就是线索），返回空串——
- *  链接里必有 :// 或 /，`NUMERIC_ID` 本来就不认，这里再挡一次平台未知的情况。 */
-function inputId(j: CreatorJob): string {
-  const raw = (j.source_input || '').trim();
-  return NUMERIC_ID.test(raw) ? raw : '';
-}
-
-/** 任务抓的博主号（纯数字，不带前缀）：
- *  用户填的是号码时用用户填的（用户意图，最准）；
- *  填的是链接时回退用后端解析出的平台号（creator_id）。
- *  返回空串表示这个任务没有可显示的号码。 */
+/** 用户当初填的是号码时，用用户填的（用户意图，最准）；
+ *  填的是链接时回退用后端解析出的平台号（creator_id）。返回空串表示没有可显示的号码。 */
 function creatorId(j: CreatorJob): string {
-  const input = inputId(j);
-  if (input) return input;
+  const raw = (j.source_input || '').trim();
+  if (NUMERIC_ID.test(raw)) return raw;
   const id = (j.creator_id || '').trim();
   return NUMERIC_ID.test(id) ? id : '';
 }
 
-/** 号码前缀文字（「抖音号」「B站号」），无框、纯文字；没有号则空串。
- *  后面跟着一个带框的数字胶囊（见 job-head 渲染处），两者分开。 */
-function creatorIdLabel(j: CreatorJob): string {
-  return creatorId(j) ? (ID_LABEL[j.platform] ?? '') : '';
-}
-
-/** 这一批选了哪些作品：方式 + 条数/日期，拼成一句人能读的话。 */
+/** 这一批选了哪些作品：方式 + 条数/日期，拼成一句人能读的话（完整版，进 tooltip）。 */
 function selectionText(j: CreatorJob): string {
-  // 「最近 N 条」直接带数字，说成「最近 20 条」，不再「最近 N 条（20 条）」那么绕
   if (j.mode === 'latest_n') return j.limit_n ? `最近 ${j.limit_n} 条` : '最近若干条';
-  // 「指定起点」：从第 N 条开始，往更久/往最新取
   if (j.mode === 'from_start') {
     const dir = j.direction === 'newer' ? '往最新' : '往更久';
     return j.start_n ? `从第 ${j.start_n} 条${dir}` : '指定起点';
@@ -149,11 +139,34 @@ function selectionText(j: CreatorJob): string {
   return s;
 }
 
+/** 表格里那一格放得下的短写法（「选取」列只有 104px，完整内容在 tooltip 里）。
+ *  日期范围缩成「月-日~月-日」，年份不进这一格；起点去掉开头的「从」，省两个字。 */
+function selectionShort(j: CreatorJob): string {
+  if (j.mode === 'date_range') {
+    const a = j.since_ts ? md(j.since_ts) : '';
+    const b = j.until_ts ? md(j.until_ts) : '';
+    if (a && b) return `${a} ~ ${b}`;
+    if (a) return `${a} 起`;
+    if (b) return `至 ${b}`;
+  }
+  if (j.mode === 'from_start' && j.start_n) {
+    return `第 ${j.start_n} 条${j.direction === 'newer' ? '往最新' : '往更久'}`;
+  }
+  return selectionText(j);
+}
+
 function fmtDay(ts: number | null): string {
   if (!ts) return '';
   const d = new Date(ts * 1000);
   const two = (x: number) => String(x).padStart(2, '0');
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+/** `MM-DD`：日期范围在窄列里只留月日，年份进 tooltip。 */
+function md(ts: number): string {
+  const d = new Date(ts * 1000);
+  const two = (x: number) => String(x).padStart(2, '0');
+  return `${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 }
 
 /** 'YYYY-MM-DD' → 当天 00:00:00 的 unix 秒；空串或非法返回 null（不筛）。 */
@@ -170,7 +183,37 @@ function dayEndSec(iso: string): number | null {
   return Math.floor(new Date(y, m - 1, d, 23, 59, 59).getTime() / 1000);
 }
 
+/** 状态 → 淡色标签的色调：已完成绿、已取消灰、进行中蓝、失败红、已暂停黄。 */
+const STATUS_TONE: Record<string, string> = {
+  pending: 'info',
+  running: 'info',
+  paused: 'warn',
+  done: 'ok',
+  failed: 'bad',
+  cancelled: 'idle',
+};
+
+/** 表格列。宽度由 styles.css 的 `--c-*` 变量给，`<col style="width: var(--c-*)">` 引用；
+ *  「博主」那列不写宽度，`table-layout: fixed` 下它会吃掉剩余宽度（唯一会伸的那一列）。 */
+const COLS: { label: string; cls: string; mid?: boolean; tip?: string }[] = [
+  { label: '序号', cls: 'c-no' },
+  { label: '博主', cls: 'c-who' },
+  { label: '状态', cls: 'c-st' },
+  { label: '选取', cls: 'c-sel' },
+  { label: '存放与输出', cls: 'c-out' },
+  { label: '进度', cls: 'c-prog', mid: true },
+  { label: '占用', cls: 'c-bytes', mid: true, tip: '按作品平均码率估算，实际以服务器上的文件为准' },
+  { label: '发起时间', cls: 'c-at' },
+  { label: '操作', cls: 'c-ops' },
+];
+
+/** 表单校验结果：字段名 → 红字。空对象表示通过。 */
+type ErrMap = { url?: string; n?: string; start?: string; date?: string };
+
 export function CreatorsPage() {
+  const { show: toast, node: toastNode } = useToast();
+
+  // —— 提取表单 ——
   const [kind, setKind] = useState<CreatorKind>('url');
   const [url, setUrl] = useState('');
   const [mode, setMode] = useState<SelectionMode>('latest_n');
@@ -182,50 +225,62 @@ export function CreatorsPage() {
   const [pinned, setPinned] = useState(true);
   const [storage, setStorage] = useState<JobStorage>('metadata');
   const [mediaType, setMediaType] = useState<MediaType>('video');
-  // 输出格式可多选；切到音频/视频时换成那一类里最常用的那个
+  // 输出格式可多选；切到音频/视频时换成那一类里最常用的那个（两类没有交集，不会留下无效组合）
   const [formats, setFormats] = useState<FormatKey[]>(['source']);
   const [preview, setPreview] = useState<CreatorPreview | null>(null);
+  const [previewErr, setPreviewErr] = useState('');
+  const [errs, setErrs] = useState<ErrMap>({});
   const [busy, setBusy] = useState<'' | 'preview' | 'create' | 'act'>('');
-  const [err, setErr] = useState('');
+
+  // —— 任务列表 ——
   const [jobs, setJobs] = useState<CreatorJob[]>([]);
   const [jobsPhase, setJobsPhase] = useState<'loading' | 'ok' | 'error'>('loading');
   const [jobsErr, setJobsErr] = useState('');
   const [openId, setOpenId] = useState<number | null>(null);
   const [hidden, setHidden] = useState<number[]>(() => readHidden());
-  /** 刚复制过的任务 id（按钮上显示「已复制」）；0 表示没有 */
-  const [copied, setCopied] = useState(0);
+  /** 刚建好的任务 id（那一行高亮 2 秒）；0 表示没有 */
+  const [fresh, setFresh] = useState(0);
 
   // —— 批量任务筛选：每项为空 = 不筛；多项之间是「且」关系 ——
   const [fStatus, setFStatus] = useState('');
-  const [fPlatform, setFPlatform] = useState('');
-  const [fUid, setFUid] = useState('');
   const [fNick, setFNick] = useState('');
-  const [fSince, setFSince] = useState('');
-  const [fUntil, setFUntil] = useState(() => todayISO());
+  const [fUid, setFUid] = useState('');
+  const [fPlatform, setFPlatform] = useState('');
   const [fMedia, setFMedia] = useState('');
   const [fStorage, setFStorage] = useState('');
   const [fMode, setFMode] = useState('');
-
-  function resetFilters() {
-    setFStatus('');
-    setFPlatform('');
-    setFUid('');
-    setFNick('');
-    setFSince('');
-    setFUntil(todayISO());
-    setFMedia('');
-    setFStorage('');
-    setFMode('');
-  }
+  const [fSince, setFSince] = useState('');
+  /** 发起时间两端默认都为空（空 = 不筛），只填一端也生效 */
+  const [fUntil, setFUntil] = useState('');
 
   const timer = useRef<number | null>(null);
+  const freshTimer = useRef<number | undefined>(undefined);
 
-  function hideJob(id: number) {
-    if (hidden.includes(id)) return;
-    const next = [...hidden, id];
+  useEffect(() => () => {
+    if (freshTimer.current !== undefined) window.clearTimeout(freshTimer.current);
+  }, []);
+
+  /** 表单一改动，上一条预览就作废：留着一条跟当前条件对不上的数字比没有更糟。 */
+  function clearPreview() {
+    setPreview(null);
+    setPreviewErr('');
+  }
+
+  function hideJob(j: CreatorJob) {
+    if (hidden.includes(j.id)) return;
+    const next = [...hidden, j.id];
     setHidden(next);
     writeHidden(next);
-    if (openId === id) setOpenId(null);
+    if (openId === j.id) setOpenId(null);
+    // 只是"在这台设备上不显示"，任务照常在服务端跑 —— 所以不弹确认框，给一次撤销就够
+    toast('已从列表隐藏，任务仍在跑', 'ok', {
+      label: '撤销',
+      onClick: () => {
+        const back = readHidden().filter((x) => x !== j.id);
+        setHidden(back);
+        writeHidden(back);
+      },
+    });
   }
 
   function showAllJobs() {
@@ -233,25 +288,12 @@ export function CreatorsPage() {
     writeHidden([]);
   }
 
-  /** 右键号码/昵称时自动选中这一整段文字，让浏览器右键菜单里的「复制」直接可用，
-   *  不用先拖动光标去选。不阻止默认菜单，用户点菜单里的「复制」即可复制。 */
-  function selectOnContextMenu(e: MouseEvent) {
-    const el = e.currentTarget as HTMLElement;
-    const sel = window.getSelection();
-    if (!sel) return;
-    const range = document.createRange();
-    range.selectNodeContents(el);
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }
-
-  async function copyText(text: string, id: number) {
+  async function copyText(text: string) {
     try {
       await navigator.clipboard.writeText(text);
-      setCopied(id);
-      window.setTimeout(() => setCopied((cur) => (cur === id ? 0 : cur)), 1600);
+      toast('已复制');
     } catch {
-      setErr('这个浏览器不允许自动复制，请手动选中链接复制');
+      toast('这个浏览器不允许自动复制，请手动选中链接复制', 'err');
     }
   }
 
@@ -330,66 +372,79 @@ export function CreatorsPage() {
       media_type: mediaType,
       formats,
       // 把用户填的原始内容一并带上（数字号 / 链接），后端存进 source_input，
-      // 任务卡上才能亮出「抖音号 123」这种号；不传则后端退回用 url。
+      // 任务行上才能亮出「抖音号 123」这种号；不传则后端退回用 url。
       source_input: b.url,
     };
   }
 
-  function check(): boolean {
+  /** 校验：所有错误一起标出来（只报第一条会让人来回试），有错就一个请求都不发。 */
+  function validate(): boolean {
+    const next: ErrMap = {};
     const value = normalizeCreatorInput(url, kind);
     if (!value) {
-      setErr(kind === 'url' ? '先填博主主页链接' : `先填${KIND_LABEL[kind]}`);
-      return false;
+      next.url = kind === 'url' ? '先填博主主页链接' : `先填${KIND_LABEL[kind]}`;
+    } else if (kind !== 'url' && !NUMERIC_ID.test(value)) {
+      next.url = `${KIND_LABEL[kind]}只能填纯数字（1–20 位），不要带链接或昵称`;
     }
-    // 粘贴的整段文案只留核心部分，并回填到输入框，让用户看到实际提交的是什么
-    if (value !== url) setUrl(value);
-    if (kind !== 'url' && !NUMERIC_ID.test(value)) {
-      setErr(`${KIND_LABEL[kind]}只能填纯数字（1–20 位），不要带链接或昵称`);
-      return false;
+    if (mode === 'latest_n') {
+      const v = Number(n);
+      if (!/^\d+$/.test(n.trim()) || v < 1 || v > MAX_N) next.n = `条数要是 1–${MAX_N} 之间的整数`;
     }
-    if (mode === 'latest_n' && !(Number(n) > 0)) {
-      setErr('最近 N 条要填一个正整数');
-      return false;
+    if (mode === 'from_start') {
+      const v = Number(startNo);
+      if (!/^\d+$/.test(startNo.trim()) || v < 1 || v > MAX_START) {
+        next.start = `起始序号要是 1–${MAX_START} 之间的整数`;
+      }
     }
-    if (mode === 'from_start' && !(Number(startNo) > 0)) {
-      setErr('指定起点要填一个正整数（第几条作品）');
-      return false;
+    if (mode === 'date_range') {
+      if (!since) next.date = '指定日期要至少选开始日期';
+      else if (until && since > until) next.date = '开始日期不能晚于结束日期';
     }
-    if (mode === 'date_range' && !since) {
-      setErr('指定日期要至少选开始日期');
-      return false;
-    }
-    if (mode === 'date_range' && since && until && since > until) {
-      setErr('开始日期不能晚于结束日期');
-      return false;
-    }
-    return true;
+    setErrs(next);
+    return Object.keys(next).length === 0;
   }
 
   async function doPreview() {
-    if (!check()) return;
+    if (!validate()) return;
+    // 粘贴的整段文案只留核心部分，并回填到输入框，让用户看到实际提交的是什么
+    const value = normalizeCreatorInput(url, kind);
+    if (value !== url) setUrl(value);
     setBusy('preview');
-    setErr('');
-    setPreview(null);
+    clearPreview();
     try {
       setPreview(await ownerApi.creatorPreview(previewBody()));
     } catch (e) {
-      setErr(messageFor(e));
+      setPreviewErr(messageFor(e));
     } finally {
       setBusy('');
     }
   }
 
   async function doCreate() {
-    if (!check()) return;
+    if (!validate()) return;
+    const value = normalizeCreatorInput(url, kind);
+    if (value !== url) setUrl(value);
     setBusy('create');
-    setErr('');
+    clearPreview();
     try {
-      await ownerApi.createCreatorJob(jobBody());
-      setPreview(null);
+      const job = await ownerApi.createCreatorJob(jobBody());
       await loadJobs(true);
+      toast('任务已创建');
+      setFresh(job.id);
+      if (freshTimer.current !== undefined) window.clearTimeout(freshTimer.current);
+      freshTimer.current = window.setTimeout(() => setFresh(0), 2000);
+      // 新任务可能落在列表中间：不在视口里就滚过去，别让人自己找
+      window.setTimeout(() => {
+        const el = document.querySelector<HTMLElement>(`[data-job="${job.id}"]`);
+        if (!el || typeof el.scrollIntoView !== 'function') return;
+        const r = el.getBoundingClientRect();
+        if (r.top < 60 || r.bottom > window.innerHeight - 8) {
+          el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        }
+      }, 80);
     } catch (e) {
-      setErr(messageFor(e));
+      // 失败时保留已填内容，改一下就能重试
+      toast(messageFor(e), 'err');
     } finally {
       setBusy('');
     }
@@ -397,15 +452,26 @@ export function CreatorsPage() {
 
   async function act(id: number, action: 'pauseJob' | 'resumeJob' | 'cancelJob' | 'retryJob') {
     setBusy('act');
-    setErr('');
     try {
       await ownerApi[action](id);
       await loadJobs(true);
     } catch (e) {
-      setErr(messageFor(e));
+      toast(messageFor(e), 'err');
     } finally {
       setBusy('');
     }
+  }
+
+  function resetFilters() {
+    setFStatus('');
+    setFNick('');
+    setFUid('');
+    setFPlatform('');
+    setFMedia('');
+    setFStorage('');
+    setFMode('');
+    setFSince('');
+    setFUntil('');
   }
 
   /** 一个任务是否命中当前所有筛选条件；条件之间是「且」，空条件不参与。 */
@@ -416,12 +482,11 @@ export function CreatorsPage() {
     if (fNick.trim() && !nickName(j).includes(fNick.trim())) return false;
     const sinceSec = dayStartSec(fSince);
     if (sinceSec != null && j.created_at < sinceSec) return false;
-    // 截止时间默认「今天」：按闭区间筛到今为止（真实任务都在过去，未来数据才会被它拦下）。
     const untilSec = dayEndSec(fUntil);
     if (untilSec != null && j.created_at > untilSec) return false;
     if (fMedia && j.media_type !== fMedia) return false;
     if (fStorage) {
-      // 旧数据里的「手机下载」值就是 phone，行为与「只存元数据」一致、卡片上也显示「只存元数据」，
+      // 旧数据里的「手机下载」值就是 phone，行为与「只存元数据」一致、行里也显示「只存元数据」，
       // 所以筛「只存元数据」时两者都要命中，否则历史任务一条都筛不出来。
       if (fStorage === 'metadata') {
         if (j.storage !== 'metadata' && j.storage !== 'phone') return false;
@@ -431,77 +496,150 @@ export function CreatorsPage() {
     return true;
   }
 
-  const shownJobs = jobs.filter((j) => !hidden.includes(j.id) && matchesFilters(j));
-  // 只数当前列表里真的被隐藏的：陈旧的 id 不该让「已隐藏 N 个」虚高
-  const hiddenCount = jobs.filter((j) => hidden.includes(j.id)).length;
-  // 是否有任一筛选被改动（用于显示「重置」与「清空筛选」提示）
+  /** 隐藏的只数当前列表里真的存在的：陈旧的 id 不该让「已隐藏 N 个」虚高。 */
+  const visible = jobs.filter((j) => !hidden.includes(j.id));
+  const shownJobs = visible.filter(matchesFilters);
+  const hiddenCount = jobs.length - visible.length;
   const hasFilter = fStatus !== '' || fPlatform !== '' || fUid.trim() !== '' || fNick.trim() !== ''
-    || fSince !== '' || fUntil !== todayISO() || fMedia !== '' || fStorage !== '' || fMode !== '';
+    || fSince !== '' || fUntil !== '' || fMedia !== '' || fStorage !== '' || fMode !== '';
+
+  /** 状态分段的每段数量：任务是一次全量拉回来的，所以这些数字是准的。 */
+  const statusCount = (s: string) => visible.filter((j) => j.status === s).length;
+
+  /** 行内操作：两个高频动作留在外面，其余收进「⋯」。 */
+  function rowOps(j: CreatorJob) {
+    const more: MenuItem[] = [];
+    if (j.status === 'pending' || j.status === 'running') {
+      more.push({ text: '暂停', onClick: () => void act(j.id, 'pauseJob') });
+    }
+    if (j.status === 'paused') {
+      more.push({ text: '继续', onClick: () => void act(j.id, 'resumeJob') });
+    }
+    if (j.status !== 'done' && j.status !== 'cancelled') {
+      more.push({ text: '取消任务', danger: true, onClick: () => void act(j.id, 'cancelJob') });
+    }
+    // 只有真有失败条目、且这一批已经停下来时才给「重试」（跑着的任务由服务端自己重试）
+    if (j.failed > 0 && (j.status === 'failed' || j.status === 'paused' || j.status === 'cancelled')) {
+      more.push({ text: '重试失败条目', onClick: () => void act(j.id, 'retryJob') });
+    }
+    more.push({ text: '复制链接', onClick: () => void copyText(j.source_url) });
+    more.push({ text: '不再显示', danger: true, divider: true, onClick: () => hideJob(j) });
+
+    return (
+      <div class="row-ops">
+        <button
+          type="button"
+          class="text-btn"
+          aria-expanded={openId === j.id}
+          onClick={() => setOpenId(openId === j.id ? null : j.id)}
+        >
+          {openId === j.id ? '收起条目 ▴' : '显示条目'}
+        </button>
+        {/* 只有抖音需要「换地址」：直链是扫描时存下的签名地址，放久了会被 CDN 拒。
+            B 站每次下载都会现解析，这个按钮对它没有意义，所以不显示。 */}
+        {(j.status === 'done' || j.status === 'cancelled') && j.platform === 'douyin' ? (
+          <button
+            type="button"
+            class="text-btn"
+            disabled={busy === 'act'}
+            title="重新扫描一遍，把过期的播放地址换成新的"
+            onClick={() => void act(j.id, 'retryJob')}
+          >
+            刷新地址
+          </button>
+        ) : null}
+        <Menu variant="icon" ariaLabel="更多操作" align="right" disabled={busy === 'act'} items={more} />
+      </div>
+    );
+  }
 
   return (
     <>
-      <h1>批量提取</h1>
-      <ul class="small muted lead-list">
-        <li>输入博主主页链接，或直接填抖音号 / B 站号。</li>
-        <li>选取方式：最近 N 条、指定日期、全部作品、指定起点。</li>
-        <li>可以先「预览」看会选多少条，再「开始提取」。</li>
-      </ul>
+      {toastNode}
 
-      <div class="panel-card">
-        <div class="field-row">
-          <div class="field">
+      <div class="page-head">
+        <div>
+          <h1>批量提取</h1>
+          <p class="page-sub">输入博主主页链接，或直接填抖音号 / B 站号；可先预览会选多少条，再开始提取。</p>
+        </div>
+      </div>
+
+      {/* ---- 提取表单 ---- */}
+      <div class="ext-form">
+        <div class="ext-row">
+          <div class="field ext-kind">
             <span>类型</span>
             <Select
               ariaLabel="输入类型"
               value={kind}
               options={(Object.keys(KIND_LABEL) as CreatorKind[]).map((k) => ({ value: k, label: KIND_LABEL[k] }))}
-              onChange={(v) => setKind(v as CreatorKind)}
+              onChange={(v) => { setKind(v as CreatorKind); setErrs({}); clearPreview(); }}
             />
           </div>
-          <label class="field">
+          <label class={errs.url ? 'field ext-url is-bad' : 'field ext-url'}>
             <span>{kind === 'url' ? '主页链接 / 分享文案' : KIND_LABEL[kind]}</span>
             <input
               type="text"
               maxLength={kind === 'url' ? 2000 : 40}
               inputMode={kind === 'url' ? 'text' : 'numeric'}
               placeholder={KIND_HINT[kind]}
+              aria-label={kind === 'url' ? '主页链接' : KIND_LABEL[kind]}
               value={url}
-              onInput={(e) => setUrl((e.target as HTMLInputElement).value)}
+              onInput={(e) => { setUrl((e.target as HTMLInputElement).value); setErrs({}); clearPreview(); }}
             />
+            {errs.url ? <em class="field-err">{errs.url}</em> : null}
           </label>
         </div>
 
-        <div class="field-row">
+        <div class="ext-grid">
           <div class="field">
-            <span>选取方式</span>
+            <span class="field-k">
+              选取方式
+              <span class="tip-i" tabIndex={0} aria-label="四种选取方式的说明">ⓘ
+                <span class="tip-pop" role="tooltip">
+                  最近 N 条：从最新一条往下数 N 条。指定日期：按发布时间取一段（含首尾两天）。
+                  全部作品：把整个主页都取一遍。指定起点：从第 N 条开始，往更久或往最新接着取。
+                </span>
+              </span>
+            </span>
             <Select
               ariaLabel="选取方式"
               value={mode}
               options={(['latest_n', 'date_range', 'all', 'from_start'] as SelectionMode[])
                 .map((m) => ({ value: m, label: SELECTION[m] ?? m }))}
-              onChange={(v) => setMode(v as SelectionMode)}
+              onChange={(v) => { setMode(v as SelectionMode); setErrs({}); clearPreview(); }}
             />
           </div>
+
+          {/* 动态字段：跟着选取方式走，不留一个用不上的输入框 */}
           {mode === 'latest_n' && (
-            <label class="field">
+            <div class={errs.n ? 'field is-bad' : 'field'}>
               <span>条数</span>
-              <input type="number" min={1} max={100000} value={n} onInput={(e) => setN((e.target as HTMLInputElement).value)} />
-            </label>
+              <Stepper
+                value={n}
+                onChange={(v) => { setN(v); setErrs({}); clearPreview(); }}
+                min={1}
+                max={MAX_N}
+                invalid={!!errs.n}
+                ariaLabel="条数"
+                describedBy="ext-n-err"
+              />
+              {errs.n ? <em class="field-err" id="ext-n-err">{errs.n}</em> : null}
+            </div>
           )}
           {mode === 'from_start' && (
-            <>
-              <label class="field">
-                <span>起始序号</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={500}
+            <div class={errs.start ? 'field is-bad' : 'field'}>
+              <span>起点序号</span>
+              <div class="field-inline">
+                <Stepper
                   value={startNo}
-                  onInput={(e) => setStartNo((e.target as HTMLInputElement).value)}
+                  onChange={(v) => { setStartNo(v); setErrs({}); clearPreview(); }}
+                  min={1}
+                  max={MAX_START}
+                  invalid={!!errs.start}
+                  ariaLabel="起始序号"
+                  describedBy="ext-start-err"
                 />
-              </label>
-              <div class="field">
-                <span>方向</span>
                 <Select
                   ariaLabel="提取方向"
                   value={direction}
@@ -509,26 +647,26 @@ export function CreatorsPage() {
                     { value: 'older', label: '往更久' },
                     { value: 'newer', label: '往最新' },
                   ]}
-                  onChange={(v) => setDirection(v as 'newer' | 'older')}
+                  onChange={(v) => { setDirection(v as 'newer' | 'older'); clearPreview(); }}
                 />
               </div>
-            </>
+              {errs.start ? <em class="field-err" id="ext-start-err">{errs.start}</em> : null}
+            </div>
           )}
           {mode === 'date_range' && (
-            <>
-              <label class="field">
-                <span>开始日期</span>
-                <DateInput label="开始日期" value={since} onInput={setSince} />
-              </label>
-              <label class="field">
-                <span>结束日期</span>
-                <DateInput label="结束日期" value={until} onInput={setUntil} />
-              </label>
-            </>
+            <div class={errs.date ? 'field field-wide is-bad' : 'field field-wide'}>
+              <span>发布日期的范围</span>
+              <div class="date-range">
+                <DateInput label="开始日期" placeholder="开始日期" value={since}
+                           onInput={(v) => { setSince(v); setErrs({}); clearPreview(); }} />
+                <span class="muted">至</span>
+                <DateInput label="结束日期" placeholder="结束日期" value={until}
+                           onInput={(v) => { setUntil(v); setErrs({}); clearPreview(); }} />
+              </div>
+              {errs.date ? <em class="field-err">{errs.date}</em> : null}
+            </div>
           )}
-        </div>
 
-        <div class="field-row">
           <div class="field">
             <span>存放方式</span>
             <Select
@@ -537,7 +675,7 @@ export function CreatorsPage() {
               options={STORAGE_OPTS.map((s) => ({
                 value: s, label: STORAGE[s]!, tip: STORAGE_DESC[s],
               }))}
-              onChange={(v) => setStorage(v as JobStorage)}
+              onChange={(v) => { setStorage(v as JobStorage); clearPreview(); }}
             />
           </div>
           <div class="field">
@@ -548,8 +686,9 @@ export function CreatorsPage() {
               options={[{ value: 'video', label: '视频' }, { value: 'audio', label: '音频' }]}
               onChange={(v) => {
                 setMediaType(v as MediaType);
-                // 换类别时把格式收成那一类最常用的一个，免得留下不合法组合
+                // 两类格式没有交集：换类别时把格式收成那一类最常用的一个，不会留下无效组合
                 setFormats([(FORMATS_OF[v] ?? ['source'])[0] as FormatKey]);
+                clearPreview();
               }}
             />
           </div>
@@ -559,316 +698,286 @@ export function CreatorsPage() {
               ariaLabel="输出格式"
               values={formats}
               options={(FORMATS_OF[mediaType] ?? ['source']).map((f) => ({
-                value: f, label: FORMAT[f] ?? f,
+                value: f, label: FORMAT[f] ?? f, tip: FORMAT_TIP[f],
               }))}
-              onChange={(v) => setFormats(v as FormatKey[])}
+              onChange={(v) => { setFormats(v as FormatKey[]); clearPreview(); }}
             />
+            {storage === 'metadata' ? (
+              <em class="field-hint">只存元数据不下载文件，这一项不生效</em>
+            ) : null}
           </div>
         </div>
 
-        <div class="pin-row">
+        {/* 预览结果：一条淡蓝信息条，失败换成淡红；任何字段改动都会把它清掉 */}
+        {preview ? (
+          <div class="info-bar" role="status">
+            <div class="info-main">
+              <strong>预计选取 {preview.items.length} 条</strong>
+              {preview.estimated_bytes > 0 ? <span>约 {fmtBytes(preview.estimated_bytes)}</span> : null}
+              {preview.has_more ? <span>还有更多</span> : null}
+              <span class="info-who">
+                {preview.profile.name} · {platformName(preview.profile.platform)}
+                {preview.profile.total_videos != null ? ` · 共 ${preview.profile.total_videos} 条` : ''}
+                {' · 列表来源：'}
+                {preview.cookie_source === 'configured' ? '已配置的授权' : preview.cookie_source === 'guest' ? '游客态' : '无'}
+              </span>
+            </div>
+            {preview.items.length > 0 ? (
+              <div class="info-list">
+                {preview.items.slice(0, 8).map((v) => <span title={v.title}>{v.title}</span>)}
+                {preview.items.length > 8 ? <span>……另有 {preview.items.length - 8} 条</span> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {previewErr ? <div class="info-bar bad" role="status">{previewErr}</div> : null}
+
+        <div class="ext-foot">
           <label class="check">
             <input type="checkbox" checked={pinned} onChange={(e) => setPinned((e.target as HTMLInputElement).checked)} />
             <span>包含置顶作品</span>
           </label>
+          <div class="ext-acts">
+            <button type="button" class="btn btn-outline" disabled={busy !== ''} onClick={() => void doPreview()}>
+              {busy === 'preview' ? '预览中…' : '预览'}
+            </button>
+            <button type="button" class="btn" disabled={busy !== ''} onClick={() => void doCreate()}>
+              {busy === 'create' ? '正在开始…' : '开始提取'}
+            </button>
+          </div>
         </div>
-
-        <div class="row-actions">
-          <button type="button" class="btn" disabled={busy !== ''} onClick={() => void doCreate()}>
-            {busy === 'create' ? '正在开始…' : '开始提取'}
-          </button>
-          <button type="button" class="btn btn-ghost" disabled={busy !== ''} onClick={() => void doPreview()}>
-            {busy === 'preview' ? '预览中…' : '预览'}
-          </button>
-        </div>
-        {err && <div class="alert warn small">{err}</div>}
       </div>
 
-      {preview && (
-        <div class="result">
-          <div class="result-head">
-            <strong>{preview.profile.name}</strong>
-            <span class="tag">{platformName(preview.profile.platform)}</span>
-            {preview.profile.total_videos != null && <span class="tag">共 {preview.profile.total_videos} 条</span>}
-            <span class="tag">{SELECTION[preview.mode] ?? preview.mode}</span>
-          </div>
-          <div class="result-body">
-            {preview.profile.avatar_url && <img class="avatar" src={preview.profile.avatar_url} alt="" loading="lazy" />}
-            <div>
-              <div class="result-title">会选中 {preview.items.length} 条</div>
-              <div class="small muted">
-                {preview.estimated_bytes > 0 ? `预计占用 ${fmtBytes(preview.estimated_bytes)} · ` : ''}
-                列表来源：{preview.cookie_source === 'configured' ? '已配置的授权' : preview.cookie_source === 'guest' ? '游客态' : '无'}
-                {preview.has_more ? ' · 还有更多' : ''}
-              </div>
-              <ul class="plain tight">
-                {preview.items.slice(0, 8).map((v) => (
-                  <li>
-                    <span class="ellipsis" title={v.title}>{v.title}</span>
-                    <span class="small muted">　{fmtDuration(v.duration_sec)}{v.is_pinned ? ' · 置顶' : ''}</span>
-                  </li>
-                ))}
-                {preview.items.length > 8 && <li class="small muted">……另有 {preview.items.length - 8} 条</li>}
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div class="jobs-head">
+      {/* ---- 批量任务 ---- */}
+      <div class="sec-head">
         <h2>批量任务</h2>
-        {hasFilter && (
-          <button type="button" class="btn btn-ghost small" onClick={resetFilters}>重置筛选</button>
-        )}
+        <span class="sec-n">共 {visible.length} 条</span>
       </div>
 
-      {/* 筛选栏：每项空 = 不筛，多项之间是「且」；下拉选「全部」即清空单项，文本框点 × 清空 */}
-      <div class="filter-bar">
-        <div class="filter">
-          <span>状态</span>
-          <Select
-            ariaLabel="筛选：状态"
+      {/* 筛选栏：第一行状态分段 + 昵称 + 用户 ID，第二行四个下拉 + 发起时间 + 重置 */}
+      <div class="filter-box cr-filters">
+        <div class="filter-line">
+          <Segmented
+            ariaLabel="按状态筛选"
             value={fStatus}
-            options={[{ value: '', label: '全部状态' }].concat(
-              (['pending', 'running', 'paused', 'done', 'failed', 'cancelled'] as const)
-                .map((s) => ({ value: s, label: JOB[s] ?? s })),
-            )}
             onChange={setFStatus}
-          />
-        </div>
-        <div class="filter">
-          <span>平台</span>
-          <Select
-            ariaLabel="筛选：平台"
-            value={fPlatform}
-            options={[
-              { value: '', label: '全部平台' },
-              { value: 'douyin', label: '抖音' },
-              { value: 'bilibili', label: 'B 站' },
+            items={[
+              { key: '', label: '全部', n: visible.length },
+              ...(['pending', 'running', 'paused', 'done', 'failed', 'cancelled'] as const)
+                .map((s) => ({ key: s, label: JOB[s] ?? s, n: statusCount(s) })),
             ]}
-            onChange={setFPlatform}
           />
-        </div>
-        <label class="filter">
-          <span>用户 ID</span>
           <input
-            type="text"
-            inputMode="numeric"
-            placeholder="输入用户 ID"
-            value={fUid}
-            onInput={(e) => setFUid((e.target as HTMLInputElement).value)}
-          />
-          {fUid && (
-            <button type="button" class="filter-clear" aria-label="清除用户 ID" onClick={() => setFUid('')}>×</button>
-          )}
-        </label>
-        <label class="filter">
-          <span>昵称</span>
-          <input
-            type="text"
+            class="search"
+            type="search"
             placeholder="输入昵称"
+            aria-label="搜索昵称"
             value={fNick}
             onInput={(e) => setFNick((e.target as HTMLInputElement).value)}
           />
-          {fNick && (
-            <button type="button" class="filter-clear" aria-label="清除昵称" onClick={() => setFNick('')}>×</button>
-          )}
-        </label>
-        <div class="filter filter-wide">
-          <span>发起时间</span>
-          <div class="filter-range">
-            <DateInput
-              label="发起时间开始"
-              value={fSince}
-              onInput={setFSince}
+          <span class="ctrl-fixed f-uid">
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder="输入用户 ID"
+              aria-label="搜索用户 ID"
+              value={fUid}
+              onInput={(e) => setFUid((e.target as HTMLInputElement).value)}
             />
-            <span class="muted">至</span>
-            <DateInput
-              label="发起时间截止"
-              value={fUntil}
-              onInput={setFUntil}
+          </span>
+        </div>
+        <div class="filter-line">
+          <span class="ctrl-fixed">
+            <Select
+              ariaLabel="筛选：平台"
+              value={fPlatform}
+              options={[
+                { value: '', label: '全部平台' },
+                { value: 'douyin', label: '抖音' },
+                { value: 'bilibili', label: 'B 站' },
+              ]}
+              onChange={setFPlatform}
             />
-            {(fSince || fUntil !== todayISO()) && (
-              <button
-                type="button"
-                class="filter-clear"
-                aria-label="清除发起时间"
-                onClick={() => { setFSince(''); setFUntil(todayISO()); }}
-              >×</button>
-            )}
-          </div>
-        </div>
-        <div class="filter">
-          <span>媒体类型</span>
-          <Select
-            ariaLabel="筛选：媒体类型"
-            value={fMedia}
-            options={[
-              { value: '', label: '全部类型' },
-              { value: 'video', label: '视频' },
-              { value: 'audio', label: '音频' },
-            ]}
-            onChange={setFMedia}
+          </span>
+          <span class="ctrl-fixed">
+            <Select
+              ariaLabel="筛选：媒体类型"
+              value={fMedia}
+              options={[
+                { value: '', label: '全部类型' },
+                { value: 'video', label: '视频' },
+                { value: 'audio', label: '音频' },
+              ]}
+              onChange={setFMedia}
+            />
+          </span>
+          <span class="ctrl-fixed">
+            <Select
+              ariaLabel="筛选：存放方式"
+              value={fStorage}
+              options={[{ value: '', label: '全部存放' }].concat(
+                STORAGE_OPTS.map((s) => ({ value: s, label: STORAGE[s] ?? s })),
+              )}
+              onChange={setFStorage}
+            />
+          </span>
+          <span class="ctrl-fixed">
+            <Select
+              ariaLabel="筛选：选取方式"
+              value={fMode}
+              options={[{ value: '', label: '全部方式' }].concat(
+                (['latest_n', 'date_range', 'all', 'from_start'] as const)
+                  .map((m) => ({ value: m, label: SELECTION[m] ?? m })),
+              )}
+              onChange={setFMode}
+            />
+          </span>
+          <DateRange
+            label="发起时间"
+            from={fSince}
+            to={fUntil}
+            onChange={(f, t) => { setFSince(f); setFUntil(t); }}
           />
-        </div>
-        <div class="filter">
-          <span>存放方式</span>
-          <Select
-            ariaLabel="筛选：存放方式"
-            value={fStorage}
-            options={[{ value: '', label: '全部存放' }].concat(
-              STORAGE_OPTS.map((s) => ({ value: s, label: STORAGE[s] ?? s })),
-            )}
-            onChange={setFStorage}
-          />
-        </div>
-        <div class="filter">
-          <span>选取方式</span>
-          <Select
-            ariaLabel="筛选：选取方式"
-            value={fMode}
-            options={[{ value: '', label: '全部方式' }].concat(
-              (['latest_n', 'date_range', 'all', 'from_start'] as const).map((m) => ({ value: m, label: SELECTION[m] ?? m })),
-            )}
-            onChange={setFMode}
-          />
+          {hasFilter ? (
+            <button type="button" class="text-btn filter-reset" onClick={resetFilters}>重置筛选</button>
+          ) : null}
         </div>
       </div>
 
-      {hiddenCount > 0 && (
-        <p class="small muted">
-          已隐藏 {hiddenCount} 个任务（只在这台设备的这个浏览器里）。
-          <button type="button" class="btn btn-ghost small" onClick={showAllJobs}>恢复显示</button>
-        </p>
-      )}
-      {jobsPhase === 'loading' && <Loading what="批量任务" />}
-      {jobsPhase === 'error' && <ErrorBox message={jobsErr} retry={() => void loadJobs()} />}
-      {jobsPhase === 'ok' && jobs.length === 0 && (
-        <Empty>
-          <strong>还没有批量任务</strong>
-          <p class="small muted">上面填一个博主，先预览再建任务。</p>
-        </Empty>
-      )}
-      {jobsPhase === 'ok' && jobs.length > 0 && shownJobs.length === 0 && (
-        <Empty>
-          <strong>{hasFilter ? '没有符合筛选条件的任务' : '任务都被隐藏了'}</strong>
-          <p class="small muted">
-            {hasFilter
-              ? '改一下筛选条件，或点上面的「重置筛选」看全部任务。'
-              : '点上面的「恢复显示」可以把它们放回来。'}
-          </p>
-        </Empty>
-      )}
-      {jobsPhase === 'ok' && shownJobs.length > 0 && (
-        <ul class="jobs">
-          {shownJobs.map((j, idx) => (
-            <li class="job">
-              <div class="job-head">
-                <span class="job-no" aria-hidden="true">{idx + 1}</span>
-                <span class={`tag ${TONE[j.status] ?? ''}`}>{JOB[j.status] ?? j.status}</span>
-                {/* 号放昵称前面：先「抖音号」纯文字（无框），再带框的数字胶囊，两者分开；
-                    有「抖音号」就知道是抖音，不再单独放平台标签 */}
-                {creatorIdLabel(j) && <span class="job-id-label">{creatorIdLabel(j)}</span>}
-                {creatorId(j) && (
-                  <span class="tag job-id" onContextMenu={selectOnContextMenu}>{creatorId(j)}</span>
-                )}
-                <span class="job-who ellipsis" title={nickName(j)} onContextMenu={selectOnContextMenu}>{nickName(j)}</span>
-                <span class="grow" />
-                <span class="small muted nowrap" title="发起时间">
-                  {relTime(j.created_at)} · {fmtDateTime(j.created_at)}
-                </span>
-                <button
-                  type="button"
-                  class="job-hide nowrap"
-                  title="只在这个浏览器里不再显示这个任务；任务本身照常跑，可随时恢复"
-                  onClick={() => hideJob(j.id)}
-                >
-                  不再显示
-                </button>
-              </div>
-              <div class="job-src">
-                {/* 平台和号码已经在上面一行了，这里只放地址本身；长链接单行显示，可以左右拖 */}
-                <code class="job-url" title={j.source_url}>{j.source_url}</code>
-                <button type="button" class="btn btn-ghost small nowrap"
-                        onClick={() => void copyText(j.source_url, j.id)}>
-                  {copied === j.id ? '已复制' : '复制链接'}
-                </button>
-              </div>
-              <div class="job-meta small">
-                <span class="meta"><b>选取</b>{selectionText(j)}</span>
-                <span class="meta-sep" aria-hidden="true" />
-                <span class="meta" title={STORAGE_DESC[j.storage]}>
-                  <b>存放</b>{STORAGE[j.storage] ?? j.storage}
-                </span>
-                <span class="meta-sep" aria-hidden="true" />
-                <span class="meta">
-                  <b>输出</b>
-                  <span class={`media-kind ${j.media_type}`}>{j.media_type === 'audio' ? '音频' : '视频'}</span>
-                  <span class="format-list">
-                    {(j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
-                      .map((f) => FORMAT[f] ?? f).join(' · ')}
-                  </span>
-                </span>
-              </div>
-              <div class="small">
-                已抓 {j.total || '?'} / {j.total || '?'}
-                {j.failed > 0 ? `（${j.failed} 下载失败）` : ''}
-                {j.estimated_bytes > 0 ? ` · 约 ${fmtBytes(j.estimated_bytes)}` : ''}
-                {j.pause_reason ? ` · 暂停原因：${j.pause_reason}` : ''}
-              </div>
-              {(j.storage === 'cache' || j.storage === 'archive') && (
-                <div class="small muted">
-                  已存服务器 {j.stored}{j.total ? ` / ${j.total}` : ''}
-                  {j.store_bytes > 0 ? ` · ${fmtBytes(j.store_bytes)}` : ''}
-                </div>
-              )}
-              <div class="row-actions">
-                <button type="button" class="btn btn-ghost small" onClick={() => setOpenId(openId === j.id ? null : j.id)}>
-                  {openId === j.id ? '收起条目' : '显示条目'}
-                </button>
-                {(j.status === 'pending' || j.status === 'running') && (
-                  <button type="button" class="btn btn-ghost small" disabled={busy === 'act'} onClick={() => void act(j.id, 'pauseJob')}>
-                    暂停
-                  </button>
-                )}
-                {j.status === 'paused' && (
-                  <button type="button" class="btn btn-ghost small" disabled={busy === 'act'} onClick={() => void act(j.id, 'resumeJob')}>
-                    继续
-                  </button>
-                )}
-                {j.status !== 'done' && j.status !== 'cancelled' && (
-                  <button type="button" class="btn btn-ghost small" disabled={busy === 'act'} onClick={() => void act(j.id, 'cancelJob')}>
-                    取消
-                  </button>
-                )}
-                {/* 只有抖音需要「换地址」：直链是扫描时存下的签名地址，放久了会被 CDN 拒。
-                    B 站每次下载都会现解析，这个按钮对它没有意义，所以不显示。
-                    已取消（cancelled）的任务如果列表已扫完，地址同样会过期，也应能刷新地址；
-                    后端会按游标判断：没扫完的取消任务点了也只按原游标续扫，不会误重扫。 */}
-                {(j.status === 'done' || j.status === 'cancelled') && j.platform === 'douyin' && (
-                  <button
-                    type="button"
-                    class="btn btn-ghost small"
-                    disabled={busy === 'act'}
-                    title="重新扫描一遍，把过期的播放地址换成新的"
-                    onClick={() => void act(j.id, 'retryJob')}
-                  >
-                    刷新地址
-                  </button>
-                )}
-                {(j.status === 'failed' || j.status === 'paused' || j.status === 'cancelled') && (
-                  <button type="button" class="btn btn-ghost small" disabled={busy === 'act'} onClick={() => void act(j.id, 'retryJob')}>
-                    重试失败条目
-                  </button>
-                )}
-              </div>
-              {openId === j.id && <JobItems jobId={j.id} />}
-            </li>
-          ))}
-        </ul>
-      )}
-      {active && <p class="small muted">有任务在跑，每 2.5 秒自动刷新一次；全部结束后停止。</p>}
+      <section class="box">
+        {jobsPhase === 'loading' ? <Loading what="批量任务" /> : null}
+        {jobsPhase === 'error' ? <ErrorBox message={jobsErr} retry={() => void loadJobs()} /> : null}
+
+        {jobsPhase === 'ok' && shownJobs.length === 0 ? (
+          <div class="empty-state">
+            <p>{jobs.length === 0 ? '还没有批量任务' : hasFilter ? '没有符合条件的任务' : '任务都被隐藏了'}</p>
+            {jobs.length === 0 ? (
+              <p class="small muted">上面填一个博主，先预览再建任务。</p>
+            ) : hasFilter ? (
+              <button type="button" class="btn small" onClick={resetFilters}>重置筛选</button>
+            ) : (
+              <button type="button" class="btn small" onClick={showAllJobs}>恢复显示</button>
+            )}
+          </div>
+        ) : null}
+
+        {shownJobs.length > 0 ? (
+          <div class="table-wrap">
+            <table class="table cr-table">
+              {/* 「博主」那列不给宽度：table-layout: fixed 下只有 auto 列会吃掉剩余宽度 */}
+              <colgroup>
+                {COLS.map((c) => (c.cls === 'c-who' ? <col /> : <col style={{ width: `var(--${c.cls})` }} />))}
+              </colgroup>
+              <thead>
+                <tr>
+                  {COLS.map((c) => (
+                    <th class={[c.cls, c.mid ? 'mid' : ''].filter(Boolean).join(' ')} title={c.tip}>
+                      {c.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {shownJobs.map((j, idx) => {
+                  const cid = creatorId(j);
+                  const mediaLabel = `${j.media_type === 'audio' ? '音频' : '视频'} · `
+                    + (j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
+                      .map((f) => FORMAT[f] ?? f).join(' / ');
+                  return (
+                    <Fragment key={j.id}>
+                      <tr data-job={j.id} class={fresh === j.id ? 'job-fresh' : undefined}>
+                        <td class="c-no muted">{idx + 1}</td>
+                        <td class="c-who">
+                          <div class="who-name" title={j.source_url}>{nickName(j)}</div>
+                          <div class="who-sub">{platformName(j.platform)}{cid ? ` · ${cid}` : ''}</div>
+                        </td>
+                        <td>
+                          <span class={`pill tone-${STATUS_TONE[j.status] ?? 'idle'}`} title={j.pause_reason ?? undefined}>
+                            {JOB[j.status] ?? j.status}
+                          </span>
+                        </td>
+                        <td class="c-sel" title={selectionText(j)}>{selectionShort(j)}</td>
+                        <td class="c-out">
+                          <div>{STORAGE[j.storage] ?? j.storage}</div>
+                          <div class="sub">{mediaLabel}</div>
+                        </td>
+                        <td class="c-prog mid"><ProgCell job={j} /></td>
+                        <td
+                          class="c-bytes mid"
+                          title={j.store_bytes > 0
+                            ? `估算约 ${fmtBytes(j.estimated_bytes)}；服务器上已存 ${fmtBytes(j.store_bytes)}`
+                            : '按作品平均码率估算，实际以服务器上的文件为准'}
+                        >
+                          {j.estimated_bytes > 0
+                            ? <BytesCell n={j.estimated_bytes} />
+                            : <span class="muted">—</span>}
+                        </td>
+                        <td class="c-at" title={`发起于 ${fmtDateTime(j.created_at)}`}>
+                          <DateTimeCell at={j.created_at} secs={false} />
+                          <div class="sub">{relTime(j.created_at)}</div>
+                        </td>
+                        <td class="c-ops">{rowOps(j)}</td>
+                      </tr>
+                      {openId === j.id ? (
+                        <tr class="job-sub">
+                          <td colSpan={COLS.length}><JobItems jobId={j.id} /></td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        {shownJobs.length > 0 ? (
+          <div class="box-foot">
+            <span class="small muted">共 {shownJobs.length} 条</span>
+            {hiddenCount > 0 ? (
+              <span class="small muted">
+                已隐藏 {hiddenCount} 个任务（只在这台设备的这个浏览器里）
+                <button type="button" class="text-btn" onClick={showAllJobs}>恢复显示</button>
+              </span>
+            ) : null}
+            {active ? <span class="foot-page small muted">有任务在跑，每 2.5 秒自动刷新</span> : null}
+          </div>
+        ) : null}
+      </section>
     </>
+  );
+}
+
+/** 进度：第一行「已抓 / 总数」，第二行按情况给细进度条或「已存服务器 N / M」。
+ *
+ *  斜杠两侧各留 4ch 固定宽度，位数变化时斜杠不会左右挪；整块在单元格里居中。
+ *  进度条只在没跑完时出现（跑完/取消到底了就不必再画一条满格）。
+ */
+function ProgCell({ job }: { job: CreatorJob }) {
+  const total = job.total || 0;
+  const done = job.done || 0;
+  const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const barTone = job.status === 'cancelled' ? 'idle' : job.status === 'failed' ? 'bad' : 'info';
+  const onServer = job.storage === 'cache' || job.storage === 'archive';
+  const tip = `已抓 ${done} / ${total || '?'}`
+    + (job.failed > 0 ? `，${job.failed} 条失败` : '')
+    + (job.pause_reason ? `；暂停原因：${job.pause_reason}` : '');
+  return (
+    <div class="prog" title={tip}>
+      <span class="prog-n">
+        <span class="prog-l">{done}</span>
+        <span class="prog-s">/</span>
+        <span class="prog-r">{total || '?'}</span>
+      </span>
+      {total > 0 && done < total ? (
+        <span class={`prog-bar tone-${barTone}`}><i style={{ width: `${pct}%` }} /></span>
+      ) : null}
+      {onServer ? (
+        <span class="prog-sub">已存服务器 {job.stored}{total ? ` / ${total}` : ''}</span>
+      ) : job.failed > 0 ? (
+        <span class="prog-sub bad">{job.failed} 条失败</span>
+      ) : null}
+    </div>
   );
 }
 

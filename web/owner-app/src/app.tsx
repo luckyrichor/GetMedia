@@ -174,7 +174,8 @@ function Header({ me }: { me: Me }) {
         {/* 只有管理员加绿色标识；免费版/完整版不加任何标签，免得把"有效期"之类的事混进页头 */}
         {isAdmin(me.tier) ? <span class="tag admin">管理员</span> : null}
         <span class="muted small">{me.login_name}</span>
-        <button type="button" class="btn btn-ghost small" disabled={busy} onClick={() => void logout()}>
+        {/* 退出是低频动作，用低调的文字按钮：不跟页面里的主按钮抢注意力 */}
+        <button type="button" class="text-btn muted" disabled={busy} onClick={() => void logout()}>
           退出
         </button>
       </div>
@@ -195,6 +196,13 @@ function Nav({ path, tier }: { path: string; tier: string }) {
   );
 }
 
+/** 内容区的宽度档：默认 62rem；列多的两页放宽到 84rem；批量提取不设上限。 */
+const WIDE: Record<string, string> = {
+  '/accounts': 'content content-wide',
+  '/invites': 'content content-wide',
+  '/creators': 'content content-full',
+};
+
 function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
   const path = useRoute();
   const section = sectionFor(path);
@@ -206,8 +214,9 @@ function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
       <Header me={me} />
       <div class="layout">
         <Nav path={path} tier={me.tier} />
-        {/* 权限管理、邀请码两页列多，宽屏上按默认 62rem 会右边空一大片，单独放宽 */}
-        <main class={path === '/accounts' || path === '/invites' ? 'content content-wide' : 'content'}>{body}</main>
+        {/* 权限管理、邀请码两页列多，宽屏上按默认 62rem 会右边空一大片，单独放宽；
+            批量提取的表格要铺满，干脆不设上限 */}
+        <main class={WIDE[path] ?? 'content'}>{body}</main>
       </div>
     </>
   );

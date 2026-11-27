@@ -49,6 +49,35 @@ async function fillUrl(v: string) {
   return input;
 }
 
+/** 表格里的任务行（展开的条目子行没有 data-job，不会混进来）。 */
+const jobRows = () => Array.from(document.querySelectorAll('.cr-table tbody tr[data-job]')) as HTMLElement[];
+const rowText = (i = 0) => jobRows()[i]?.textContent ?? '';
+
+/** 打开某一行的「⋯」，返回菜单项文字（分隔线不是 menuitem，不在里面）。 */
+async function openRowMenu(i = 0) {
+  const btns = Array.from(
+    document.querySelectorAll('.cr-table tbody tr[data-job] button[aria-label="更多操作"]'),
+  ) as HTMLButtonElement[];
+  const b = btns[i];
+  if (!b) throw new Error(`没有第 ${i + 1} 行的「更多操作」`);
+  await click(b);
+  return Array.from(document.querySelectorAll('[role="menuitem"]')) as HTMLElement[];
+}
+
+async function menuTexts(i = 0) {
+  return (await openRowMenu(i)).map((n) => n.textContent?.trim());
+}
+
+/** 点状态分段里的某一段（分段控件不是下拉，按文字找 tab）。 */
+async function pickStatus(label: string) {
+  const tabs = Array.from(
+    document.querySelectorAll('[role="tablist"][aria-label="按状态筛选"] [role="tab"]'),
+  ) as HTMLElement[];
+  const hit = tabs.find((t) => (t.textContent ?? '').startsWith(label));
+  if (!hit) throw new Error(`找不到状态段：${label}（有：${tabs.map((t) => t.textContent).join('|')}）`);
+  await click(hit);
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
@@ -70,7 +99,7 @@ describe('批量提取', () => {
 
     await fillUrl('https://space.bilibili.com/12345');
     await click(button('预览'));
-    await until(() => text().includes('会选中 2 条'));
+    await until(() => text().includes('预计选取 2 条'));
 
     expect(text()).toContain('某个 UP 主');
     expect(text()).toContain('共 88 条');
@@ -94,7 +123,7 @@ describe('批量提取', () => {
     await choose('输入类型', '抖音号');
     await fillUrl('67194609689');
     await click(button('预览'));
-    await until(() => text().includes('会选中 2 条'));
+    await until(() => text().includes('预计选取 2 条'));
 
     // 预览接口是 extra="forbid"：多一个字段整单 422，页面就显示「提交的内容格式不正确」。
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
@@ -116,7 +145,7 @@ describe('批量提取', () => {
     await fillUrl('67194609689');
     await choose('格式', '音频');
     await click(button('预览'));
-    await until(() => text().includes('会选中 2 条'));
+    await until(() => text().includes('预计选取 2 条'));
 
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
     expect(body).not.toHaveProperty('formats');
@@ -124,7 +153,37 @@ describe('批量提取', () => {
     expect(body.media_type).toBe('audio');
   });
 
-  test('建任务：把存放方式与选取条件一起提交，随后列表刷新', async () => {
+  test('预览失败：淡红信息条原样给服务端原因，不粉饰成网络问题', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { status: 400, json: { detail: '拿不到作品列表：平台拒绝了这次请求（403）', code: 'creator_input' } },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+    await fillUrl('抖音号');
+    await click(button('预览'));
+    await until(() => text().includes('平台拒绝了这次请求'));
+
+    expect(document.querySelector('.info-bar.bad')).not.toBeNull();
+    expect(text()).not.toContain('网络不稳定');
+  });
+
+  test('预览结果在任意字段改动后清空，不会留一条对不上的数字', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+    await fillUrl('https://space.bilibili.com/12345');
+    await click(button('预览'));
+    await until(() => text().includes('预计选取 2 条'));
+
+    await choose('格式', '音频');
+    expect(text()).not.toContain('预计选取');
+  });
+
+  test('建任务：把存放方式与选取条件一起提交，随后列表刷新并高亮新行', async () => {
     let round = 0;
     server(ownerRoutes({
       [JOBS]: () => (round++ === 0 ? { json: { jobs: [] } } : { json: { jobs: [job()] } }),
@@ -136,239 +195,97 @@ describe('批量提取', () => {
     await fillUrl('12345');
     await choose('存放方式', '服务器存储');
     await click(button('开始提取'));
-    await until(() => text().includes('某个 UP 主'));
+    await until(() => text().includes('任务已创建'));
 
     const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
     expect(body).toMatchObject({ url: '12345', mode: 'latest_n', n: 20, storage: 'archive', media_type: 'video' });
-    expect(text()).toContain('已抓 20 / 20');
-    expect(text()).toContain('1 下载失败');
+
+    // 新任务那一行高亮 2 秒，且进度、失败数都能读到
+    await until(() => jobRows().length === 1);
+    expect(jobRows()[0]!.className).toContain('job-fresh');
+    expect(rowText()).toContain('20');
+    expect(rowText()).toContain('1 条失败');
   });
 
-  test('暂停与重试只对相应状态出现，并且真的发请求', async () => {
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job({ status: 'paused' })] } },
-      'POST /v2/creators/jobs/3/resume': { json: job() },
-      'POST /v2/creators/jobs/3/retry': { json: { job: job() } },
-    }));
-    mount('/creators');
-    await until(() => text().includes('已抓 20 / 20'));
-
-    // 暂停态：有"继续"和"重试"，没有"暂停"
-    expect(() => button('暂停')).toThrow();
-    expect(() => button('继续')).not.toThrow();
-    await click(button('继续'));
-    await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/resume'));
-    await click(button('重试失败条目'));
-    await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/retry'));
-  });
-
-  test('已完成的任务给「刷新地址」，点了就调 retry', async () => {
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job({ status: 'done', platform: 'douyin', source_url: 'https://www.douyin.com/user/1' })] } },
-      'POST /v2/creators/jobs/3/retry': {
-        json: { requeued: 0, rescan: true, job: job({ status: 'done' }) },
-      },
-    }));
-    mount('/creators');
-    await until(() => text().includes('已抓 20 / 20'));
-
-    // 跑完的任务没有「重试失败条目」，给的是「刷新地址」
-    expect(() => button('重试失败条目')).toThrow();
-    await click(button('刷新地址'));
-    await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/retry'));
-  });
-
-  test('B 站任务不给「刷新地址」——它每次下载都现解析，换地址没有意义', async () => {
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job({ status: 'done' })] } },
-    }));
-    mount('/creators');
-    await until(() => text().includes('已抓 20 / 20'));
-
-    expect(() => button('刷新地址')).toThrow();
-    expect(() => button('重试失败条目')).toThrow();
-  });
-
-  test('已取消任务按钮顺序：显示条目、刷新地址，再右侧多一个重试失败条目', async () => {
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job({ status: 'cancelled', platform: 'douyin', source_url: 'https://www.douyin.com/user/1' })] } },
-    }));
-    mount('/creators');
-    await until(() => text().includes('已抓 20 / 20'));
-
-    const labels = Array.from(document.querySelectorAll('.job .row-actions button'))
-      .map((b) => b.textContent?.trim());
-    // 显示条目在最前，刷新地址随后，重试失败条目收尾（右侧额外多出的那个）
-    expect(labels).toEqual(['显示条目', '刷新地址', '重试失败条目']);
-  });
-
-  test('展开条目：取分页条目并显示每个条目的状态', async () => {
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job()] } },
-      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
-        json: {
-          items: [
-            { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
-              published_at: null, is_pinned: false, seq: 1, cover_url: null, source_url: 'x',
-              download_state: 'done', track_id: 9, error: null },
-            { id: 2, video_id: 'BV2', platform: 'bilibili', page: 1, title: '第二条作品', duration_sec: 60,
-              published_at: null, is_pinned: false, seq: 2, cover_url: null, source_url: 'x',
-              download_state: 'failed', track_id: null, error: '平台拒绝' },
-          ],
-          total: 2, limit: 100, offset: 0,
-        },
-      },
-    }));
-    mount('/creators');
-    await until(() => text().includes('显示条目'));
-    await click(button('显示条目'));
-    await until(() => text().includes('第一条作品'));
-
-    // 表头：序号 / 标题 / 时长 / 发布 / 提取
-    const head = Array.from(document.querySelectorAll('.item-head span')).map((n) => n.textContent);
-    expect(head.slice(0, 5)).toEqual(['序号', '标题', '时长', '发布', '提取']);
-    // 失败的条目有标记，不再有「条目总数 / 已入库 / 失败」三栏统计
-    expect(document.querySelectorAll('.kv-grid')).toHaveLength(0);
-    expect(Array.from(document.querySelectorAll('.item-row .tag.bad')).map((n) => n.textContent))
-      .toEqual(['失败']);
-
-    // 每条都能直接下到本机：按钮点下去才发请求（先探 2 字节，能出流才真正下载）
-    const rows = Array.from(document.querySelectorAll('.item-row button')) as HTMLButtonElement[];
-    expect(rows.map((b) => b.textContent)).toEqual(['下载', '下载']);
-    expect(text()).toContain('下载全部（2 条）');
-    // 每条作品前有连续序号
-    expect(Array.from(document.querySelectorAll('.item-row .item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
-  });
-
-  test('手机下载的任务条目一直 pending，不显示「待处理」三个字', async () => {    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job({ storage: 'phone' })] } },
-      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
-        json: {
-          items: [
-            { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
-              published_at: null, is_pinned: false, seq: 1, cover_url: null, source_url: 'x',
-              download_state: 'pending', track_id: null, error: null },
-            { id: 2, video_id: 'BV2', platform: 'bilibili', page: 1, title: '第二条作品', duration_sec: 60,
-              published_at: null, is_pinned: false, seq: 2, cover_url: null, source_url: 'x',
-              download_state: 'pending', track_id: null, error: null },
-          ],
-          total: 2, limit: 100, offset: 0,
-        },
-      },
-    }));
-    mount('/creators');
-    await until(() => text().includes('显示条目'));
-    await click(button('显示条目'));
-    await until(() => text().includes('第一条作品'));
-
-    expect(text()).not.toContain('待处理');
-    expect(document.querySelectorAll('.item-row .tag')).toHaveLength(0);
-    // 序号与下载按钮不受影响
-    expect(Array.from(document.querySelectorAll('.item-row .item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
-    expect(document.querySelectorAll('.item-row button')).toHaveLength(2);
-  });
-
-  test('抖音被挡时显示服务端给的原因，不粉饰成网络问题', async () => {
+  test('建任务失败：错误 toast，已填内容保留', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [] } },
-      'POST /v2/creators/preview': { status: 400, json: { detail: '拿不到作品列表：平台拒绝了这次请求（403）', code: 'creator_input' } },
+      'POST /v2/creators/jobs': { status: 400, json: { detail: '这个博主已经有一批任务在跑' } },
     }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
-    await fillUrl('抖音号');
-    await click(button('预览'));
-    await until(() => text().includes('平台拒绝了这次请求'));
-    expect(text()).not.toContain('网络不稳定');
-  });
+    await fillUrl('https://space.bilibili.com/12345');
+    await click(button('开始提取'));
+    await until(() => text().includes('这个博主已经有一批任务在跑'));
 
-  test('选「抖音号」时显式带 platform=douyin，纯数字不再靠后端猜', async () => {
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [] } },
-      'POST /v2/creators/preview': { json: PREVIEW },
-    }));
+    expect(document.querySelector('.toast')).not.toBeNull();
+    expect((document.querySelector('input[type="text"]') as HTMLInputElement).value)
+      .toBe('https://space.bilibili.com/12345');
+  });
+});
+
+describe('批量提取：表单校验与动态字段', () => {
+  test('条数填 0 / 空 / 小数都标红并拦下，不发请求', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
+    await fillUrl('https://space.bilibili.com/12345');
 
-    // 类型下拉切到「抖音号」
-    await choose('输入类型', '抖音号');
-    await fillUrl('67194609689');
-    await click(button('预览'));
-    await until(() => text().includes('会选中 2 条'));
+    const nInput = () => document.querySelector('input[aria-label="条数"]') as HTMLInputElement;
+    const setN = async (v: string) => {
+      await act(async () => {
+        nInput().value = v;
+        nInput().dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
 
-    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
-    expect(body.platform).toBe('douyin');
-    expect(body.url).toBe('67194609689');
-    // 「全部作品」抓不到更深时如实说还有更多，而不是报「不足以覆盖起点」
-    expect(text()).toContain('还有更多');
+    for (const bad of ['0', '', '2.5']) {
+      await setN(bad);
+      await click(button('预览'));
+      await until(() => text().includes('条数要是 1–100000 之间的整数'));
+      expect(document.querySelector('.field.is-bad')).not.toBeNull();
+    }
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
-  test('选「抖音号」后填非数字直接拦下，不发请求', async () => {
+  test('四种选取方式各自的动态字段：条数 / 日期 / 无 / 起点+方向', async () => {
     server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    await choose('输入类型', '抖音号');
-    await fillUrl('https://space.bilibili.com/1');
-    await click(button('预览'));
-    await until(() => text().includes('只能填纯数字'));
-    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+    // 默认「最近 N 条」→ 只有条数
+    expect(document.querySelector('input[aria-label="条数"]')).not.toBeNull();
+    expect(document.querySelectorAll('.ext-form input[type="date"]')).toHaveLength(0);
+
+    await choose('选取方式', '指定日期');
+    expect(document.querySelector('input[aria-label="条数"]')).toBeNull();
+    expect(document.querySelectorAll('.ext-form input[type="date"]')).toHaveLength(2);
+
+    await choose('选取方式', '全部作品');
+    expect(document.querySelector('input[aria-label="条数"]')).toBeNull();
+    expect(document.querySelectorAll('.ext-form input[type="date"]')).toHaveLength(0);
+    expect(document.querySelector('input[aria-label="起始序号"]')).toBeNull();
+
+    await choose('选取方式', '指定起点');
+    expect(document.querySelector('input[aria-label="起始序号"]')).not.toBeNull();
+    expect(document.querySelector('button[aria-label="提取方向"]')).not.toBeNull();
   });
 
-  test('任务按顺序编号，「不再显示」只隐藏这一个任务', async () => {
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job({ id: 3, creator_name: '第一个博主' }), job({ id: 4, creator_name: '第二个博主' })] } },
-    }));
-    mount('/creators');
-    await until(() => text().includes('第二个博主'));
-
-    expect(Array.from(document.querySelectorAll('.job-no')).map((n) => n.textContent)).toEqual(['1', '2']);
-
-    const hides = Array.from(document.querySelectorAll('.job-hide')) as HTMLButtonElement[];
-    expect(hides.map((b) => b.textContent?.trim())).toEqual(['不再显示', '不再显示']);
-    await click(hides[1]!);
-
-    await until(() => !text().includes('第二个博主'));
-    // 只影响被点的那一个；剩下那个重新从 1 开始编号
-    expect(text()).toContain('第一个博主');
-    expect(document.querySelectorAll('.job')).toHaveLength(1);
-    expect(Array.from(document.querySelectorAll('.job-no')).map((n) => n.textContent)).toEqual(['1']);
-    // 记在本机，刷新后仍然不出现
-    expect(JSON.parse(window.localStorage.getItem('getmedia.creators.hiddenJobs')!)).toEqual([4]);
-    expect(text()).toContain('已隐藏 1 个任务');
-  });
-
-  test('隐藏是持久的，「恢复显示」能把任务放回来', async () => {
-    window.localStorage.setItem('getmedia.creators.hiddenJobs', JSON.stringify([4]));
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [job({ id: 3, creator_name: '第一个博主' }), job({ id: 4, creator_name: '被隐藏的博主' })] } },
-    }));
-    mount('/creators');
-    await until(() => text().includes('第一个博主'));
-
-    expect(text()).not.toContain('被隐藏的博主');
-    await click(button('恢复显示'));
-    await until(() => text().includes('被隐藏的博主'));
-    expect(text()).not.toContain('已隐藏');
-    expect(window.localStorage.getItem('getmedia.creators.hiddenJobs')).toBe('[]');
-  });
-
-  test('粘贴整段分享文案，只把核心主页链接交给后端', async () => {
-    server(ownerRoutes({
-      [JOBS]: { json: { jobs: [] } },
-      'POST /v2/creators/preview': { json: PREVIEW },
-    }));
+  test('切换输入类型后标签与 placeholder 跟着变，不永远显示 B 站示例', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
     mount('/creators');
     await until(() => text().includes('还没有批量任务'));
 
-    await fillUrl('7.53 复制打开抖音，看看【某某】的主页 https://www.douyin.com/user/MS4wLjABAAAAxxxx?from_tab_name=main 复制此链接');
-    await click(button('预览'));
-    await until(() => text().includes('会选中 2 条'));
+    const input = () => document.querySelector('input[type="text"]') as HTMLInputElement;
+    expect(input().placeholder).toBe('https://space.bilibili.com/12345');
 
-    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
-    expect(body.url).toBe('https://www.douyin.com/user/MS4wLjABAAAAxxxx');
-    // 输入框也被收回核心链接，用户看得到实际提交的是什么
-    const input = document.querySelector('input[type="text"]') as HTMLInputElement;
-    expect(input.value).toBe('https://www.douyin.com/user/MS4wLjABAAAAxxxx');
+    await choose('输入类型', '抖音号');
+    expect(input().placeholder).toBe('例如 67194609689');
+    expect(document.querySelector('.ext-url > span')!.textContent).toBe('抖音号');
+
+    await choose('输入类型', 'B 站号');
+    expect(input().placeholder).toBe('例如 12345');
+    expect(document.querySelector('.ext-url > span')!.textContent).toBe('B 站号');
   });
 
   test('指定日期的结束日期默认今天，两个日期都是日期选择器', async () => {
@@ -379,7 +296,7 @@ describe('批量提取', () => {
     await choose('选取方式', '指定日期');
 
     // 只数创建表单里的日期框（筛选栏里也有发起时间日期框，不在这里面）
-    const dates = Array.from(document.querySelectorAll('.panel-card input[type="date"]')) as HTMLInputElement[];
+    const dates = Array.from(document.querySelectorAll('.ext-form input[type="date"]')) as HTMLInputElement[];
     expect(dates).toHaveLength(2);
     const d = new Date();
     const two = (x: number) => String(x).padStart(2, '0');
@@ -400,17 +317,123 @@ describe('批量提取', () => {
     const opts = Array.from(document.querySelectorAll('[role="option"]'));
     expect(opts.map((o) => o.querySelector('.select-label')?.textContent))
       .toEqual(['只存元数据', '服务器缓存', '服务器存储']);
-    // 刚展开不弹提示，悬停到某一项才弹
-    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    // 刚展开不弹提示，悬停到某一项才弹（页面上的 ⓘ 说明一直都在，只看下拉里的）
+    expect(document.querySelector('.select-menu [role="tooltip"]')).toBeNull();
 
     await act(async () => {
       opts[1]!.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false }));
     });
-    const tip = document.querySelector('[role="tooltip"]');
+    const tip = document.querySelector('.select-menu [role="tooltip"]');
     expect(tip?.textContent).toContain('一天后失效，7 天后自动清理');
   });
 
-  test('服务器存档：任务卡显示已存条数与占用，条目上标「已在服务器」', async () => {
+  test('选「抖音号」时显式带 platform=douyin，纯数字不再靠后端猜', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await choose('输入类型', '抖音号');
+    await fillUrl('67194609689');
+    await click(button('预览'));
+    await until(() => text().includes('预计选取 2 条'));
+
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.platform).toBe('douyin');
+    expect(body.url).toBe('67194609689');
+    // 抓不到更深时如实说还有更多，而不是报「不足以覆盖起点」
+    expect(text()).toContain('还有更多');
+  });
+
+  test('选「抖音号」后填非数字直接拦下，不发请求', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await choose('输入类型', '抖音号');
+    await fillUrl('https://space.bilibili.com/1');
+    await click(button('预览'));
+    await until(() => text().includes('只能填纯数字'));
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  test('粘贴整段分享文案，只把核心主页链接交给后端', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [] } },
+      'POST /v2/creators/preview': { json: PREVIEW },
+    }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await fillUrl('7.53 复制打开抖音，看看【某某】的主页 https://www.douyin.com/user/MS4wLjABAAAAxxxx?from_tab_name=main 复制此链接');
+    await click(button('预览'));
+    await until(() => text().includes('预计选取 2 条'));
+
+    const body = calls.find((c) => c.method === 'POST')!.body as Record<string, unknown>;
+    expect(body.url).toBe('https://www.douyin.com/user/MS4wLjABAAAAxxxx');
+    // 输入框也被收回核心链接，用户看得到实际提交的是什么
+    const input = document.querySelector('input[type="text"]') as HTMLInputElement;
+    expect(input.value).toBe('https://www.douyin.com/user/MS4wLjABAAAAxxxx');
+  });
+});
+
+describe('批量提取：任务表格与行内操作', () => {
+  test('表格列顺序固定，序号是灰色纯数字，博主第二行是「平台 · 用户 ID」', async () => {
+    const url = 'https://www.douyin.com/user/MS4wLjABAAAAR1Hyk5la2AbZ_a-00wgh6UnypbV35hOG_8bQvsBqDrNGzpxcHBu7ueuCbA';
+    server(ownerRoutes({
+      [JOBS]: {
+        json: {
+          jobs: [job({ platform: 'douyin', creator_name: '', source_input: '67194609689', source_url: url })],
+        },
+      },
+    }));
+    mount('/creators');
+    await until(() => jobRows().length === 1);
+
+    const heads = Array.from(document.querySelectorAll('.cr-table thead th')).map((n) => n.textContent);
+    expect(heads).toEqual(['序号', '博主', '状态', '选取', '存放与输出', '进度', '占用', '发起时间', '操作']);
+
+    const r = jobRows()[0]!;
+    expect(r.querySelector('.c-no')!.textContent).toBe('1');
+    // 昵称取不到就说「昵称未知」，不空着；第二行是平台 + 解析出的号（普通字体，不做胶囊）
+    expect(r.querySelector('.who-name')!.textContent).toBe('昵称未知');
+    expect(r.querySelector('.who-name')!.getAttribute('title')).toBe(url);
+    expect(r.querySelector('.who-sub')!.textContent).toBe('抖音 · 67194609689');
+    // 状态是淡色标签（无描边），进度是「已抓 / 总数」
+    expect(r.querySelector('.pill')!.textContent).toBe('进行中');
+    expect(r.querySelector('.prog-n')!.textContent!.replace(/\s/g, '')).toBe('6/20');
+    expect(r.querySelector('.prog-bar')).not.toBeNull();
+    // 发起时间到分，秒进 tooltip（按本地时区算，不写死时区）
+    const two = (x: number) => String(x).padStart(2, '0');
+    const d = new Date(1_700_000_000 * 1000);
+    expect(r.querySelector('.c-at')!.textContent)
+      .toContain(`${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`);
+    expect(r.querySelector('.c-at')!.getAttribute('title')).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
+  });
+
+  test('进度条只在没跑完时出现；占用为 0 时给一道横线', async () => {
+    server(ownerRoutes({
+      [JOBS]: {
+        json: {
+          jobs: [
+            job({ id: 1, creator_name: '跑完的', status: 'done', done: 20, failed: 0, estimated_bytes: 0 }),
+            job({ id: 2, creator_name: '在跑的', status: 'running', done: 6 }),
+          ],
+        },
+      },
+    }));
+    mount('/creators');
+    await until(() => jobRows().length === 2);
+
+    expect(jobRows()[0]!.querySelector('.prog-bar')).toBeNull();
+    expect(jobRows()[0]!.querySelector('.c-bytes')!.textContent).toBe('—');
+    expect(jobRows()[1]!.querySelector('.prog-bar')).not.toBeNull();
+    expect(jobRows()[1]!.querySelector('.c-bytes')!.textContent).toContain('300');
+  });
+
+  test('服务器存档：进度第二行给「已存服务器 N / M」，占用 tooltip 带上实际占用', async () => {
     server(ownerRoutes({
       [JOBS]: {
         json: {
@@ -434,8 +457,9 @@ describe('批量提取', () => {
     }));
     mount('/creators');
     await until(() => text().includes('已存服务器 12 / 20'));
-    expect(text()).toContain('服务器缓存');
-    expect(text()).toContain('240 MB');
+    expect(rowText()).toContain('服务器缓存');
+    // 列里显示的是估算值，服务器上实际占多少进 tooltip
+    expect(jobRows()[0]!.querySelector('.c-bytes')!.getAttribute('title')).toContain('240 MB');
 
     await click(button('显示条目'));
     await until(() => text().includes('存好的作品'));
@@ -445,6 +469,213 @@ describe('批量提取', () => {
     expect(tags.filter((t) => t === '已在服务器')).toHaveLength(1);
   });
 
+  test('「显示条目」是行内展开：条目落在该行下方的整行子区域里', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job()] } },
+      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
+        json: {
+          items: [
+            { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
+              published_at: null, is_pinned: false, seq: 1, cover_url: null, source_url: 'x',
+              download_state: 'done', track_id: 9, error: null },
+            { id: 2, video_id: 'BV2', platform: 'bilibili', page: 1, title: '第二条作品', duration_sec: 60,
+              published_at: null, is_pinned: false, seq: 2, cover_url: null, source_url: 'x',
+              download_state: 'failed', track_id: null, error: '平台拒绝' },
+          ],
+          total: 2, limit: 100, offset: 0,
+        },
+      },
+    }));
+    mount('/creators');
+    await until(() => text().includes('显示条目'));
+    await click(button('显示条目'));
+    await until(() => text().includes('第一条作品'));
+
+    // 展开的是紧跟该行的一个 colspan 子行，不是弹窗、不是跳转
+    const sub = document.querySelector('.cr-table tbody tr.job-sub')!;
+    expect(sub).not.toBeNull();
+    expect(sub.querySelector('td')!.getAttribute('colspan')).toBe('9');
+    expect(sub.nextElementSibling === null || sub.previousElementSibling === jobRows()[0]).toBe(true);
+
+    // 表头：序号 / 标题 / 时长 / 发布 / 提取
+    const head = Array.from(document.querySelectorAll('.item-head span')).map((n) => n.textContent);
+    expect(head.slice(0, 5)).toEqual(['序号', '标题', '时长', '发布', '提取']);
+    expect(document.querySelectorAll('.kv-grid')).toHaveLength(0);
+    expect(Array.from(document.querySelectorAll('.item-row .tag.bad')).map((n) => n.textContent))
+      .toEqual(['失败']);
+
+    // 每条都能直接下到本机：按钮点下去才发请求（先探 2 字节，能出流才真正下载）
+    const btns = Array.from(document.querySelectorAll('.item-row button')) as HTMLButtonElement[];
+    expect(btns.map((b) => b.textContent)).toEqual(['下载', '下载']);
+    expect(text()).toContain('下载全部（2 条）');
+    expect(Array.from(document.querySelectorAll('.item-row .item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
+
+    // 再点一次收起（展开时按钮变成「收起条目 ▴」）
+    await click(button('收起条目 ▴'));
+    expect(document.querySelector('.cr-table tbody tr.job-sub')).toBeNull();
+  });
+
+  test('手机下载的任务条目一直 pending，不显示「待处理」三个字', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ storage: 'phone' })] } },
+      'GET /v2/creators/jobs/3/items?limit=5&offset=0': {
+        json: {
+          items: [
+            { id: 1, video_id: 'BV1', platform: 'bilibili', page: 1, title: '第一条作品', duration_sec: 204,
+              published_at: null, is_pinned: false, seq: 1, cover_url: null, source_url: 'x',
+              download_state: 'pending', track_id: null, error: null },
+            { id: 2, video_id: 'BV2', platform: 'bilibili', page: 1, title: '第二条作品', duration_sec: 60,
+              published_at: null, is_pinned: false, seq: 2, cover_url: null, source_url: 'x',
+              download_state: 'pending', track_id: null, error: null },
+          ],
+          total: 2, limit: 100, offset: 0,
+        },
+      },
+    }));
+    mount('/creators');
+    await until(() => text().includes('显示条目'));
+    await click(button('显示条目'));
+    await until(() => text().includes('第一条作品'));
+
+    expect(text()).not.toContain('待处理');
+    expect(document.querySelectorAll('.item-row .tag')).toHaveLength(0);
+    expect(Array.from(document.querySelectorAll('.item-row .item-no')).map((n) => n.textContent)).toEqual(['1', '2']);
+    expect(document.querySelectorAll('.item-row button')).toHaveLength(2);
+  });
+
+  test('暂停态：菜单里是「继续 + 重试失败条目」，点了真的发请求', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ status: 'paused' })] } },
+      'POST /v2/creators/jobs/3/resume': { json: job() },
+      'POST /v2/creators/jobs/3/retry': { json: { job: job() } },
+    }));
+    mount('/creators');
+    await until(() => jobRows().length === 1);
+
+    expect(await menuTexts()).toEqual(['继续', '取消任务', '重试失败条目', '复制链接', '不再显示']);
+    await click(button('重试失败条目'));
+    await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/retry'));
+
+    // 菜单关掉后重新打开，「继续」还在
+    expect(document.querySelector('[role="menuitem"]')).toBeNull();
+    await openRowMenu();
+    await click(button('继续'));
+    await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/resume'));
+  });
+
+  test('进行中：菜单里是「暂停 + 取消任务」，没有「重试失败条目」', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ status: 'running', failed: 0 })] } },
+      'POST /v2/creators/jobs/3/pause': { json: job({ status: 'paused' }) },
+    }));
+    mount('/creators');
+    await until(() => jobRows().length === 1);
+
+    expect(await menuTexts()).toEqual(['暂停', '取消任务', '复制链接', '不再显示']);
+    await click(button('暂停'));
+    await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/pause'));
+  });
+
+  test('已完成的任务给「刷新地址」，点了就调 retry', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ status: 'done', platform: 'douyin', source_url: 'https://www.douyin.com/user/1' })] } },
+      'POST /v2/creators/jobs/3/retry': {
+        json: { requeued: 0, rescan: true, job: job({ status: 'done' }) },
+      },
+    }));
+    mount('/creators');
+    await until(() => jobRows().length === 1);
+
+    // 跑完的任务没有「重试失败条目」，给的是「刷新地址」
+    expect(await menuTexts()).not.toContain('重试失败条目');
+    await click(button('刷新地址'));
+    await until(() => calls.some((c) => c.path === '/v2/creators/jobs/3/retry'));
+  });
+
+  test('B 站任务不给「刷新地址」——它每次下载都现解析，换地址没有意义', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ status: 'done' })] } },
+    }));
+    mount('/creators');
+    await until(() => jobRows().length === 1);
+
+    expect(() => button('刷新地址')).toThrow();
+    expect(document.querySelectorAll('.row-ops .text-btn')).toHaveLength(1);
+  });
+
+  test('已取消任务：操作列固定「显示条目 + 刷新地址 + ⋯」，不折行', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ status: 'cancelled', platform: 'douyin', source_url: 'https://www.douyin.com/user/1' })] } },
+    }));
+    mount('/creators');
+    await until(() => jobRows().length === 1);
+
+    const labels = Array.from(document.querySelectorAll('.row-ops .text-btn')).map((b) => b.textContent?.trim());
+    expect(labels).toEqual(['显示条目', '刷新地址']);
+    expect(document.querySelector('.row-ops button[aria-label="更多操作"]')).not.toBeNull();
+  });
+
+  test('复制链接走「⋯」，回执是一条 toast', async () => {
+    const writeText = vi.fn(async () => undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ source_url: 'https://space.bilibili.com/12345' })] } },
+    }));
+    mount('/creators');
+    await until(() => jobRows().length === 1);
+
+    await openRowMenu();
+    await click(button('复制链接'));
+    await until(() => text().includes('已复制'));
+    expect(writeText).toHaveBeenCalledWith('https://space.bilibili.com/12345');
+  });
+});
+
+describe('批量提取：不再显示', () => {
+  test('只隐藏被点的那一个，并且能当场撤销', async () => {
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ id: 3, creator_name: '第一个博主' }), job({ id: 4, creator_name: '第二个博主' })] } },
+    }));
+    mount('/creators');
+    await until(() => text().includes('第二个博主'));
+
+    expect(Array.from(document.querySelectorAll('.cr-table tbody td.c-no')).map((n) => n.textContent)).toEqual(['1', '2']);
+
+    await openRowMenu(1);
+    await click(button('不再显示'));
+    await until(() => !text().includes('第二个博主'));
+
+    // 只影响被点的那一个；剩下那个重新从 1 开始编号
+    expect(text()).toContain('第一个博主');
+    expect(jobRows()).toHaveLength(1);
+    expect(Array.from(document.querySelectorAll('.cr-table tbody td.c-no')).map((n) => n.textContent)).toEqual(['1']);
+    // 记在本机，刷新后仍然不出现
+    expect(JSON.parse(window.localStorage.getItem('getmedia.creators.hiddenJobs')!)).toEqual([4]);
+    expect(text()).toContain('已隐藏 1 个任务');
+
+    // 不弹确认框，改为 toast 里给一次撤销
+    await click(button('撤销'));
+    await until(() => text().includes('第二个博主'));
+    expect(JSON.parse(window.localStorage.getItem('getmedia.creators.hiddenJobs')!)).toEqual([]);
+  });
+
+  test('隐藏是持久的，「恢复显示」能把任务放回来', async () => {
+    window.localStorage.setItem('getmedia.creators.hiddenJobs', JSON.stringify([4]));
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ id: 3, creator_name: '第一个博主' }), job({ id: 4, creator_name: '被隐藏的博主' })] } },
+    }));
+    mount('/creators');
+    await until(() => text().includes('第一个博主'));
+
+    expect(text()).not.toContain('被隐藏的博主');
+    await click(button('恢复显示'));
+    await until(() => text().includes('被隐藏的博主'));
+    expect(text()).not.toContain('已隐藏');
+    expect(window.localStorage.getItem('getmedia.creators.hiddenJobs')).toBe('[]');
+  });
+});
+
+describe('批量提取：条目下载', () => {
   test('单条下载：先探 2 字节确认能出流，再交给浏览器存盘', async () => {
     const saved = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
     server(ownerRoutes({
@@ -483,7 +714,6 @@ describe('批量提取', () => {
 
     await click(button('下载'));
     await until(() => text().includes('该链接已失效，请 1 分钟后重试。'));
-    // 409 不落盘：否则浏览器会把一段 JSON 报错存成 .mp4
     expect(saved).not.toHaveBeenCalled();
   });
 
@@ -511,7 +741,6 @@ describe('批量提取', () => {
     await until(() => text().includes('下载全部（3 条）'));
 
     await click(button('下载全部（3 条）'));
-    // 「全部」不等于「已加载的那 100 条」：第二页也要取回来
     await until(() => calls.some((c) => c.path.endsWith('/items') && c.search.includes('offset=2')));
     await until(() => text().includes('正在下载'));
     await click(button('停止下载'));
@@ -519,8 +748,7 @@ describe('批量提取', () => {
   });
 });
 
-
-describe('批量提取：多格式与任务卡信息', () => {
+describe('批量提取：多格式与任务行信息', () => {
   test('切到音频后格式候选跟着换，多选结果一起提交', async () => {
     server(ownerRoutes({
       [JOBS]: { json: { jobs: [] } },
@@ -549,72 +777,30 @@ describe('批量提取：多格式与任务卡信息', () => {
     expect(body.formats).toEqual(['m4a', 'mp3']);
   });
 
-  test('任务卡：平台、昵称、抖音号、完整链接、绝对时间与「显示条目」', async () => {
-    const url = 'https://www.douyin.com/user/MS4wLjABAAAAR1Hyk5la2AbZ_a-00wgh6UnypbV35hOG_8bQvsBqDrNGzpxcHBu7ueuCbA';
-    server(ownerRoutes({
-      [JOBS]: {
-        json: {
-          jobs: [job({
-            platform: 'douyin', creator_name: '', source_input: '67194609689',
-            source_url: url, created_at: 1_700_000_000,
-          })],
-        },
-      },
-    }));
-    mount('/creators');
-    await until(() => text().includes('67194609689'));
-
-    // 头部依次是：状态 → 「抖音号」纯文字（无框）→ 数字胶囊 → 昵称；
-    // 平台标签「抖音」已删（有「抖音号」就知道是抖音）
-    const tags = Array.from(document.querySelectorAll('.job-head .tag')).map((n) => n.textContent);
-    expect(tags).toEqual(['进行中', '67194609689']);
-    // 「抖音号」是纯文字前缀，不在任何框里
-    expect(document.querySelector('.job-id-label')!.textContent).toBe('抖音号');
-    expect(document.querySelector('.job-who')!.textContent).toBe('昵称未知');
-    expect(document.querySelector('.job-head')!.textContent)
-      .toContain('抖音号67194609689昵称未知');
-
-    // 地址那一行只放地址本身，不再重复一个「抖音」标签
-    const src = document.querySelector('.job-src')!;
-    expect(src.querySelector('.tag')).toBeNull();
-    expect(document.querySelector('.job-url')!.textContent).toBe(url);
-    expect(text()).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
-
-    // 裸值改成带标签的几项，格式用后缀名展示；「任务 #N」已删（数据库 id 与列表序号不一致，反而误导）
-    const metas = Array.from(document.querySelectorAll('.job-meta .meta')).map((n) => n.textContent);
-    expect(metas).toEqual(['选取最近 20 条', '存放只存元数据', '输出视频原始格式']);
-    // 媒体类型和格式拆成两个独立的块，各能单独定位
-    expect(document.querySelector('.media-kind')!.textContent).toBe('视频');
-    expect(document.querySelector('.format-list')!.textContent).toBe('原始格式');
-
-    expect(() => button('复制链接')).not.toThrow();
-    expect(() => button('显示条目')).not.toThrow();
-  });
-
-  test('按号发起：B 站号拆成纯文字前缀 + 数字胶囊；按链接发起也显示解析出的号', async () => {
-    const url = 'https://space.bilibili.com/12345';
+  test('存放与输出两行：第一行存放方式，第二行「视频 · 原始格式」；指定日期只显示月日', async () => {
     server(ownerRoutes({
       [JOBS]: {
         json: {
           jobs: [
-            job({ id: 3, creator_name: '某个 UP 主', source_input: '12345', source_url: url }),
-            // 按链接发起：source_input 是链接本身，但后端已解析出 creator_id，也把号亮出来
-            job({ id: 4, creator_name: '另一个 UP 主', creator_id: '67890', source_input: url, source_url: url }),
+            job({ id: 1, mode: 'date_range', since_ts: 1_700_000_000, until_ts: 1_701_000_000, limit_n: null }),
+            job({ id: 2, mode: 'all', limit_n: null, media_type: 'audio', formats: ['m4a'], storage: 'archive' }),
           ],
         },
       },
     }));
     mount('/creators');
-    await until(() => text().includes('另一个 UP 主'));
+    await until(() => jobRows().length === 2);
 
-    const cards = Array.from(document.querySelectorAll('.job'));
-    const tagsOf = (el: Element) => Array.from(el.querySelectorAll('.job-head .tag')).map((n) => n.textContent);
-    // 平台标签「B 站」已删；号拆成「B站号」纯文字 + 数字胶囊，昵称在后
-    expect(tagsOf(cards[0]!)).toEqual(['进行中', '12345']);
-    expect(cards[0]!.querySelector('.job-id-label')!.textContent).toBe('B站号');
-    expect(cards[0]!.querySelector('.job-who')!.textContent).toBe('某个 UP 主');
-    // 链接发起的那条：有昵称，也显示后端解析出的号
-    expect(tagsOf(cards[1]!)).toEqual(['进行中', '67890']);
+    const out = (i: number) => Array.from(jobRows()[i]!.querySelectorAll('.c-out > div')).map((n) => n.textContent);
+    expect(out(0)).toEqual(['只存元数据', '视频 · 原始格式']);
+    expect(out(1)).toEqual(['服务器存储', '音频 · .m4a']);
+    // 选取列：日期范围缩成月日，完整内容进 tooltip
+    const two = (x: number) => String(x).padStart(2, '0');
+    const md = (ts: number) => { const d = new Date(ts * 1000); return `${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
+    expect(jobRows()[0]!.querySelector('.c-sel')!.textContent)
+      .toBe(`${md(1_700_000_000)} ~ ${md(1_701_000_000)}`);
+    expect(jobRows()[0]!.querySelector('.c-sel')!.getAttribute('title')).toContain('指定日期');
+    expect(jobRows()[1]!.querySelector('.c-sel')!.textContent).toBe('全部作品');
   });
 
   test('条目按表头对齐；提取时间用落盘时间；每种格式可单独下载', async () => {
@@ -657,7 +843,7 @@ describe('批量任务筛选', () => {
       job({ id: 3, platform: 'bilibili', creator_name: '科技UP', source_input: 'https://space.bilibili.com/123', creator_id: '123', status: 'running' }),
     ];
   }
-  const cardCount = () => document.querySelectorAll('.job').length;
+  const cardCount = () => jobRows().length;
 
   async function typeFilter(placeholder: string, v: string) {
     const input = document.querySelector(`input[placeholder="${placeholder}"]`) as HTMLInputElement;
@@ -667,22 +853,29 @@ describe('批量任务筛选', () => {
     });
   }
 
-  test('状态、平台、用户 ID、昵称都能筛选，条件是「且」关系', async () => {
+  test('状态分段带数量；状态、平台、用户 ID、昵称都能筛，条件是「且」关系', async () => {
     server(ownerRoutes({ [JOBS]: { json: { jobs: threeJobs() } } }));
     mount('/creators');
     await until(() => cardCount() === 3);
 
+    // 分段控件（不是下拉），每段带这一状态的任务数
+    const tabs = Array.from(
+      document.querySelectorAll('[role="tablist"][aria-label="按状态筛选"] [role="tab"]'),
+    ).map((t) => t.textContent?.trim());
+    expect(tabs).toEqual(['全部3', '待开始0', '进行中1', '已暂停0', '已完成1', '失败0', '已取消1']);
+    expect(document.querySelector('[aria-label="按状态筛选"] .select-trigger')).toBeNull();
+
     // 状态：已完成 → 只剩小叶稚
-    await choose('筛选：状态', '已完成');
+    await pickStatus('已完成');
     await until(() => cardCount() === 1);
     expect(text()).toContain('小叶稚');
 
-    // 叠加平台=抖音（小叶稚已是抖音+已完成）→ 仍 1 个
+    // 叠加平台=抖音 → 仍 1 个
     await choose('筛选：平台', '抖音');
     await until(() => cardCount() === 1);
 
-    // 清掉状态（选「全部状态」），只剩平台=抖音 → 2 个
-    await choose('筛选：状态', '全部状态');
+    // 清掉状态（点「全部」），只剩平台=抖音 → 2 个
+    await pickStatus('全部');
     await until(() => cardCount() === 2);
 
     // 再叠加用户 ID → 只剩小叶稚
@@ -701,15 +894,15 @@ describe('批量任务筛选', () => {
     expect(text()).toContain('美食博主');
 
     // 再设一个状态条件，触发「重置筛选」按钮出现
-    await choose('筛选：状态', '已完成');
+    await pickStatus('已完成');
     await until(() => cardCount() === 0);
-    expect(text()).toContain('没有符合筛选条件的任务');
+    expect(text()).toContain('没有符合条件的任务');
 
     await click(button('重置筛选'));
     await until(() => cardCount() === 3);
   });
 
-  test('发起时间筛选：填开始时间筛掉更早的任务，截止时间默认今天', async () => {
+  test('发起时间：两端默认都为空；只填一端也生效，边界含当天', async () => {
     const nowSec = Math.floor(Date.now() / 1000);
     const day = 86400;
     const two = (x: number) => String(x).padStart(2, '0');
@@ -723,19 +916,56 @@ describe('批量任务筛选', () => {
     mount('/creators');
     await until(() => cardCount() === 3);
 
-    // 填开始时间 = 昨天 → 筛掉「两天前」，保留「昨天」「现在」（截止默认今天，不额外拦）
+    // 默认两端为空（不再预填今天），所以三个任务都在
+    const start = () => document.querySelector('input[aria-label="发起时间开始"]') as HTMLInputElement;
+    const end = () => document.querySelector('input[aria-label="发起时间截止"]') as HTMLInputElement;
+    expect(start().value).toBe('');
+    expect(end().value).toBe('');
+
+    // 只填开始时间 = 昨天 → 筛掉「两天前」
     const y = new Date((nowSec - day) * 1000);
     const yesterdayIso = `${y.getFullYear()}-${two(y.getMonth() + 1)}-${two(y.getDate())}`;
-    const start = document.querySelector('input[aria-label="发起时间开始"]') as HTMLInputElement;
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
     await act(async () => {
-      setter.call(start, yesterdayIso);
-      start.dispatchEvent(new Event('input', { bubbles: true }));
+      setter.call(start(), yesterdayIso);
+      start().dispatchEvent(new Event('input', { bubbles: true }));
     });
     await until(() => cardCount() === 2);
     expect(text()).toContain('昨天');
     expect(text()).toContain('现在');
     expect(text()).not.toContain('两天前');
+
+    // 只填截止时间 = 昨天 → 只剩「两天前」和「昨天」（含当天 23:59:59）
+    await act(async () => {
+      setter.call(start(), '');
+      start().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      setter.call(end(), yesterdayIso);
+      end().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await until(() => cardCount() === 2);
+    expect(text()).toContain('两天前');
+    expect(text()).toContain('昨天');
+    expect(text()).not.toContain('现在');
+  });
+
+  test('「快捷」一键把发起时间设成近 7 天', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/creators');
+    await until(() => text().includes('还没有批量任务'));
+
+    await click(button('快捷 ▾'));
+    const items = Array.from(document.querySelectorAll('[role="menuitem"]')).map((n) => n.textContent);
+    expect(items).toEqual(['今天', '近 7 天', '近 30 天', '本月', '清除日期']);
+
+    await click(button('近 7 天'));
+    const start = document.querySelector('input[aria-label="发起时间开始"]') as HTMLInputElement;
+    const end = document.querySelector('input[aria-label="发起时间截止"]') as HTMLInputElement;
+    expect(start.value).not.toBe('');
+    expect(end.value).not.toBe('');
+    // 区间倒着填会自动对调
+    expect(start.value <= end.value).toBe(true);
   });
 
   test('存放方式筛「只存元数据」同时命中 metadata 与旧数据 phone', async () => {
@@ -783,7 +1013,6 @@ describe('条目翻页', () => {
     await click(button('显示条目'));
     await until(() => shown() === 5);
 
-    // 默认 5 条一页，不再是「一次 100 条 + 加载更多」
     expect(calls.some((c) => c.search.includes('limit=5&offset=0'))).toBe(true);
     expect(() => button('加载更多（还有 20 条）')).toThrow();
     expect(text()).toContain('第 1 / 5 页');
@@ -791,7 +1020,7 @@ describe('条目翻页', () => {
 
     await click(button('2'));
     await until(() => shown() === 5 && text().includes('作品 6'));
-    expect(firstNo()).toBe('6');            // 第 2 页从第 6 条接着数
+    expect(firstNo()).toBe('6');
     expect(text()).toContain('第 2 / 5 页');
 
     await click(button('上一页'));
@@ -810,13 +1039,12 @@ describe('条目翻页', () => {
 
     await choose('每页条数', '20 条');
     await until(() => shown() === 20);
-    expect(firstNo()).toBe('1');            // 换了每页条数就回第一页
+    expect(firstNo()).toBe('1');
     expect(text()).toContain('第 1 / 2 页');
 
     await choose('每页条数', '10 条');
     await until(() => shown() === 10);
     expect(text()).toContain('第 1 / 3 页');
-    // 候选只有三档：5 / 10 / 20
     await click(document.querySelector('button[aria-label="每页条数"]')!);
     expect(Array.from(document.querySelectorAll('[role="option"]')).map((o) => o.textContent))
       .toEqual(['5 条', '10 条', '20 条']);

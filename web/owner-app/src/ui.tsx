@@ -297,6 +297,22 @@ export function fmtBytesParts(n: number | null | undefined): { num: string; unit
   return { num: i === 0 ? String(v) : v.toFixed(v < 10 ? 1 : 0), unit: UNITS[i] ?? 'B' };
 }
 
+/** 体积的「数字 + 单位」两段式：权限管理、批量提取两页的占用列共用。
+ *
+ *  外面这层是固定宽度的 inline-grid：左格数字右对齐、右格单位定宽左对齐——
+ *  不这么拆，「229 MB」和「0 B」的数字右边缘就对不齐（位数不同，单位会被顶来顶去）。
+ *  容器本身在单元格里居中，所以整列的视觉中心落在"数字+单位"这个整体上，而不是贴着右边缘。
+ */
+export function BytesCell({ n }: { n: number | null | undefined }) {
+  const p = fmtBytesParts(n);
+  return (
+    <span class="bytes">
+      <span class="bytes-n">{p.num}</span>
+      <span class="bytes-u">{p.unit}</span>
+    </span>
+  );
+}
+
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n) || n < 0) return '—';
   let v = n, i = 0;
@@ -445,46 +461,174 @@ export function Field({ label, value, mono }: { label: string; value: ComponentC
   );
 }
 
-/** 表格里的时间：日期一段（正常色）+ 时分秒一段（小一号、淡灰），精确到秒但整格不显得笨重。
+/** 表格里的时间：日期一段（正常色）+ 时分一段（小一号、淡灰），整格不显得笨重。
  *
  *  `at` 为空给「—」（邀请码的到期时间 / 使用时间本来就可能是空）。
  *  `cls` 用来整体染色，比如快到期给 `text-warn`、已过期给 `text-bad`。
+ *  `secs` 默认带上秒（权限管理、邀请码要精确到秒）；批量提取的「发起时间」只要到分。
  */
-export function DateTimeCell({ at, cls }: { at: number | null | undefined; cls?: string }) {
+export function DateTimeCell({ at, cls, secs = true }: {
+  at: number | null | undefined; cls?: string; secs?: boolean;
+}) {
   if (!at) return <>—</>;
   const s = fmtDateTime(at);
   return (
     <span class={cls ? `dt ${cls}` : 'dt'}>
-      <span>{s.slice(0, 10)}</span><span class="dt-t">{s.slice(11)}</span>
+      <span>{s.slice(0, 10)}</span><span class="dt-t">{secs ? s.slice(11) : s.slice(11, 16)}</span>
     </span>
   );
 }
 
 export type ToastKind = 'ok' | 'err';
+export interface ToastAction { label: string; onClick: () => void }
 
 /** 轻量提示条：底部居中浮一条，到点自己消失。
  *
  *  用它而不是把结果塞进页面流里——生成/复制这类"一次性回执"不该把下面的内容推下去。
  *  返回 `node` 直接放进页面，`show` 随时可以再叫。同一个页面只留一条（新的顶掉旧的）。
+ *
+ *  带 `action` 时（「不再显示」的撤销）多给一个按钮，停留时间也放宽到 6 秒——
+ *  2.6 秒不够人反应过来去点。
  */
 export function useToast(timeout = 2600): {
-  show: (text: string, kind?: ToastKind) => void;
+  show: (text: string, kind?: ToastKind, action?: ToastAction) => void;
   node: ComponentChildren;
 } {
-  const [t, setT] = useState<{ id: number; text: string; kind: ToastKind } | null>(null);
+  const [t, setT] = useState<{ id: number; text: string; kind: ToastKind; action?: ToastAction } | null>(null);
   const timer = useRef<number | undefined>(undefined);
   const clear = () => {
     if (timer.current !== undefined) window.clearTimeout(timer.current);
     timer.current = undefined;
   };
   useEffect(() => clear, []);
-  const show = (text: string, kind: ToastKind = 'ok') => {
+  const show = (text: string, kind: ToastKind = 'ok', action?: ToastAction) => {
     clear();
-    setT({ id: Date.now(), text, kind });
-    timer.current = window.setTimeout(() => setT(null), timeout);
+    setT({ id: Date.now(), text, kind, action });
+    timer.current = window.setTimeout(() => setT(null), action ? Math.max(timeout, 6000) : timeout);
   };
   const node = t ? (
-    <div class={`toast toast-${t.kind}`} role="status" aria-live="polite">{t.text}</div>
+    <div class={`toast toast-${t.kind}`} role="status" aria-live="polite">
+      <span class="toast-t">{t.text}</span>
+      {t.action ? (
+        <button
+          type="button"
+          class="toast-act"
+          onClick={() => {
+            t.action!.onClick();
+            setT(null);
+          }}
+        >
+          {t.action.label}
+        </button>
+      ) : null}
+    </div>
   ) : null;
   return { show, node };
 }
+
+/** 本地时区的 `YYYY-MM-DD`，也就是 `input[type=date]` 的取值格式。
+ *  日期框、`dayStart/dayEnd` 三者都按本地时区解释，口径一致。 */
+export function ymd(d: Date): string {
+  const two = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+export function daysAgo(n: number): Date {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d;
+}
+
+/** 日期范围筛选：两个日期框用「至」连起来，右边跟一个「快捷」菜单。
+ *
+ *  权限管理（创建时间）与批量提取（发起时间）两页共用同一套交互：
+ *  - 两端**默认都是空**（空 = 不筛），只填一端也生效；
+ *  - 起晚于止时直接对调，不让人对着倒置的区间猜结果；
+ *  - 区间含当天（换算成 00:00:00 ~ 23:59:59 由调用方做，这里只给 `YYYY-MM-DD`）。
+ */
+export function DateRange({ from, to, onChange, label, quickLabel = '快捷 ▾' }: {
+  from: string;
+  to: string;
+  onChange: (from: string, to: string) => void;
+  /** 「创建时间」「发起时间」这类列名：同时拼出 aria-label（`${label}开始` / `${label}截止`） */
+  label: string;
+  quickLabel?: string;
+}) {
+  function changeFrom(v: string) {
+    // 起点跑到终点后面：两个框对调，而不是留一个倒置区间
+    if (v && to && v > to) return onChange(to, v);
+    onChange(v, to);
+  }
+  function changeTo(v: string) {
+    if (v && from && v < from) return onChange(v, from);
+    onChange(from, v);
+  }
+  const now = new Date();
+  return (
+    <span class="date-range">
+      <span class="date-label">{label}</span>
+      <DateInput label={`${label}开始`} placeholder="开始日期" value={from} onInput={changeFrom} />
+      <span class="muted">至</span>
+      <DateInput label={`${label}截止`} placeholder="结束日期" value={to} onInput={changeTo} />
+      <Menu
+        label={quickLabel}
+        variant="boxed"
+        ariaLabel={`${label}快捷范围`}
+        items={[
+          { text: '今天', onClick: () => onChange(ymd(now), ymd(now)) },
+          { text: '近 7 天', onClick: () => onChange(ymd(daysAgo(6)), ymd(now)) },
+          { text: '近 30 天', onClick: () => onChange(ymd(daysAgo(29)), ymd(now)) },
+          { text: '本月', onClick: () => onChange(ymd(new Date(now.getFullYear(), now.getMonth(), 1)), ymd(now)) },
+          { text: '清除日期', onClick: () => onChange('', '') },
+        ]}
+      />
+    </span>
+  );
+}
+
+/** 步进数字框：白底 + 1px 浅灰边 + 8px 圆角，和筛选栏的日期框、下拉同一副样子。
+ *  越界（空 / 小数 / 超范围）由调用方判，`invalid` 只负责把边框染红。
+ *  邀请码的「生成数量」与批量提取的「条数 / 起始序号」共用。
+ */
+export function Stepper({ value, onChange, min, max, invalid, disabled, id, placeholder, title, ariaLabel, describedBy }: {
+  value: string;
+  onChange: (v: string) => void;
+  min: number;
+  max: number;
+  invalid?: boolean;
+  disabled?: boolean;
+  id?: string;
+  placeholder?: string;
+  title?: string;
+  ariaLabel?: string;
+  describedBy?: string;
+}) {
+  const n = Number(value);
+  const base = Number.isFinite(n) ? n : min;
+  const step = (d: number) => onChange(String(Math.min(max, Math.max(min, Math.round(base) + d))));
+  return (
+    <div class={invalid ? 'stepper is-bad' : 'stepper'}>
+      <button type="button" class="stepper-btn" aria-label="减少一个"
+              disabled={disabled || base <= min} onClick={() => step(-1)}>−</button>
+      <input
+        id={id}
+        class="stepper-input"
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        step="1"
+        placeholder={placeholder}
+        title={title}
+        aria-label={ariaLabel}
+        aria-invalid={invalid}
+        aria-describedby={invalid ? describedBy : undefined}
+        value={value}
+        onInput={(e) => onChange(e.currentTarget.value)}
+      />
+      <button type="button" class="stepper-btn" aria-label="增加一个"
+              disabled={disabled || base >= max} onClick={() => step(1)}>+</button>
+    </div>
+  );
+}
+

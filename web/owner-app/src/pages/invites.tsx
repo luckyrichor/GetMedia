@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { ownerApi, type InviteItem } from '../api';
-import { DateTimeCell, ErrorBox, Loading, NoAccess, useLoad, useToast } from '../ui';
+import { DateTimeCell, ErrorBox, Loading, NoAccess, Stepper, useLoad, useToast } from '../ui';
 
 const MIN = 1;
 const MAX = 50;
@@ -146,11 +146,6 @@ export function InvitesPage() {
 
   if (me.state.k === 'ok' && me.state.data.tier !== 'admin') return <NoAccess what="邀请码" />;
 
-  function step(delta: number) {
-    const base = Number.isFinite(n) ? n : MIN;
-    setCount(String(Math.min(MAX, Math.max(MIN, base + delta))));
-  }
-
   async function generate() {
     if (bad) return;
     setBusy(true);
@@ -223,27 +218,18 @@ export function InvitesPage() {
 
         <div class="inv-gen">
           <label class="inv-gen-k" for="inv-count">生成数量</label>
-          <div class={bad ? 'stepper is-bad' : 'stepper'}>
-            <button type="button" class="stepper-btn" aria-label="减少一个"
-                    disabled={busy || n <= MIN} onClick={() => step(-1)}>−</button>
-            <input
-              id="inv-count"
-              class="stepper-input"
-              type="number"
-              inputmode="numeric"
-              min={MIN}
-              max={MAX}
-              step="1"
-              placeholder={`1–${MAX}`}
-              title={`${MIN}–${MAX}，默认 1`}
-              aria-invalid={bad}
-              aria-describedby={bad ? 'inv-count-err' : undefined}
-              value={count}
-              onInput={(e) => setCount(e.currentTarget.value)}
-            />
-            <button type="button" class="stepper-btn" aria-label="增加一个"
-                    disabled={busy || n >= MAX} onClick={() => step(1)}>+</button>
-          </div>
+          <Stepper
+            id="inv-count"
+            value={count}
+            onChange={setCount}
+            min={MIN}
+            max={MAX}
+            invalid={bad}
+            disabled={busy}
+            placeholder={`1–${MAX}`}
+            title={`${MIN}–${MAX}，默认 1`}
+            describedBy="inv-count-err"
+          />
           <button type="button" class="btn inv-gen-btn" disabled={busy || bad} onClick={() => void generate()}>
             {busy ? '生成中…' : '＋ 生成邀请码'}
           </button>
