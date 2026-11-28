@@ -364,6 +364,26 @@ async function main() {
   console.log('  拖选 =', JSON.stringify(sel));
   await shot('16-selection');
 
+  // 8.7) 线上真实情况：schema v21 之前的老任务 `title` 是空的（线上 20 条全这样），
+  //      列表第一行显示的就是 input。这时菜单应当是「复制原始链接」而不是「复制标题」。
+  jobs = [job(1, {
+    title: null,
+    input: 'https://www.bilibili.com/video/BV1GJ411x7h7',
+    video_id: 'BV1GJ411x7h7',
+  })];
+  await goto();
+  const noTitleCell = await page.$('.ex-table tbody .e-title');
+  const nb = await noTitleCell.boundingBox();
+  await page.mouse.click(nb.x + 40, nb.y + 14, { button: 'right' });
+  await sleep(250);
+  const noTitleMenu = await page.evaluate(() => ({
+    items: Array.from(document.querySelectorAll('.ctx-menu [role="menuitem"]')).map((b) => b.textContent.trim()),
+    firstLine: document.querySelector('.ex-table tbody .t-main')?.textContent ?? null,
+  }));
+  console.log('  无标题行 =', JSON.stringify(noTitleMenu));
+  await shot('17-ctx-menu-notitle');
+  jobs = JOBS;
+
   // 9) 批量提取页：同样的表头/列宽实测
   await page.goto(base + 'creators', { waitUntil: 'networkidle0' });
   await page.waitForSelector('.cr-table tbody tr[data-job]');

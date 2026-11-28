@@ -337,16 +337,25 @@ export function ExtractPage() {
   /** 状态分段的每段数量：任务是一次全量拉回来的，所以这些数字是准的。 */
   const statusCount = (s: string) => jobs.filter((j) => j.status === s).length;
 
-  /** 右键菜单项：只列这一行**真的有**的内容，避免「复制作品号」复制出一个「—」。 */
+  /** 右键菜单项：只列这一行**真的有**的内容，避免「复制作品号」复制出一个「—」。
+   *
+   *  「复制标题」和「复制原始链接」是**二选一的兜底关系**，不是固定两项：
+   *  schema v21 才给 `extract_jobs` 加 `title`，之前的老任务（以及解析失败的任务）
+   *  这个字段是空的，列表第一行显示的其实是原始输入。这时再给一个「复制标题」
+   *  就等于把同一段文字列两遍——而且用户会以为链接丢了。
+   *  所以：有标题 → 「复制标题」(+ 标题与链接不同时再来一项「复制原始链接」)；
+   *  没标题 → 直接给「复制原始链接」，名字说清楚复制的是什么。 */
   const copyItems: { text: string; value: string; label: string }[] = [];
   if (copyMenu) {
     const j = copyMenu.job;
-    copyItems.push({ text: '复制标题', value: j.title || j.input, label: '标题' });
-    if (j.video_id) copyItems.push({ text: '复制作品号', value: j.video_id, label: '作品号' });
-    if (j.error_detail) copyItems.push({ text: '复制报错信息', value: j.error_detail, label: '报错信息' });
-    if (j.input && j.input !== (j.title || j.input)) {
+    const fullTitle = (j.title ?? '').trim();
+    // 顺序：内容本体（标题 / 链接）→ 作品号 → 报错，第一项永远是「这一条是什么」
+    if (fullTitle) copyItems.push({ text: '复制标题', value: fullTitle, label: '标题' });
+    if (j.input && j.input !== fullTitle) {
       copyItems.push({ text: '复制原始链接', value: j.input, label: '原始链接' });
     }
+    if (j.video_id) copyItems.push({ text: '复制作品号', value: j.video_id, label: '作品号' });
+    if (j.error_detail) copyItems.push({ text: '复制报错信息', value: j.error_detail, label: '报错信息' });
   }
 
   return (

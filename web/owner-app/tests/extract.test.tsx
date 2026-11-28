@@ -435,7 +435,7 @@ describe('单个提取', () => {
 
     await rightClick(document.querySelector('.ex-table tbody .e-title')!);
     // 正常行：标题、作品号、原始链接（input 与 title 不同才有这一项）
-    expect(menuItems()).toEqual(['复制标题', '复制作品号', '复制原始链接']);
+    expect(menuItems()).toEqual(['复制标题', '复制原始链接', '复制作品号']);
 
     await click(Array.from(document.querySelectorAll('.ctx-menu [role="menuitem"]'))[0]!);
     await until(() => writeText.mock.calls.length === 1);
@@ -462,14 +462,39 @@ describe('单个提取', () => {
     await until(() => document.querySelectorAll('.ex-table .t-sub.bad-text').length === 1);
 
     await rightClick(document.querySelector('.ex-table tbody .e-title')!);
-    // 没有作品号，所以没有「复制作品号」；标题回落到 input，与「复制原始链接」重复也去掉
-    expect(menuItems()).toEqual(['复制标题', '复制报错信息']);
+    // 这一行没有标题（title 为 null，schema v21 之前的老任务就是这样），
+    // 所以不给「复制标题」，直接给「复制原始链接」——名字要说清楚复制的是什么。
+    // 没有作品号，也就没有「复制作品号」。
+    expect(menuItems()).toEqual(['复制原始链接', '复制报错信息']);
 
     await click(Array.from(document.querySelectorAll('.ctx-menu [role="menuitem"]'))
       .find((b) => b.textContent === '复制报错信息')!);
     await until(() => writeText.mock.calls.length === 1);
     expect(writeText.mock.calls[0]![0]).toBe(reason);
     expect(text()).toContain('已复制报错信息');
+  });
+
+  test('没有标题的老任务：菜单给「复制原始链接」而不是「复制标题」', async () => {
+    const writeText = stubClipboard();
+    // 线上 20 条任务全都没有 title，列表第一行显示的就是 input —— 这组数据照着真实情况造
+    const input = 'https://www.bilibili.com/video/BV1GJ411x7h7';
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ id: 1, title: null, input, video_id: 'BV1GJ411x7h7', storage: 'archive', bytes: 1024 })] } },
+    }));
+    mount('/extract');
+    await until(() => rowCount() === 1);
+
+    // 列表里第一行仍然显示原始链接（没有标题就显示输入，不留空）
+    expect(titles()).toEqual([input]);
+
+    await rightClick(document.querySelector('.ex-table tbody .e-title')!);
+    expect(menuItems()).toEqual(['复制原始链接', '复制作品号']);
+
+    await click(Array.from(document.querySelectorAll('.ctx-menu [role="menuitem"]'))
+      .find((b) => b.textContent === '复制原始链接')!);
+    await until(() => writeText.mock.calls.length === 1);
+    expect(writeText.mock.calls[0]![0]).toBe(input);
+    expect(text()).toContain('已复制原始链接');
   });
 
   test('已经拖选了文字：右击不弹自定义菜单，交给浏览器原生复制', async () => {
