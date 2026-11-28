@@ -75,6 +75,7 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.ArchiveState
 import com.getmedia.app.data.local.CategoryEntity
 import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.TrackEntity
@@ -1824,6 +1825,34 @@ internal fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () 
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            // 本机导入的文件没能备份 / 云端那份被清理：原因一直只写在 `archive_note` 里，
+            // 任何界面都不显示，用户只能看到"同步过"却不知道换手机时取不回这个文件。
+            // 现在直接把原因说在这一行上（完整清单在「设置 → 曲库同步」）。
+            val archive = ArchiveState.of(track.archiveState)
+            val archiveIssue = archive == ArchiveState.UNABLE || archive == ArchiveState.EVICTED
+            val archiveText = if (archiveIssue) {
+                track.archiveNote?.takeIf { it.isNotBlank() } ?: when (archive) {
+                    ArchiveState.UNABLE -> "没能备份到云端，重试也没用"
+                    ArchiveState.EVICTED -> "云端那份已被清理，手机上的文件还在"
+                    else -> null
+                }
+            } else {
+                null
+            }
+            if (archiveText != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "未备份 · $archiveText",
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.error.copy(alpha = 0.10f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Spacer(Modifier.height(3.dp))

@@ -407,10 +407,20 @@ object LibrarySyncRunner {
                     // 那些 `serverId` 指向已被硬删（无墓碑）的行，并把它们脱钩重新排队。
                     val backfillBinding = !prefs.bindingBackfillDone(acc)
                     val reconcile = !prefs.cloudReconcileDone(acc)
+                    // 升级后全量对账一次：增量水位不会重发"本机已经记错但版本号已写进 serverSeq"
+                    // 的行，只有全量拉才能让合并规则的变化作用到存量数据上（见 fullResyncVersion）。
+                    val fullResync = prefs.fullResyncVersion(acc) < BuildConfig.VERSION_CODE
                     val pulled = LibrarySyncEngine(db, LibrarySyncApi(token = token))
-                        .pull(acc, full = backfillBinding || reconcile)
+                        .pull(acc, full = backfillBinding || reconcile || fullResync)
                     if (backfillBinding) prefs.markBindingBackfillDone(acc)
                     if (reconcile) prefs.markCloudReconcileDone(acc)
+                    if (fullResync) {
+                        // 全量拉之后再做一次存量对齐：有些行的 `confirmedTitle` 早就换成了
+                        // 服务器的新名字，`title` 却还停在旧名（0.1.44 及以前的合并规则留下的）。
+                        // 这种行版本号已经追上，增量拉取再也不会送它，只能就地改。
+                        alignTitles(db, acc)
+                        prefs.markFullResyncVersion(acc, BuildConfig.VERSION_CODE)
+                    }
                     if (pulled.bound > 0) note(db, acc, "${pulled.bound} 项本机条目已与云端对应条目关联")
                     if (pulled.detached > 0) {
                         note(db, acc, "${pulled.detached} 项云端已不存在，已重新排入「上传本机新增」")
@@ -559,6 +569,39 @@ object LibrarySyncRunner {
         prefs.markArchiveRetryVersion(account, BuildConfig.VERSION_CODE)
     }
 
+    /**
+     * 存量标题对齐：`confirmedTitle` 已经是服务器确认过的名字，`title` 却还停在旧名。
+     *
+     * 为什么光靠"合并规则改对了"不够：0.1.44 及以前的 `mergeServer` 在"本机改名优先"分支里
+     * 会**同时**写下 `confirmedTitle = 服务器标题` 和 `serverSeq = 服务器版本号`，只有 `title`
+     * 被留下。于是这一行的版本号已经追上服务器，增量拉取再也不会送它，全量拉的合并也因为
+     * "版本没前进、标题也没漂移（confirmedTitle 早就对了）"而跳过——两边都够不着。
+     *
+     * 判据三条一起看，缺一不可：
+     * - 没有待推送草稿（有草稿的行由 [LibraryTitlePush] 收尾，这里一个字都不能动）；
+     * - `localTitleOverride` 有值（本机曾经改过名，才可能出现这种分叉）；
+     * - `confirmedTitle` 与 `title` 不一致（服务器确认的名字和显示的名字不是同一个）。
+     *
+     * 新规则下本机改名必须走草稿队列，所以"有 override、没草稿、名字还对不上"只剩历史遗留
+     * 一种解释——按服务器已确认的那个名字对齐，并把 override 清掉。幂等，没有命中就不开事务。
+     */
+    internal suspend fun alignTitles(db: AppDatabase, account: String) {
+        val drifted = db.trackDao().allNow().filter {
+            it.accountKey == account &&
+                it.pendingTitle == null &&
+                it.localTitleOverride != null &&
+                it.confirmedTitle != null && it.confirmedTitle != it.title
+        }
+        if (drifted.isEmpty()) return
+        db.withTransaction {
+            drifted.forEach { row ->
+                db.trackDao().updateExisting(
+                    row.copy(title = row.confirmedTitle ?: row.title, localTitleOverride = null),
+                )
+            }
+        }
+    }
+
     private suspend fun uploadNow(context: Context, session: SessionStore.Session, manual: Boolean) {
         val prefs = LibrarySyncPrefs(context)
         val token = syncToken(session, prefs, manual)
@@ -617,7 +660,7 @@ object LibrarySyncRunner {
         }
         when {
             summary.stopped != null -> note(db, account, "本机文件备份已暂停（${summary.stopReason}）")
-            summary.unable > 0 -> note(db, account, "${summary.unable} 项本机文件无法备份到云端，可到条目详情看原因")
+            summary.unable > 0 -> note(db, account, "${summary.unable} 项本机文件没能备份到云端，原因见下方「本机文件备份」")
             summary.uploaded > 0 -> note(db, account, "${summary.uploaded} 项本机文件已备份到云端")
             summary.evicted > 0 -> note(db, account, "${summary.evicted} 项云端备份已被清理，手机上的文件还在")
         }

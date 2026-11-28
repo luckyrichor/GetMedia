@@ -278,8 +278,17 @@ class LibrarySyncEngine(
                     // 已有的绑定行：只更新服务器权威字段，绝不碰收藏/类别/排序/文件。
                     // 除了版本前进，**存储类型变了也要写**：归档行可能版本没动（例如恢复匹配时
                     // 才第一次看到 storage），只比 updated_seq 会让本机永远不知道它是 archive。
+                    //
+                    // 第三种要写的理由：**服务器标题和我们记的基准不一样**。别的设备改了名，
+                    // 服务端只会把这一行的 `updated_seq` 往前推；但本机可能早就把那个新版本号
+                    // 写进了 `serverSeq` 却没接住标题（0.1.44 及以前 `mergeServer` 的"本机改名
+                    // 优先"分支就是这么把标题丢掉的），此后版本号再也比不过，这条就永远停在
+                    // 旧名字上。标题漂移本身也得算一次"服务器动过"。
                     val storage = item.storage.ifBlank { existing.serverStorage }
-                    if (item.updatedSeq > existing.serverSeq.orZero() || storage != existing.serverStorage) {
+                    val titleMoved = existing.confirmedTitle != null && item.title != existing.confirmedTitle
+                    if (item.updatedSeq > existing.serverSeq.orZero() ||
+                        storage != existing.serverStorage || titleMoved
+                    ) {
                         db.trackDao().updateExisting(mergeServer(existing, item, now))
                     }
                     skipped++
@@ -375,23 +384,39 @@ class LibrarySyncEngine(
      *    [LibraryTitlePush] 收尾——它先 `GET` 核对，只有版本冲突（含 412）时才采用服务器标题
      *    并计入 `conflicts`，由调用方给出"已改用云端标题"的明确提示。
      *    以前这里"服务器版本比基线新就清草稿"的做法会让用户改完名、还没推送就被悄悄抹掉。
-     * 2. **阶段 4 留下的本机改名**（`localTitleOverride` 有值、没有草稿）：保留本机标题，
-     *    只把服务器的实际标题记到 `confirmedTitle`，作为以后冲突判断的基准。
-     * 3. 其余情况：服务器为准。
+     * 2. **本机改名（`localTitleOverride`）且服务器这一行没动过**：保留本机标题，只把服务器
+     *    的实际标题记到 `confirmedTitle`。
+     * 3. 其余情况：**服务器为准**，并把 `localTitleOverride` 一起清掉。
+     *
+     * 规则 2 为什么要带上"服务器没动过"这个前提：`localTitleOverride` 是"本机最终标题"，
+     * 一旦写进去就不会自己消失，而它以前被当成**永久的**"本机改名优先"。结果是只要一台
+     * 设备上曾经改过名（哪怕是在还没绑定云端、根本推不上去的时候改的），这一行从此就再也
+     * 收不到别的设备改的名字——0.1.44 真机故障：手机 B 把《出山》改成《出山3》，服务端
+     * `updated_seq` 已经前进，手机 A 拉到了却仍然显示《出山》，而且因为 `serverSeq` 已被
+     * 写成新版本，之后连"版本前进"都不会再触发，永久卡死。
+     *
+     * 现在只有"服务器这一行确实没变"时才保留本机改名；服务器一变就按服务器来。用户想要
+     * 保留的本机改名必须走草稿队列（[LibraryLocalEdits.markTitleEdited]），由
+     * [LibraryTitlePush] 推上去，而不是靠一个永远不失效的本机标记。
      */
     private suspend fun mergeServer(existing: TrackEntity, item: CloudTrack, now: Long): TrackEntity {
         var state = existing.syncState
         var title = existing.title
         var confirmed = existing.confirmedTitle
         var override = existing.localTitleOverride
+        // 服务器这一行是不是真的变过：版本前进，或标题与我们记的基准不一致（见 applyPage）。
+        val serverMoved = item.updatedSeq > existing.serverSeq.orZero() ||
+            (existing.confirmedTitle != null && item.title != existing.confirmedTitle)
         if (existing.pendingTitle != null) {
             // 规则 1：草稿受保护，连 title/confirmed 都不动
-        } else if (override != null) {
-            // 规则 2：本机改名优先，服务器标题只作基准
+        } else if (override != null && !serverMoved) {
+            // 规则 2：服务器没动过，本机改名保留，服务器标题只作基准
             confirmed = item.title
         } else {
+            // 规则 3：服务器为准。`override` 必须一起清掉——留着它，下一次合并又会走回规则 2
             title = item.title
             confirmed = item.title
+            override = null
             state = SyncState.SYNCED.name
         }
         // 收藏与类别：本机有未推送的改动就保留本地（下一轮推上去），否则以云端为准。

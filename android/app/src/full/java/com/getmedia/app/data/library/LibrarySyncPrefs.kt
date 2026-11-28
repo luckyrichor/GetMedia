@@ -76,6 +76,24 @@ class LibrarySyncPrefs(context: Context) {
         prefs.edit().putInt("$account.archive-retry-version", versionCode).apply()
     }
 
+    /**
+     * 上一次"升级后强制全量对账"是在哪个 versionCode 做的。
+     *
+     * 增量拉取只送 `updated_seq` 比水位大的行，所以**本机已经记下的错误状态永远等不到重发**。
+     * 0.1.44 的真机故障就是这样：手机 A 拉到了《出山3》却把标题丢了（`mergeServer` 的
+     * "本机改名优先"分支），同时把新版本号写进了 `serverSeq`——此后版本号再也比不过，
+     * 增量拉取永远不会再送这一行，光改合并规则救不回来。
+     *
+     * 每次升级后全量拉一遍（幂等，2000 条也就 10 次请求），让合并规则的变化能作用到存量行上。
+     * 判据用 versionCode 而不是布尔，理由同 [archiveRetryVersion]。
+     */
+    fun fullResyncVersion(account: String): Int =
+        prefs.getInt("$account.full-resync-version", 0)
+
+    fun markFullResyncVersion(account: String, versionCode: Int) {
+        prefs.edit().putInt("$account.full-resync-version", versionCode).apply()
+    }
+
     fun requiresManualUpload(account: String, id: Long): Boolean =
         prefs.getBoolean("$account.restored.$id.manual", false)
 

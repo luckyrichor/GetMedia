@@ -558,22 +558,62 @@ class LibrarySyncEngineTest {
         assertEquals(LibraryMark.PENDING_UP, row.syncState)
     }
 
-    @Test fun stage4LocalRenameSurvivesPull() = runBlocking {
+    @Test fun localRenameSurvivesPullWhenServerRowDidNotChange() = runBlocking {
         val id = LocalIds.localId("bilibili", "BV1", 1)
         db.trackDao().upsertAll(listOf(
             cloudRow(id, deletedMirror = false).copy(
                 title = "我以前改的名字", localTitleOverride = "我以前改的名字",
-                confirmedTitle = "服务器原名", serverSeq = 1,
+                confirmedTitle = "服务器原名", serverSeq = 1, serverStorage = null,
             ),
         ))
-        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 2, title = "服务器新名")), hasMore = false)))
+        // 版本没动、标题也没动，只是本机缺 storage：这次合并不能顺手把本机改名抹掉
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 1, title = "服务器原名")), hasMore = false)))
         e.pull(account)
 
         val row = rows().single()
-        assertEquals("本机改名不能被顺手抹掉", "我以前改的名字", row.title)
+        assertEquals("服务器这一行没变，本机改名保留", "我以前改的名字", row.title)
         assertEquals("我以前改的名字", row.localTitleOverride)
-        assertEquals("服务器标题只作基准", "服务器新名", row.confirmedTitle)
-        assertEquals(2L, row.serverSeq)
+        assertEquals("服务器原名", row.confirmedTitle)
+        assertEquals("metadata", row.serverStorage)
+    }
+
+    @Test fun serverRenameWinsOverStaleLocalOverride() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(
+                title = "出山", localTitleOverride = "出山", confirmedTitle = "出山", serverSeq = 1,
+            ),
+        ))
+        // 别的设备把这条改名了：服务器版本前进
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 5, title = "出山3")), hasMore = false)))
+        e.pull(account)
+
+        val row = rows().single()
+        assertEquals("服务器改过名就以服务器为准", "出山3", row.title)
+        assertEquals("出山3", row.confirmedTitle)
+        assertNull("遗留的本机改名必须清掉，否则下一次合并又会挡住服务器标题", row.localTitleOverride)
+        assertEquals(5L, row.serverSeq)
+    }
+
+    /**
+     * 0.1.44 真机故障的复现：手机 A 拉到过《出山3》，却被"本机改名优先"分支挡掉标题，
+     * 同时把新版本号写进了 `serverSeq`。此后版本号再也比不过，增量拉取连这一行都不会再送，
+     * 光靠"版本前进才合并"救不回来——必须让标题漂移本身也算一次"服务器动过"。
+     */
+    @Test fun serverRenameIsAdoptedEvenWhenSeqAlreadyCaughtUp() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV1", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(
+                title = "出山", localTitleOverride = "出山", confirmedTitle = "出山",
+                serverSeq = 9, serverStorage = "metadata",
+            ),
+        ))
+        val (e, _) = engine(listOf(page(listOf(cloud(1, videoId = "BV1", seq = 9, title = "出山3")), hasMore = false)))
+        e.pull(account)
+
+        val row = rows().single()
+        assertEquals("版本号已经追上也不能挡住服务器标题", "出山3", row.title)
+        assertNull(row.localTitleOverride)
     }
 
     @Test fun storageIsWrittenEvenWhenSeqDidNotMove() = runBlocking {
@@ -615,6 +655,49 @@ class LibrarySyncEngineTest {
         val result = e.pull(account)
         assertEquals("删除还没重放成功，不能把同键行建回来", 0, result.added)
         assertTrue(rows().isEmpty())
+    }
+
+    // ---------- 存量标题对齐（0.1.45 修复） ----------
+
+    /**
+     * `confirmedTitle` 早就是服务器的新名字，`title` 却还停在旧名。
+     *
+     * 这种行是 0.1.44 及以前的合并规则留下的：它把服务器标题记进 `confirmedTitle`、把版本号
+     * 记进 `serverSeq`，只把 `title` 留下。版本号追上之后增量拉取不再送它，全量拉的合并也
+     * 因为"版本没前进、标题也没漂移"而跳过——只能就地改。
+     */
+    @Test fun staleLocalRenameIsAlignedToConfirmedTitle() = runBlocking {
+        val id = LocalIds.localId("douyin", "7664543280277590195", 1)
+        val stale = cloudRow(id, deletedMirror = false).copy(
+            title = "出山", localTitleOverride = "出山", confirmedTitle = "出山3",
+            serverSeq = 9, serverStorage = "metadata",
+        )
+        db.trackDao().upsertAll(listOf(stale))
+
+        LibrarySyncRunner.alignTitles(db, account)
+
+        val row = rows().single()
+        assertEquals("服务器确认过的名字要落到显示标题上", "出山3", row.title)
+        assertNull("遗留的本机改名清掉，否则下一次合并又会挡住服务器标题", row.localTitleOverride)
+        assertEquals("出山3", row.confirmedTitle)
+        assertEquals("版本号不该被这一步动", 9L, row.serverSeq)
+    }
+
+    @Test fun pendingDraftIsNeverAligned() = runBlocking {
+        val id = LocalIds.localId("douyin", "1", 1)
+        db.trackDao().upsertAll(listOf(
+            cloudRow(id, deletedMirror = false).copy(
+                title = "我的草稿", localTitleOverride = "我的草稿", confirmedTitle = "服务器旧名",
+                pendingTitle = "我的草稿", pendingTitleBaseSeq = 3, pendingTitleGen = 1,
+                serverSeq = 3, syncState = LibraryMark.PENDING_UP,
+            ),
+        ))
+
+        LibrarySyncRunner.alignTitles(db, account)
+
+        val row = rows().single()
+        assertEquals("有草稿的行归 LibraryTitlePush 收尾，这里一个字都不能动", "我的草稿", row.title)
+        assertEquals("我的草稿", row.localTitleOverride)
     }
 
     private fun cloudRow(id: Long, deletedMirror: Boolean) = TrackEntity(

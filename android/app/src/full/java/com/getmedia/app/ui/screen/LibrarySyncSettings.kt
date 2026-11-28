@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.cloud.cloudSync
@@ -33,6 +34,7 @@ import com.getmedia.app.data.library.LibraryUploader
 import com.getmedia.app.data.library.RestoreMatchIssue
 import com.getmedia.app.data.library.needsRestoreMatch
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.ArchiveState
 import com.getmedia.app.data.repo.ErrorText
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.ui.components.RowDivider
@@ -71,6 +73,7 @@ internal fun LibrarySyncSettings() {
     var waiting by remember(account) { mutableStateOf(0) }
     var summary by remember(account) { mutableStateOf<String?>(null) }
     var hasRestored by remember(account) { mutableStateOf(false) }
+    var archiveIssues by remember(account) { mutableStateOf<List<ArchiveIssue>>(emptyList()) }
     var confirmLegacy by remember(session?.token) { mutableStateOf(false) }
     var includeLegacy by remember(session?.token) { mutableStateOf(false) }
     val restoreStatus by LibrarySyncRunner.restoreStatus.collectAsState()
@@ -81,6 +84,23 @@ internal fun LibrarySyncSettings() {
             count = withContext(Dispatchers.IO) { rows.count(uploader::eligible) }
             drafts = rows.count { it.accountKey == account && it.pendingTitle != null }
             hasRestored = rows.any { it.needsRestoreMatch() && (it.accountKey == null || it.accountKey == account) }
+            // 备份失败 / 云端备份被清理的条目：原因以前只写进 `tracks.archive_note`，界面上
+            // 一个字都没有，用户看到的是"同步好了"却不知道换机取不回这个文件。
+            archiveIssues = rows.asSequence()
+                .filter { it.accountKey == account }
+                .mapNotNull { row ->
+                    val state = ArchiveState.of(row.archiveState)
+                    if (state != ArchiveState.UNABLE && state != ArchiveState.EVICTED) return@mapNotNull null
+                    ArchiveIssue(
+                        title = row.localTitleOverride ?: row.title,
+                        note = row.archiveNote?.takeIf { it.isNotBlank() } ?: when (state) {
+                            ArchiveState.UNABLE -> "没能备份到云端，重试也没用"
+                            ArchiveState.EVICTED -> "云端那份已被清理，手机上的文件还在"
+                            else -> ""
+                        },
+                    )
+                }
+                .toList()
         }
     }
     // 排队中的云端删除：开关关着时用户最需要看到它，所以单独观察、不依赖同步轮次
@@ -108,6 +128,7 @@ internal fun LibrarySyncSettings() {
         },
         onRequest = { LibrarySyncRunner.requestUpload(account, count) },
     )
+    if (archiveIssues.isNotEmpty()) ArchiveIssueSection(archiveIssues)
 
     val status = restoreStatus?.takeIf { it.account == account && LibrarySyncGate.maySync(session) }
     val scope = rememberCoroutineScope()
@@ -265,4 +286,42 @@ private fun SyncStatusLine(text: String) {
         color = com.getmedia.app.ui.components.uiMuted(),
         modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
     )
+}
+
+/** 「本机文件备份」区块的一行：哪个条目、为什么没备份上。 */
+internal data class ArchiveIssue(val title: String, val note: String)
+
+/**
+ * 备份失败的清单。
+ *
+ * 为什么要有这一块：`platform = local` 的条目没有原始链接，云端归档是换机后唯一的取回途径。
+ * 备份失败时以前只往 `tracks.archive_note` 写一句话、往同步摘要里加一句"可到条目详情看原因"，
+ * 而条目详情根本没有这一项——用户看到的是"同步过"，实际换手机就取不回来了。
+ *
+ * 只列 `UNABLE` / `EVICTED` 两种终态：`PENDING` 还在自己重试，`DONE` 不用管，
+ * 把它们也列出来只会让人以为出了问题。
+ */
+@Composable
+internal fun ArchiveIssueSection(issues: List<ArchiveIssue>) {
+    SectionTitle("本机文件备份")
+    SectionCard {
+        issues.forEachIndexed { index, issue ->
+            if (index > 0) RowDivider(startIndent = 14.dp)
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Text(issue.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(
+                    issue.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = com.getmedia.app.ui.components.uiMuted(),
+                )
+            }
+        }
+        RowDivider(startIndent = 14.dp)
+        Text(
+            "这些文件目前只在当前手机上，换机或重装后取不回来。",
+            style = MaterialTheme.typography.bodySmall,
+            color = com.getmedia.app.ui.components.uiMuted(),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        )
+    }
 }
