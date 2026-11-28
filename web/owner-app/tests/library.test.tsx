@@ -157,6 +157,19 @@ describe('媒体库', () => {
     expect(text()).toContain('缓存');
   });
 
+  test('上传提示：单个上限写「1 GB」，不写「1.0 GB」', async () => {
+    // 上限是 1 GiB 这种整数，带个 ".0" 读起来别扭；列表里的实际体积仍保留一位小数，
+    // 所以这里只是门槛文案单独去掉，不是改 fmtBytes。
+    server(ownerRoutes({
+      [LIST]: { json: { items: [track(1)], count: 1 } },
+    }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+
+    expect(text()).toContain('单个不超过 1 GB');
+    expect(text()).not.toContain('1.0 GB');
+  });
+
   test('筛选与排序：搜索、平台、时间范围、时长排序都在本地算，不打接口', async () => {
     server(ownerRoutes({
       [LIST]: {

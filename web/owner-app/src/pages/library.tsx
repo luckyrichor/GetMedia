@@ -80,6 +80,10 @@ const PLATFORMS = [
 const UP_LIMIT = 1024 * 1024 ** 2;
 /** 文件本身要比请求体上限小一点：multipart 还有边界与表单头（几百字节）。 */
 const FILE_LIMIT = UP_LIMIT - 1024 * 1024;
+/** 「单个不超过 X」里的 X：整数不带小数位，1 GiB 写「1 GB」而不是「1.0 GB」。
+ *  只在这个门槛文案上用；列表里的实际体积仍走 `fmtBytes`（保留一位小数，
+ *  这样 1.2 GB 和 1.8 GB 才分得开）。 */
+const limitText = (n: number): string => fmtBytes(n).replace(/\.0 /, ' ');
 /** 浏览器给的 MIME 有时是空的（尤其 mkv/flv），退回看扩展名。 */
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|flv|wmv|ts|mpg|mpeg)$/i;
 
@@ -182,7 +186,7 @@ export function LibraryPage() {
       const f = list[i]!;
       setUp({ i: i + 1, n: list.length, name: f.name });
       if (f.size > FILE_LIMIT) {
-        failed.push(`${f.name}：${fmtBytes(f.size)}，超过单个 ${fmtBytes(UP_LIMIT)} 的上限`);
+        failed.push(`${f.name}：${fmtBytes(f.size)}，超过单个 ${limitText(UP_LIMIT)} 的上限`);
         continue;
       }
       try {
@@ -446,7 +450,7 @@ export function LibraryPage() {
           }}
         />
         <span class="small muted">
-          可多选；单个不超过 {fmtBytes(UP_LIMIT)}。原件存进服务器「存储」，计入账号配额。
+          可多选；单个不超过 {limitText(UP_LIMIT)}。原件存进服务器「存储」，计入账号配额。
           <strong>双击标题可改名。</strong>
         </span>
       </div>

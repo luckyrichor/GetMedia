@@ -76,7 +76,7 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 | 服务端 | release `20261128-2`，SQLite schema **21**，运行中 |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**；`LibrarySyncGate.MIN_PRIVACY_FOR_SYNC = 5` |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
-| 测试基线 | Android **full 691 / free 411**（全 0 failed）、网页 vitest **259**、pytest **544 passed / 50 skipped** |
+| 测试基线 | Android **full 692 / free 411**（全 0 failed）、网页 vitest **259**、pytest **544 passed / 50 skipped** |
 
 ### 0.1.48 这一版做了什么
 
@@ -143,7 +143,7 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 1. **真机验收 0.1.48 已过（2026-11-28）**：删本机导入条目 → 云端行 `deleted=1` / `storage='metadata'` /
    `media_path=NULL` / `bytes=0`，媒体目录 mtime 与该行 `updated_at` 同秒、盘上文件确实消失、另一台手机同步后看不到；
-   「管理云端备份」显示「5 个」。**只剩「网页端真传一个 >200 MB 的文件」没跑过全程**（文案已是 1.0 GB）。
+   「管理云端备份」显示「5 个」。**只剩「网页端真传一个 >200 MB 的文件」没跑过全程**（文案已是 1 GB）。
 2. **还没验的零碎**：断网导入时进度停住 → 消失 → 行内「未备份 · …」红字、恢复网络后自动重试。
    批量「下载缺的 N 项」中途取消**已验通过**。
    注意：改了 `web/owner-app` 的源码必须重新 `npm run build:owner` 并 rsync 部署——0.1.48 就漏过一次，
@@ -170,7 +170,7 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 - 2026-11-28：**0.1.48 / vc 49 已发布**（tag `v0.1.48`，GitHub Release 只挂免费版，两台手机已装）。
   本版修掉「手机上删本机导入的条目、云端那份没删」（`localIdentity` 补上 `local` 行的队列身份）、
-  量词统一用「个」、网页端上传上限 200 MiB → 1 GB、413 改成说人话。基线 full 691 / free 411 / vitest 259。
+  量词统一用「个」、网页端上传上限 200 MiB → 1 GB、413 改成说人话。基线 full 692 / free 411 / vitest 260（发版时是 691 / 259，之后补了「墓碑删本机文件」与「上限文案写 1 GB」两个用例）。
   本文件重写「当前进度」「已知限制」两节（原内容停在 0.1.11 / 2026-11-01，已过期），
   并订正「owner 是等级」的旧说法——等级是 free/full/admin，owner 只是通道名。
 

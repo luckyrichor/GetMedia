@@ -12,7 +12,7 @@
 | Android | `free` / `full` **0.1.48 / versionCode 49**（tag `v0.1.48`），两台手机已装 |
 | 服务端 | release `20261128-2`，schema **21**，无待部署改动 |
 | 线上协议 | 隐私 **v5**、用户协议 **v2** |
-| 测试基线 | Android full **691** / free **411**（0 failed）、vitest **259**、pytest **544 passed / 50 skipped** |
+| 测试基线 | Android full **692** / free **411**（0 failed）、vitest **259**、pytest **544 passed / 50 skipped** |
 
 0.1.48 修的是「手机上删掉本机导入的条目、云端那份没删」——`LibraryLocalEdits.canQueueCloudDelete`
 最后一句是 `restoredKey() != null`，而 `restoredIdentity` 对 `local` 平台返回 null，于是本机导入的条目

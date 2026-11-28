@@ -57,7 +57,7 @@ python3 tools/scan_forbidden.py legacy server android web
 python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free web/public-app web/shared
 
 # Android（构建慢，务必后台跑并用日志文件接退出码）
-# 基线：testFullDebugUnitTest 691 / testFreeDebugUnitTest 411，全 0 failed
+# 基线：testFullDebugUnitTest 692 / testFreeDebugUnitTest 411，全 0 failed
 sh android/gradlew -p android testFullDebugUnitTest testFreeDebugUnitTest assembleFullRelease --console=plain > /tmp/build.log 2>&1; echo exit=$?
 ```
 
@@ -172,10 +172,10 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 | # | 事项 | 状态 / 判据 |
 |---|---|---|
-| 1 | 真机验收 0.1.48 | **①②③ 都已验过，另有四项零碎未验（见下）**。<br>**①删本机导入条目连带删云端——已验（2026-11-28）**：手机删掉 `tracks.id=80`（`platform=local`、视频、标题《老友记 第五季 第14集》完整版免费在线观看）后，另一台手机同步过去确实看不到了；服务端该行 `deleted=1`、`storage='metadata'`、`media_path=NULL`、`bytes=0`、`sha256=NULL`、`updated_seq=20`；**盘上文件真的删了**——`/var/lib/getmedia/media/` 的 mtime 是 `11:28:52.368`，与该行 `updated_at`（`11:28:52`）是同一秒，目录里只剩 `79-6f7b5cc0….mp4`（另一条 `local` 视频，162,446,384 B，未受影响）。`_unlink` 只在 `media_path` 非空时执行，所以 mtime 变化本身就是「原本有文件」的证据。<br>**②「我的 → 管理云端备份」显示「5 个」——已验**（用户 2026-11-28 确认）。<br>**③网页端上限——已验但发现漏部署**：改完代码没重新构建 `web/owner-app`，线上还是 06:13 的旧产物，页面仍写「单个不超过 200MB」。已重新 `npm run build:owner` → 备份 `_owner-bak-2026-11-28-1132` → rsync `--delete` → `chown www-data`，产物 `index-C_BuvK91.js`（md5 `2d04d974…`）三份文件双端一致。现在文案是「可多选；单个不超过 1.0 GB。原件存进服务器「存储」，计入账号配额。」<br>**还没验**：网页端真传一个 >200 MB 的文件走通全程（文案已对，实际传没传过）。<br>0.1.47 遗留：批量「下载缺的 N 项」中途取消 **已验通过**；断网导入时进度停住 → 消失 → 行内「未备份 · …」红字、恢复网络后自动重试 **仍未验**。<br>0.1.47 已验（手机 `17ead82e`）：上传进度看得见（「正在上传 8% · 7.9 MB / 96.1 MB」匀速到 100% 后消失，服务器 `storage=archive` / `bytes` 一致）、下载可取消并从 19% 续传。 |
+| 1 | 真机验收 0.1.48 | **①②③ 都已验过，另有四项零碎未验（见下）**。<br>**①删本机导入条目连带删云端——已验（2026-11-28）**：手机删掉 `tracks.id=80`（`platform=local`、视频、标题《老友记 第五季 第14集》完整版免费在线观看）后，另一台手机同步过去确实看不到了；服务端该行 `deleted=1`、`storage='metadata'`、`media_path=NULL`、`bytes=0`、`sha256=NULL`、`updated_seq=20`；**盘上文件真的删了**——`/var/lib/getmedia/media/` 的 mtime 是 `11:28:52.368`，与该行 `updated_at`（`11:28:52`）是同一秒，目录里只剩 `79-6f7b5cc0….mp4`（另一条 `local` 视频，162,446,384 B，未受影响）。`_unlink` 只在 `media_path` 非空时执行，所以 mtime 变化本身就是「原本有文件」的证据。<br>**另一台手机不是「只藏起来」**：`LibrarySyncEngine.applyPage` 对 `local` 行收到墓碑时走的是`db.trackDao().delete(row.id)` + 把 `localPath` 收进 `orphanFiles`，再由 `pull()` 在**事务外**`java.io.File(it).delete()`（事务回滚时文件不该已经没了）。所以 App 自己那份副本真删，**用户导入时选的那个原文件不动**（App 从来没引用过它，只复制一份进 `filesDir/audio|video`）。用例 `tombstoneForLocalRowDeletesTheRowAndItsCopy` 钉住这一点（真建临时文件，断言 pull 完文件不存在）。唯一漏网：删除包在 `runCatching` 里，删不掉（文件被占用等）只留个孤儿文件，不报错。<br>**②「我的 → 管理云端备份」显示「5 个」——已验**（用户 2026-11-28 确认）。<br>**③网页端上限——已验但发现漏部署**：改完代码没重新构建 `web/owner-app`，线上还是 06:13 的旧产物，页面仍写「单个不超过 200MB」。已重新 `npm run build:owner` → 备份 `_owner-bak-2026-11-28-1132` → rsync `--delete` → `chown www-data`，产物 `index-C_BuvK91.js`（md5 `2d04d974…`）三份文件双端一致。现在文案是「可多选；单个不超过 1 GB。原件存进服务器「存储」，计入账号配额。」（门槛文案单独去掉 `.0`，见 `limitText()`；列表里的实际体积仍用 `fmtBytes` 保留一位小数）<br>**还没验**：网页端真传一个 >200 MB 的文件走通全程（文案已对，实际传没传过）。<br>0.1.47 遗留：批量「下载缺的 N 项」中途取消 **已验通过**；断网导入时进度停住 → 消失 → 行内「未备份 · …」红字、恢复网络后自动重试 **仍未验**。<br>0.1.47 已验（手机 `17ead82e`）：上传进度看得见（「正在上传 8% · 7.9 MB / 96.1 MB」匀速到 100% 后消失，服务器 `storage=archive` / `bytes` 一致）、下载可取消并从 19% 续传。 |
 | 2 | 管理台「权限管理」「邀请码」两页的真实浏览器验收 | 只做过构建 + vitest（数据层桩），没在真账号上点过。要验：改等级是否踢下线、待注销行的截止时间、邀请码明文只出现一次、**「改有效期」设完 /account/me 是否立刻反映新时间且设备没被踢**。 |
 | 3 | 邀请码发放流程 | 只能由 admin 在 `/invites` 生成，1 天有效、一码一人。生成后关掉面板就没了，必须当场「下载 .txt」。 |
-| 4 | 网页端「上传本地文件」 | 已做（媒体库页顶部），串行上传并汇总失败项。**上限 0.1.48 起从 200 MiB 放到 1 GB**（`UP_LIMIT` / `FILE_LIMIT`，跟着 nginx `client_max_body_size 1024m` 走），页面文案由 `fmtBytes(UP_LIMIT)` 生成，所以是「1.0 GB」。**改前端记得重新构建并部署**——0.1.48 第一次只改了源码没部署，线上仍旧文案（已补部署，见第 1 条）。真要再往上提，必须同时扩 `archive_quota_bytes`（现 5 GiB），只改 nginx 会把 413 换成 `quota_exceeded` 409。 |
+| 4 | 网页端「上传本地文件」 | 已做（媒体库页顶部），串行上传并汇总失败项。**上限 0.1.48 起从 200 MiB 放到 1 GB**（`UP_LIMIT` / `FILE_LIMIT`，跟着 nginx `client_max_body_size 1024m` 走），页面文案由 `limitText(UP_LIMIT)` 生成，所以是「1 GB」（整数不带小数位）。**改前端记得重新构建并部署**——0.1.48 第一次只改了源码没部署，线上仍旧文案（已补部署，见第 1 条）。真要再往上提，必须同时扩 `archive_quota_bytes`（现 5 GiB），只改 nginx 会把 413 换成 `quota_exceeded` 409。 |
 | 5 | ~~手机上删掉「本机导入」的条目，云端那份没删~~ | **0.1.48 已修**。根因：`LibraryLocalEdits.canQueueCloudDelete` 最后一句是 `restoredKey() != null`，而 `restoredIdentity` 只解析 bilibili/douyin、`local` 落到 `else -> null`，本机导入的条目一条都进不了删除队列。修法是新增 `localIdentity()`（`videoId` 非空 + 类型可认 → `RestoredIdentity("local", videoId, 1, kind)`），`identityOf = restoredKey() ?: localIdentity()`；**不按 `loc_` 前缀筛**（0.1.36 之前的老行 `videoId` 是标题算的），也**不改 `restoredIdentity`**（`RestoredMatcher` 与 `ServerExtractClient` 也在用）。服务端不用改：`delete_for_sync` 对 `local` 行会 `_unlink` 文件并把 `media_path/bytes/sha256/storage` 清回 metadata，重放幂等。 |
 
 > 2026-11-27 之前的四项待办（上传入口、Cookie 路径、B 站短链 `b23.tv`/`?p=N`、运维页「只记清单」→「元数据」）
@@ -213,7 +213,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 接手后第一次动手前：
 
-- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 259 / pytest 544 passed、50 skipped；Android full 691 / free 411）。
+- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 259 / pytest 544 passed、50 skipped；Android full 692 / free 411）。
 - [ ] `git status` 干净、`git log -1` 对得上 §0。
 - [ ] 确认这次改动属于 §4 的哪一类，**按对应流程走完整套**，不要只改代码不部署。
 - [ ] 改完在 `docs/STATUS.local.md` 顶部补一节（起因/改动/部署/验证），并提交。

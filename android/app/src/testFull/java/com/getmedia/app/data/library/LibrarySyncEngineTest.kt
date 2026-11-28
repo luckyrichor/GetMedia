@@ -471,6 +471,43 @@ class LibrarySyncEngineTest {
         assertEquals("/files/-1.audio", rows().single().localPath)
     }
 
+    /** 本机导入（`local`）的行收到墓碑：记录与**我们那份副本**都要真删。
+     *
+     *  平台条目有原链接、能重新取回，所以只记待确认（见 [tombstoneDoesNotRemoveLocalRow]）；
+     *  `local` 行没链接、删了就是删了，留着文件只会变成「看不见、删不掉、还占空间」的孤儿。
+     *  删文件放在事务外（`applyPage` 只把路径带回来，`pull` 落完库才删），所以这里要真有一个文件，
+     *  否则测不出「只是从列表里消失」和「盘上也没了」的区别。 */
+    @Test fun tombstoneForLocalRowDeletesTheRowAndItsCopy() = runBlocking {
+        val dir = java.io.File(System.getProperty("java.io.tmpdir"), "gm-tomb-${System.nanoTime()}")
+        assertTrue(dir.mkdirs())
+        val file = java.io.File(dir, "loc_1.mp4").apply { writeBytes(ByteArray(1024)) }
+        assertTrue("先得有个真文件", file.exists())
+
+        val id = LocalIds.localId("local", "loc_1", 1)
+        db.trackDao().upsertAll(
+            listOf(
+                TrackEntity(
+                    id = id, platform = "local", videoId = "loc_1", title = "本机视频",
+                    uploader = null, durationSec = 30.0, audioBytes = 1024, audioFormat = "mp4",
+                    sourceUrl = "", localPath = file.absolutePath, mediaType = MediaKind.VIDEO.name,
+                    syncState = SyncState.SYNCED.name, serverId = 80, serverSeq = 20, accountKey = account,
+                    serverStorage = "archive",
+                ),
+            ),
+        )
+
+        val item = localCloud(80, "loc_1", mediaType = MediaKind.VIDEO.name)
+            .copy(deleted = true, updatedSeq = 20)
+        val (e, _) = engine(listOf(page(listOf(item), hasMore = false)))
+        val result = e.pull(account)
+
+        assertEquals(1, result.tombstones)
+        assertEquals(1, result.removedRows)
+        assertTrue("行要删掉", rows().isEmpty())
+        assertTrue("我们那份副本要真删，不能只从列表里消失", !file.exists())
+        assertEquals("本机导入的删除是静默的，不进待确认", 0, db.libraryAuxDao().markCount(account))
+        assertTrue("临时目录要清掉", dir.delete() || !dir.exists())
+    }
     @Test fun tombstoneWithoutFileOrTraceOnlyRemovesTheCloudMirror() = runBlocking {
         val id = LocalIds.localId("bilibili", "BV1", 1)
         db.trackDao().upsertAll(listOf(cloudRow(id, deletedMirror = true)))
