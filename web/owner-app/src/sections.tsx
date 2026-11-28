@@ -10,6 +10,8 @@
 import { isAdmin } from '@shared/api';
 import type { OwnerConfig } from './api';
 import { Link } from './router';
+import { NumUnit, PageHead } from './ui';
+import { SectionIcon } from './icons';
 
 export interface Section {
   path: string;
@@ -203,34 +205,46 @@ export function visibleSections(tier: string | null | undefined): Section[] {
 }
 
 const GB = 1024 ** 3;
-const fmtGB = (b: number) => `${(b / GB).toFixed(b % GB === 0 ? 0 : 1)} GB`;
-const fmtTTL = (s: number) => (s % 86400 === 0 ? `${s / 86400} 天` : `${Math.round(s / 3600)} 小时`);
 
+/** 体积拆成「数字 + 单位」两段：卡片里数字与单位字号不同，得分开给样式。
+ *  口径与原来的 `fmtGB` 一致（整 GB 不带小数，否则留一位）。 */
+const gbParts = (b: number) => ({ num: (b / GB).toFixed(b % GB === 0 ? 0 : 1), unit: 'GB' });
+
+/** 缓存时长：整天说「天」，否则说「小时」（与原来的 `fmtTTL` 同一套口径）。 */
+const ttlParts = (s: number) =>
+  (s % 86400 === 0 ? { num: String(s / 86400), unit: '天' } : { num: String(Math.round(s / 3600)), unit: '小时' });
+
+/** 概览：五张只读的配置卡（值全部来自 `/v2/config/owner`，服务端定，页面上改不了）
+ *  + 一排「栏目」入口卡。卡片不做 hover 抬升与手型光标——它们点了没反应，
+ *  长得像按钮就会骗人。 */
 export function Overview({ cfg, tier }: { cfg: OwnerConfig; tier: string }) {
+  const ttl = ttlParts(cfg.cache_ttl_seconds);
+  const cache = gbParts(cfg.cache_quota_bytes);
+  const archive = gbParts(cfg.archive_quota_bytes);
   return (
     <>
-      <h1>概览</h1>
+      <PageHead title="概览" sub="当前服务端的缓存与提取限额" />
 
       <div class="cards">
         <div class="metric">
           <div class="metric-k">媒体缓存时间</div>
-          <div class="metric-v">{fmtTTL(cfg.cache_ttl_seconds)}</div>
+          <div class="metric-v"><NumUnit num={ttl.num} unit={ttl.unit} /></div>
         </div>
         <div class="metric">
           <div class="metric-k">媒体缓存上限</div>
-          <div class="metric-v">{fmtGB(cfg.cache_quota_bytes)}</div>
+          <div class="metric-v"><NumUnit num={cache.num} unit={cache.unit} /></div>
         </div>
         <div class="metric">
           <div class="metric-k">媒体存储上限</div>
-          <div class="metric-v">{fmtGB(cfg.archive_quota_bytes)}</div>
+          <div class="metric-v"><NumUnit num={archive.num} unit={archive.unit} /></div>
         </div>
         <div class="metric">
           <div class="metric-k">最近 N 条上限</div>
-          <div class="metric-v">{cfg.creator.max_items}</div>
+          <div class="metric-v"><NumUnit num={cfg.creator.max_items} unit="条" /></div>
         </div>
         <div class="metric">
           <div class="metric-k">提取起点上限</div>
-          <div class="metric-v">{cfg.creator.max_start}</div>
+          <div class="metric-v"><NumUnit num={cfg.creator.max_start} unit="条" /></div>
         </div>
       </div>
 
@@ -241,15 +255,25 @@ export function Overview({ cfg, tier }: { cfg: OwnerConfig; tier: string }) {
         </div>
       )}
 
-      <h2>栏目</h2>
-      <ul class="plain sections">
-        {visibleSections(tier).map((s) => (
-          <li>
-            <Link class="sections-label" to={s.path}>{s.label}</Link>
-            <span class="muted small">　{s.blurb}</span>
-          </li>
-        ))}
-      </ul>
+      <section class="ov-section" aria-labelledby="ov-sections">
+        <h2 id="ov-sections">栏目</h2>
+        <ul class="sec-grid">
+          {visibleSections(tier).map((s) => (
+            <li>
+              {/* 整张卡是一个 <a>：中键 / Ctrl+点击能在新标签页打开（Link 只接管普通左键）。
+                  说明文字最多两行，全文放 tooltip。 */}
+              <Link to={s.path} class="sec-card">
+                <span class="sec-ico"><SectionIcon path={s.path} /></span>
+                <span class="sec-body">
+                  <span class="sec-name">{s.label}</span>
+                  <span class="sec-desc" title={s.blurb}>{s.blurb}</span>
+                </span>
+                <span class="sec-go" aria-hidden="true">›</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </section>
     </>
   );
 }

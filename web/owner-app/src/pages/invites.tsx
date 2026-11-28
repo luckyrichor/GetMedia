@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { ownerApi, type InviteItem } from '../api';
-import { DateTimeCell, ErrorBox, Loading, NoAccess, Stepper, useLoad, useToast } from '../ui';
+import { DateTimeCell, ErrorBox, Loading, NoAccess, PageHead, Stepper, useLoad, useToast } from '../ui';
 
 const MIN = 1;
 const MAX = 50;
@@ -204,9 +204,7 @@ export function InvitesPage() {
     <>
       {toastNode}
 
-      <div class="page-head">
-        <h1>邀请码</h1>
-      </div>
+      <PageHead title="邀请码" />
 
       {/* 工具栏：左边是当前可用的总数，右边是生成。窄屏各自占一整行 */}
       <div class="inv-bar">

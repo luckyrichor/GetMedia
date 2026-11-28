@@ -73,6 +73,29 @@ export function Empty({ children }: { children: ComponentChildren }) {
   return <div class="empty">{children}</div>;
 }
 
+/** 页面标题区：标题 + 一行灰色说明（说明可选），右侧留给动作按钮。
+ *
+ *  各页原来各写一遍 `<div class="page-head"><h1>…</h1></div>`，字号和上下间距靠
+ *  `.page-head` 兜着；抽成组件后「有没有副标题」不再影响标题的基线，各页也不会各长一样。
+ *  概览用它带副标题，其余页只传 title，观感与改动前一致。
+ */
+export function PageHead({ title, sub, actions }: {
+  title: ComponentChildren;
+  /** 标题下的一行说明。写实际含义，别写「这里是概览」这种废话。 */
+  sub?: ComponentChildren;
+  actions?: ComponentChildren;
+}) {
+  return (
+    <div class="page-head">
+      <div class="page-head-main">
+        <h1>{title}</h1>
+        {sub ? <p class="page-sub">{sub}</p> : null}
+      </div>
+      {actions ? <div class="page-head-acts">{actions}</div> : null}
+    </div>
+  );
+}
+
 /** 管理员专属页被非 admin 直接输 URL 打开时的占位。
  *  导航里本来就不显示，所以走到这里基本是手输地址或旧书签；服务端那边也会回 403。 */
 export function NoAccess({ what }: { what: string }) {
@@ -309,6 +332,23 @@ export function BytesCell({ n }: { n: number | null | undefined }) {
     <span class="bytes">
       <span class="bytes-n">{p.num}</span>
       <span class="bytes-u">{p.unit}</span>
+    </span>
+  );
+}
+
+/** 卡片里的「数字 + 单位」：数字大号加粗、单位小号淡灰，按基线对齐。
+ *
+ *  和表格里的 `BytesCell` 是同一套观感（数字等宽、单位弱化），区别只在大字号。
+ *  数字与单位之间那个空格写成 `{' '}`：flex 容器不会把它渲染成间距（间距由 gap 给），
+ *  但 `textContent` 里留着它——复制出来、读屏念出来都还是「5 GB」。
+ */
+export function NumUnit({ num, unit, size = 'lg' }: {
+  num: ComponentChildren; unit?: string; size?: 'lg' | 'sm';
+}) {
+  return (
+    <span class={size === 'sm' ? 'num-unit sm' : 'num-unit'}>
+      <span class="num-unit-n">{num}</span>
+      {unit ? <>{' '}<span class="num-unit-u">{unit}</span></> : null}
     </span>
   );
 }

@@ -17,7 +17,7 @@ import {
 import { FORMAT, FORMATS_OF, FORMAT_TIP, STORAGE, STORAGE_DESC, platformName } from '../labels';
 import { Select } from '../select';
 import {
-  BytesCell, DateRange, DateTimeCell, ErrorBox, Loading, Segmented,
+  BytesCell, DateRange, DateTimeCell, ErrorBox, Loading, PageHead, Segmented,
   dayEndSec, dayStartSec,
   fmtBytes, fmtDateTime, fmtDuration, relTime, useToast,
 } from '../ui';
@@ -214,9 +214,7 @@ export function ExtractPage() {
     <>
       {toastNode}
 
-      <div class="page-head">
-        <h1>单个提取</h1>
-      </div>
+      <PageHead title="单个提取" />
 
       {/* ---- 提取表单 ---- */}
       <div class="ext-form">

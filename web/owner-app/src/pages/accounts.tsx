@@ -14,7 +14,7 @@ import { messageFor } from '@shared/errors';
 import { ownerApi, type AdminAccount, type AdminAccountPage, type Tier } from '../api';
 import { Select } from '../select';
 import {
-  BytesCell, DateRange, DateTimeCell, ErrorBox, Loading, Menu, Modal, NoAccess, Segmented,
+  BytesCell, DateRange, DateTimeCell, ErrorBox, Loading, Menu, Modal, NoAccess, PageHead, Segmented,
   fmtDateTime, fmtTime, relTime, useLoad,
 } from '../ui';
 
@@ -396,9 +396,7 @@ export function AccountsPage() {
 
   return (
     <>
-      <div class="page-head">
-        <h1>权限管理</h1>
-      </div>
+      <PageHead title="权限管理" />
 
       {s ? (
         <div class="stat-grid">

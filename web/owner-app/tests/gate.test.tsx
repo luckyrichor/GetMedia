@@ -138,4 +138,50 @@ describe('owner 认证壳', () => {
     expect(nav.slice(0, 3)).toEqual(['概览', '权限管理', '邀请码']);
     expect(document.querySelector('.top .tag.admin')?.textContent).toBe('管理员');
   });
+
+  test('概览：五张配置卡数值不变，栏目改成整张可点的卡片', async () => {
+    server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ME } });
+    mount();
+    await until(() => text().includes('概览'));
+
+    // 数值与改造前一致：数字与单位是两个 span，但 textContent 里仍带空格（「5 GB」而不是「5GB」）
+    const metrics = Array.from(document.querySelectorAll('.metric'));
+    expect(metrics).toHaveLength(5);
+    expect(metrics.map((m) => m.textContent)).toEqual([
+      '媒体缓存时间1 天',
+      '媒体缓存上限5 GB',
+      '媒体存储上限20 GB',
+      '最近 N 条上限200 条',
+      '提取起点上限60 条',
+    ]);
+    // 只读卡不做成可点的样子：没有 a/button，也没有 tabindex
+    expect(document.querySelector('.metric a, .metric button, .metric[tabindex]')).toBeNull();
+
+    // 栏目：每栏一张卡，整张是链接，href 指到该栏目；说明全文进 title
+    const cards = Array.from(document.querySelectorAll('.sec-card'));
+    expect(cards).toHaveLength(visibleSections(ME.tier).length);
+    expect(cards.map((c) => c.querySelector('.sec-name')?.textContent)).toEqual(
+      visibleSections(ME.tier).map((s) => s.label),
+    );
+    const first = cards[0] as HTMLAnchorElement;
+    expect(first.getAttribute('href')).toContain('/feedback');
+    expect(first.querySelector('.sec-desc')?.getAttribute('title')).toBe(visibleSections(ME.tier)[0]!.blurb);
+    // 图标是内联 SVG，不带任何文字（读屏只念栏目名）
+    expect(first.querySelector('.sec-ico svg')).not.toBeNull();
+    expect(first.querySelector('.sec-ico')?.textContent).toBe('');
+  });
+
+  test('导航：只有当前页那项带 aria-current', async () => {
+    server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ME } });
+    mount();
+    await until(() => text().includes('概览'));
+    const current = () => Array.from(document.querySelectorAll('nav.side a[aria-current="page"]')).map((a) => a.textContent);
+    expect(current()).toEqual(['概览']);
+    expect(document.querySelectorAll('nav.side a')).toHaveLength(10);
+
+    cleanup();
+    mount('/library');
+    await until(() => text().includes('媒体库'));
+    expect(current()).toEqual(['媒体库']);
+  });
 });

@@ -15,6 +15,7 @@ import { isAdmin } from '@shared/api';
 import { LOGIN_URL, PUBLIC_BASE, ownerApi, type Me, type OwnerConfig } from './api';
 import { Link, navigate, useRoute } from './router';
 import { Overview, Placeholder, sectionFor, visibleSections } from './sections';
+import { SectionIcon } from './icons';
 import { FeedbackPage } from './pages/feedback';
 import { LibraryPage } from './pages/library';
 import { ExtractPage } from './pages/extract';
@@ -173,9 +174,9 @@ function Header({ me }: { me: Me }) {
       <div class="who">
         {/* 只有管理员加绿色标识；免费版/完整版不加任何标签，免得把"有效期"之类的事混进页头 */}
         {isAdmin(me.tier) ? <span class="tag admin">管理员</span> : null}
-        <span class="muted small">{me.login_name}</span>
+        <span class="who-name">{me.login_name}</span>
         {/* 退出是低频动作，用低调的文字按钮：不跟页面里的主按钮抢注意力 */}
-        <button type="button" class="text-btn muted" disabled={busy} onClick={() => void logout()}>
+        <button type="button" class="text-btn muted logout" disabled={busy} onClick={() => void logout()}>
           退出
         </button>
       </div>
@@ -183,26 +184,36 @@ function Header({ me }: { me: Me }) {
   );
 }
 
+/** 左侧导航：图标 + 文字，选中项淡蓝底 + 主色字（不再用左边那条 3px 色条）。
+ *  高度撑满视口、内部滚动，内容再长也不会在中间断开（见 styles.css 的 .side）。 */
 function Nav({ path, tier }: { path: string; tier: string }) {
   const items = [{ path: '/', label: '概览' }, ...visibleSections(tier).map((s) => ({ path: s.path, label: s.label }))];
   return (
     <nav class="side" aria-label="管理台导航">
-      {items.map((it) => (
-        <Link to={it.path} aria-current={path === it.path ? 'page' : undefined}>
-          <span>{it.label}</span>
-        </Link>
-      ))}
+      <ul class="nav-list">
+        {items.map((it) => {
+          const on = path === it.path;
+          return (
+            <li>
+              <Link to={it.path} class={on ? 'nav-item on' : 'nav-item'} aria-current={on ? 'page' : undefined}>
+                <span class="nav-ico"><SectionIcon path={it.path} /></span>
+                <span class="nav-label">{it.label}</span>
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
     </nav>
   );
 }
 
-/** 内容区的宽度档：默认 62rem；列多的两页放宽到 84rem；带表格的两页不设上限。 */
-const WIDE: Record<string, string> = {
-  '/accounts': 'content content-wide',
-  '/invites': 'content content-wide',
-  '/creators': 'content content-full',
-  // 单个提取下方也是表格：留在默认 62rem 里，1028px 的八列会被裁进横向滚动
-  '/extract': 'content content-full',
+/** 内容区的内边距档：表格页（列多、要铺满）左右只留 12px，其余页 28px。
+ *  内容区本身不再设 max-width——1280 屏上这 16px 的差别就是「表格要不要横向滚」的分界。 */
+const COMPACT: Record<string, string> = {
+  '/accounts': 'content content-compact',
+  '/invites': 'content content-compact',
+  '/creators': 'content content-compact',
+  '/extract': 'content content-compact',
 };
 
 function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
@@ -216,9 +227,7 @@ function Shell({ cfg, me }: { cfg: OwnerConfig; me: Me }) {
       <Header me={me} />
       <div class="layout">
         <Nav path={path} tier={me.tier} />
-        {/* 权限管理、邀请码两页列多，宽屏上按默认 62rem 会右边空一大片，单独放宽；
-            批量提取与单个提取的表格要铺满，干脆不设上限 */}
-        <main class={WIDE[path] ?? 'content'}>{body}</main>
+        <main class={COMPACT[path] ?? 'content'}>{body}</main>
       </div>
     </>
   );

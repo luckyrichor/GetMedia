@@ -21,7 +21,7 @@ import {
 } from '../labels';
 import { MultiSelect, Select } from '../select';
 import {
-  BytesCell, DateInput, DateRange, DateTimeCell, ErrorBox, Loading, Menu, Segmented, Stepper,
+  BytesCell, DateInput, DateRange, DateTimeCell, ErrorBox, Loading, Menu, PageHead, Segmented, Stepper,
   dayEndSec, dayStartSec,
   fmtBytes, fmtDateTime, fmtDuration, fmtTime, relTime, useToast, type MenuItem,
 } from '../ui';
@@ -597,9 +597,7 @@ export function CreatorsPage() {
     <>
       {toastNode}
 
-      <div class="page-head">
-        <h1>批量提取</h1>
-      </div>
+      <PageHead title="批量提取" />
 
       {/* ---- 提取表单 ---- */}
       <div class="ext-form">
