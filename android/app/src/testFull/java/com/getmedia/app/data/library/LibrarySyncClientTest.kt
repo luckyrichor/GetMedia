@@ -13,6 +13,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.io.File
 
 /**
  * `POST /v2/tracks` 的客户端（P0-2 阶段 3）。
@@ -147,4 +148,50 @@ class LibrarySyncClientTest {
         }
         assertEquals(0, server.requestCount)
     }
+
+    /**
+     * 传文件要真的按"写出去多少"报进度。
+     *
+     * 这条盯的是 OkHttp 那一层：`progressBody` 用 `ForwardingSink` 包住文件那一段，
+     * 只有字节真交给 socket 才回调。写错成"从内存读出来就报"的话，进度会先冲到 100%
+     * 再卡住等网络——用户看到的就是"卡在 100% 不动"。
+     *
+     * 另外钉住分母：必须是**文件长度**，不是 multipart 的总长度（含边界与表单头，
+     * 那样百分比会从 0.1% 起步、结尾差几个字节）。
+     */
+    @Test fun uploadFileReportsBytesAsTheyReachTheSocket() = runBlocking {
+        server.enqueue(MockResponse().setBody(trackJson()))
+        val file = File.createTempFile("gm-upload-", ".mp3").apply {
+            writeBytes(ByteArray(256 * 1024) { 7 })
+        }
+        try {
+            val seen = mutableListOf<Pair<Long, Long>>()
+            val uploaded = client.uploadFile(41, file) { sent, total -> seen += sent to total }
+
+            assertEquals(41L, uploaded.id)
+            assertTrue("必须报过多次进度，不是只报一次", seen.size >= 2)
+            assertEquals("分母是文件长度", file.length(), seen.last().second)
+            assertEquals("最后一定报到满", file.length(), seen.last().first)
+            assertEquals("只增不减", seen.map { it.first }.sorted(), seen.map { it.first })
+
+            val request = server.takeRequest()
+            assertEquals("POST", request.method)
+            assertTrue(
+                "打到这一条的文件接口：" + request.path,
+                request.path!!.endsWith("/v2/tracks/41/file"),
+            )
+            assertTrue(
+                "文件要以 multipart 的表单字段发出去",
+                request.getHeader("Content-Type")!!.startsWith("multipart/form-data"),
+            )
+            // 请求体 = 文件本体 + 一小段 multipart 头；被包两遍的话会接近两倍
+            val overhead = request.bodySize - file.length()
+            assertTrue("请求体不该把文件包两遍（多出 $overhead 字节）", overhead in 1..4096)
+        } finally {
+            file.delete()
+        }
+    }
+
+    /** 传完文件服务器回的那一行（`singleTrack` 直接解析根对象）。 */
+    private fun trackJson(): String = """{"id":41,"platform":"local","video_id":"loc_x","page":1,"title":"自己录的一段","uploader":null,"duration_sec":12.5,"source_url":"","media_type":"audio","deleted":false,"updated_seq":91,"updated_at":1700000000,"storage":"archive","bytes":262144,"has_file":true}"""
 }

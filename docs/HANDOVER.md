@@ -57,7 +57,7 @@ python3 tools/scan_forbidden.py legacy server android web
 python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free web/public-app web/shared
 
 # Android（构建慢，务必后台跑并用日志文件接退出码）
-# 基线：testFullDebugUnitTest 682 / testFreeDebugUnitTest 411，全 0 failed
+# 基线：testFullDebugUnitTest 683 / testFreeDebugUnitTest 411，全 0 failed
 sh android/gradlew -p android testFullDebugUnitTest testFreeDebugUnitTest assembleFullRelease --console=plain > /tmp/build.log 2>&1; echo exit=$?
 ```
 
@@ -212,7 +212,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 接手后第一次动手前：
 
-- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 259 / pytest 544 passed、50 skipped；Android full 682 / free 411）。
+- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 259 / pytest 544 passed、50 skipped；Android full 683 / free 411）。
 - [ ] `git status` 干净、`git log -1` 对得上 §0。
 - [ ] 确认这次改动属于 §4 的哪一类，**按对应流程走完整套**，不要只改代码不部署。
 - [ ] 改完在 `docs/STATUS.local.md` 顶部补一节（起因/改动/部署/验证），并提交。
