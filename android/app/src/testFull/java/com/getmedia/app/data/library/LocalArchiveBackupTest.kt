@@ -10,6 +10,7 @@ import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -29,6 +30,7 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class LocalArchiveBackupTest {
 
+    private val context = ApplicationProvider.getApplicationContext<Context>()
     private lateinit var db: AppDatabase
     private val account = "boss"
     private val files = mutableListOf<File>()
@@ -197,5 +199,51 @@ class LocalArchiveBackupTest {
         assertEquals(LocalArchiveBackup.COOLDOWN_MAX_MS, LocalArchiveBackup.waitAfter(60))
         // 服务器给了 Retry-After 就取更大的那个，别比它更早重试
         assertEquals(90_000L, LocalArchiveBackup.waitAfter(1, retryAfterSeconds = 90))
+    }
+
+    /**
+     * 升级后，还没备份成功的原件要立刻重试一次，且**只做一次**。
+     *
+     * 两种卡法都要放出来：`UNABLE`（0.1.41 及以前，边缘回的空 body 400 被当成 `INPUT`，
+     * 一次断网就永久放弃），以及 `PENDING` 但 `archiveNextAt` 还在很远的未来
+     * （0.1.41 及以前每次上传都必然失败，退避次数早就攒到冷却上限，最长 6 小时）。
+     * 同时钉住不许动的两类：`DONE`（已经传上去了）与 `EVICTED`（云端那份被清理，是要
+     * 告诉用户的事实，不能悄悄重置成"还没传"）。
+     */
+    @Test fun upgradeRetriesUnbackedFilesOncePerAccount() = runBlocking {
+        val file = audioFile()
+        val unable = local(path = file.absolutePath, state = ArchiveState.UNABLE, tries = 5, nextAt = now + 999_999)
+            .copy(archiveNote = "请求被服务器拒绝")
+        val cooling = local(path = file.absolutePath, state = ArchiveState.PENDING, tries = 40, nextAt = now + 6 * 3600_000)
+        val done = local(path = file.absolutePath, state = ArchiveState.DONE, serverStorage = "archive")
+        val evicted = local(path = file.absolutePath, state = ArchiveState.EVICTED)
+        val platformRow = local(path = file.absolutePath, state = ArchiveState.PENDING, platform = "bilibili", tries = 40, nextAt = now + 999_999)
+        val otherAccount = local(path = file.absolutePath, state = ArchiveState.PENDING, accountKey = "someone-else", tries = 40, nextAt = now + 999_999)
+        db.trackDao().upsertAll(listOf(unable, cooling, done, evicted, platformRow, otherAccount))
+
+        val prefs = LibrarySyncPrefs(context)
+        LibrarySyncRunner.retryBackupsOnce(db, prefs, account)
+
+        for (row in listOf(unable, cooling)) {
+            val back = db.trackDao().byId(row.id)!!
+            assertEquals("要放回待上传", ArchiveState.PENDING, ArchiveState.of(back.archiveState))
+            assertEquals("次数与退避都要清零，否则放回去立刻又被冷却挡住", 0, back.archiveTries)
+            assertEquals(0L, back.archiveNextAt)
+            assertNull("旧的原因已经过时了，留着会误导", back.archiveNote)
+        }
+        assertEquals("已经传上去的不该再传一遍",
+            ArchiveState.DONE, ArchiveState.of(db.trackDao().byId(done.id)!!.archiveState))
+        assertEquals("淘汰是事实，不能悄悄重置",
+            ArchiveState.EVICTED, ArchiveState.of(db.trackDao().byId(evicted.id)!!.archiveState))
+        assertEquals("平台条目没有原件，不归这条路管",
+            ArchiveState.PENDING, ArchiveState.of(db.trackDao().byId(platformRow.id)!!.archiveState))
+        assertEquals(40, db.trackDao().byId(platformRow.id)!!.archiveTries)
+        assertEquals("别的账号的行不许碰",
+            40, db.trackDao().byId(otherAccount.id)!!.archiveTries)
+
+        db.trackDao().updateExisting(db.trackDao().byId(cooling.id)!!.copy(archiveNextAt = now + 999_999))
+        LibrarySyncRunner.retryBackupsOnce(db, prefs, account)
+        assertEquals("每账号只放一次：再失败就按退避冷却走",
+            now + 999_999, db.trackDao().byId(cooling.id)!!.archiveNextAt)
     }
 }

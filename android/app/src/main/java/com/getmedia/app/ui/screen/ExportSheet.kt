@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.getmedia.app.ui.components.DownloadBar
 import com.getmedia.app.data.export.ExportNaming
 import com.getmedia.app.data.export.ExportPlan
 import com.getmedia.app.data.cloud.cloudSync
@@ -401,6 +402,12 @@ fun ExportSheet(
                         onDownload = ::fillMissing,
                         onSkip = { skipIds = skipIds + waitingForDownload.map { it.id } },
                     )
+                    // 导出页是整屏 sheet，盖住了底部的进度条，所以在这里再画一条：
+                    // 下载几百 MB 的时候按钮上那个小圈说明不了"到哪一步了"。
+                    if (fetching) {
+                        Spacer(Modifier.height(8.dp))
+                        DownloadBar()
+                    }
                 }
                 if (localImportShells.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))

@@ -2,6 +2,7 @@ package com.getmedia.app.data.cloud
 
 import android.content.Context
 import com.getmedia.app.account.SessionStore
+import com.getmedia.app.data.download.DownloadProgress
 import com.getmedia.app.data.library.DownloadCenter
 import com.getmedia.app.data.library.LibraryLocalEdits
 import com.getmedia.app.data.library.LibraryMark
@@ -73,6 +74,9 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
      * 且只记"条目号 + 异常类型"，不记 message —— message 里可能带链接参数或凭据。
      */
     override suspend fun download(context: Context, track: TrackEntity): File = downloadLock.withLock {
+        // 进度条的唯一来源：远端下载可能几百 MB、要几分钟，中途没有反馈的话用户只能反复点。
+        // 起止都放在锁内，锁是串行的，所以同一时刻只会有一条活跃进度。
+        DownloadProgress.start(track.id, track.title)
         try {
             val session = SessionStore.current.value
             check(session != null && track.accountKey == session.loginName && LibrarySyncGate.maySync(session)) {
@@ -91,7 +95,7 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
                 prefs = LibrarySyncPrefs(app),
                 session = session,
                 sameSession = ::sameSession,
-            ).download(track)
+            ).download(track) { done, total -> DownloadProgress.update(track.id, done, total) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -101,6 +105,9 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
                 success = false,
             )
             throw DownloadFailed(ErrorText.humanMessage(error), error)
+        } finally {
+            // 无论成功、失败还是被取消都要收掉，否则界面上会永远挂着一条进度
+            DownloadProgress.finish()
         }
     }
 

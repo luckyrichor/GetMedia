@@ -148,4 +148,24 @@ class LibrarySyncJsonTest {
         )
         assertEquals("云端的名字", e.conflict!!.optString("title"))
     }
+
+    /**
+     * 裸 400 是**边缘**的错，不是请求写错了。
+     *
+     * 手机传本机原件时请求体到一半连接断掉，nginx 在访问日志里就记一行 `400 0`（响应体为空）。
+     * 应用自己的错误一定带 `code`（errors.ApiError 构造时必填），所以没有 code 的 400 只可能
+     * 来自 nginx。若按 INPUT 处理，[LocalArchiveBackup] 会把它判成"重试也没用"，
+     * 一次断网就把本机原件永久标成"无法备份"，而那个状态界面上根本看不到。
+     */
+    @Test fun bareFourHundredIsRetryableNotInput() {
+        val e = err(400, "")
+        assertEquals(LibrarySyncProblem.SERVER, e.problem)
+        assertTrue("要给用户一个稍后自动重试的暗示", e.message.contains("稍后"))
+    }
+
+    @Test fun fourHundredWithABusinessCodeStaysInput() {
+        val e = err(400, """{"code":"bad_ext","detail":"不支持的文件类型"}""")
+        assertEquals(LibrarySyncProblem.INPUT, e.problem)
+        assertEquals("bad_ext", e.code)
+    }
 }

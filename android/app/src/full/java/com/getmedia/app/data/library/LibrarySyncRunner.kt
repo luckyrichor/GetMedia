@@ -2,10 +2,12 @@ package com.getmedia.app.data.library
 
 import android.content.Context
 import androidx.room.withTransaction
+import com.getmedia.app.BuildConfig
 import com.getmedia.app.account.SessionStore
 import com.getmedia.app.data.cloud.CloudRemovedAsk
 import com.getmedia.app.data.cloud.CloudUploadAsk
 import com.getmedia.app.data.local.AppDatabase
+import com.getmedia.app.data.local.ArchiveState
 import com.getmedia.app.data.local.LibraryCursorEntity
 import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.localextract.DirectExtractor
@@ -369,6 +371,10 @@ object LibrarySyncRunner {
             // 因此落在音频分类里。占位行的类型本来就无从得知，统一抹成"未知"，等云端曲库行
             // 到了由补绑定回填。幂等，每轮跑一次（正常库上是 0 条命中，代价只有一次全表读）。
             repairPlaceholderTypes(db)
+            // 存量修复：0.1.41 及以前每一次文件上传都必然失败（nginx 把 1m 带进了认证子请求），
+            // 退避次数早就攒到冷却上限；另有一次断网就把原件判成"永久失败"的情况。
+            // 升级后每账号立刻重试一次，之后各按各的退避走。
+            retryBackupsOnce(db, prefs, account)
             val token = syncToken(session, prefs)
             val client = LibrarySyncClient(token = token)
             val playlistClient = PlaylistSyncClient(token = token)
@@ -504,6 +510,53 @@ object LibrarySyncRunner {
         db.withTransaction {
             wrong.forEach { db.trackDao().updateExisting(it.copy(mediaType = MediaKind.UNKNOWN_NAME)) }
         }
+    }
+
+    /**
+     * 升级后给还没备份成功的本机原件一次立刻重试的机会（每个 versionCode 一次）。
+     *
+     * 两种卡法都要放出来：
+     *
+     * - `UNABLE`——0.1.42 及以前，边缘在请求体传一半时回的裸 400 被映射成 `INPUT`，而
+     *   [LocalArchiveBackup] 对 `INPUT` 直接判"重试也没用"，一次手机断网就把原件永久标成
+     *   "无法备份"；
+     * - `PENDING` 但 `archiveNextAt` 还在很远的未来——每次失败都按 2/5/15/60/300 秒退避、
+     *   一轮 5 次后冷却逐轮翻倍（最长 6 小时）。0.1.41 及以前每一次上传都必然失败
+     *   （nginx 把 1m 的上限带进了认证子请求），次数早就攒到顶，于是即使服务端修好了，
+     *   手机上还得干等几个小时。
+     *
+     * 为什么只在升级后做一次：`archiveNextAt` 的本意是"别拿大文件反复耗电耗流量"，
+     * 升级是唯一值得推翻它的时机（客户端逻辑变了，旧的失败结论不再成立）。判据用
+     * versionCode 而不是布尔，见 [LibrarySyncPrefs.archiveRetryVersion]。
+     * `DONE` / `EVICTED` 不动：前者已经传上去了，后者是"云端那份被清理了"这个要告诉用户的事实。
+     */
+    internal suspend fun retryBackupsOnce(
+        db: AppDatabase, prefs: LibrarySyncPrefs, account: String,
+    ) {
+        if (prefs.archiveRetryVersion(account) >= BuildConfig.VERSION_CODE) return
+        val waiting = db.trackDao().allNow().filter {
+            it.accountKey == account &&
+                it.platform.equals("local", ignoreCase = true) &&
+                it.serverId != null && it.serverId > 0 &&
+                ArchiveState.of(it.archiveState).let { s ->
+                    s == ArchiveState.UNABLE || s == ArchiveState.PENDING
+                }
+        }
+        if (waiting.isNotEmpty()) {
+            db.withTransaction {
+                waiting.forEach {
+                    db.trackDao().updateExisting(
+                        it.copy(
+                            archiveState = ArchiveState.PENDING.name,
+                            archiveTries = 0,
+                            archiveNextAt = 0,
+                            archiveNote = null,
+                        ),
+                    )
+                }
+            }
+        }
+        prefs.markArchiveRetryVersion(account, BuildConfig.VERSION_CODE)
     }
 
     private suspend fun uploadNow(context: Context, session: SessionStore.Session, manual: Boolean) {

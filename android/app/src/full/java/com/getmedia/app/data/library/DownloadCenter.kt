@@ -35,7 +35,10 @@ internal class DownloadCenter(
     private val sameSession: () -> Boolean,
 ) {
 
-    suspend fun download(track: TrackEntity): File {
+    suspend fun download(
+        track: TrackEntity,
+        onProgress: (downloaded: Long, total: Long?) -> Unit = { _, _ -> },
+    ): File {
         // ① 本机已有 → 直接给文件。这一步只读磁盘，不碰网络。
         repo.download(track).getOrNull()?.let { file ->
             // 0.1.16：字段与磁盘对齐。列表标签读库字段、菜单读磁盘，早返回不写库就会出现
@@ -48,8 +51,8 @@ internal class DownloadCenter(
             DownloadRoute.NONE -> throw IllegalStateException(
                 RepairRules.options(row, hasFile = false).note ?: "这条没有可下载的内容",
             )
-            DownloadRoute.SERVER_TARGET -> refillFromServer(row)
-            DownloadRoute.SERVER_ARCHIVE -> refillArchived(row)
+            DownloadRoute.SERVER_TARGET -> refillFromServer(row, onProgress)
+            DownloadRoute.SERVER_ARCHIVE -> refillArchived(row, onProgress)
             DownloadRoute.SERVER_LOCAL -> extractInto(row, asShell = false)
             DownloadRoute.SHELL_LOCAL -> extractInto(row, asShell = true)
         }
@@ -71,8 +74,11 @@ internal class DownloadCenter(
     }
 
     /** B 站云端行：服务器已存文件直取；缓存被清掉了才让服务器带 target 重新提取。 */
-    private suspend fun refillFromServer(row: TrackEntity): File {
-        val saved = serverExtractClient(repo, api, app.cacheDir).refillOriginal(row) { original, detail, file ->
+    private suspend fun refillFromServer(
+        row: TrackEntity,
+        onProgress: (downloaded: Long, total: Long?) -> Unit,
+    ): File {
+        val saved = serverExtractClient(repo, api, app.cacheDir).refillOriginal(row, onProgress) { original, detail, file ->
             repo.fillExistingFile(
                 original, file.file, file.bytes, file.sha256, detail.updatedSeq,
                 detail.updatedAtSec?.times(1000), sameSession,
@@ -82,8 +88,11 @@ internal class DownloadCenter(
     }
 
     /** 服务器已归档的非 B 站行（本机导入/本机提取的作品）：直取服务器文件，不再本机提取。 */
-    private suspend fun refillArchived(row: TrackEntity): File {
-        val saved = serverExtractClient(repo, api, app.cacheDir).refillArchived(row) { original, detail, file ->
+    private suspend fun refillArchived(
+        row: TrackEntity,
+        onProgress: (downloaded: Long, total: Long?) -> Unit,
+    ): File {
+        val saved = serverExtractClient(repo, api, app.cacheDir).refillArchived(row, onProgress) { original, detail, file ->
             repo.fillExistingFile(
                 original, file.file, file.bytes, file.sha256, detail.updatedSeq,
                 detail.updatedAtSec?.times(1000), sameSession,

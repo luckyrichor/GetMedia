@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import androidx.activity.compose.BackHandler
+import com.getmedia.app.data.download.DownloadProgress
 import com.getmedia.app.data.repo.DiagnosticsStore
 import com.getmedia.app.data.cloud.cloudSync
 import com.getmedia.app.account.SessionStore
@@ -32,6 +33,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import com.getmedia.app.ui.platformLabel
 import com.getmedia.app.ui.formatDuration
+import com.getmedia.app.ui.components.DownloadLine
 import com.getmedia.app.ui.components.uiAccentContainer
 import com.getmedia.app.ui.components.uiCardColor
 import com.getmedia.app.ui.components.uiHairline
@@ -1303,6 +1305,8 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                             if (downloadable.isEmpty()) {
                                 notice = "这 ${missingFiles.size} 项目前没有可下载的来源，等云端有文件后再试"
                             } else {
+                                // 先收起面板：进度条挂在 bottomBar 上，面板挡着就看不见了
+                                dialog = null
                                 operate {
                                     notice = "正在补齐 ${downloadable.size} 项…"
                                     var done = 0
@@ -1742,6 +1746,8 @@ internal fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () 
     val isCurrent = queue.getOrNull(index)?.track?.id == track.id
     val highlighted = if (selecting) selected else isCurrent
     val shape = RoundedCornerShape(16.dp)
+    // 这一条正在从远端下载吗（进度条就长在它自己身上，见 DownloadLine）
+    val downloading = DownloadProgress.state.collectAsState().value?.trackId == track.id
 
     Row(
         modifier
@@ -1807,7 +1813,8 @@ internal fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () 
             )
             // 云端行（服务器有、本机没文件）要一眼看出来：不然"点了没反应"像是应用坏了。
             // 判定在 full/free 的实现里（free 恒 false），这里只管画。
-            if (cloudSync.awaitingDownload(track)) {
+            // 正在下载这一条时不画它：那一行下面会换成实时进度，两个标签同时出现只会自相矛盾。
+            if (!downloading && cloudSync.awaitingDownload(track)) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "云端未下载",
@@ -1845,6 +1852,8 @@ internal fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () 
                 style = MaterialTheme.typography.bodySmall,
                 color = uiMuted(),
             )
+            // 进度长在条目自己的下半部分：哪一条在传就显示在哪一条里，不用去页面上找
+            DownloadLine(track.id, Modifier.padding(top = 6.dp))
         }
         Box(
             Modifier

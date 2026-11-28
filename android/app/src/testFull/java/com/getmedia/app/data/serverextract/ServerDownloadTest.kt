@@ -70,6 +70,26 @@ class ServerDownloadTest {
         assertNull("首次下载不该带 Range", server.takeRequest().getHeader("Range"))
     }
 
+    /**
+     * 进度回调必须真的报上来：界面上那条进度条只认它。
+     *
+     * 钉三件事——字节数单调不减、最后一段等于文件长度、总长度取服务器声明的那一份。
+     * 少任何一条，用户看到的都是"进度条不动"或者"百分比乱跳"。
+     */
+    @Test fun reportsProgressWhileWritingTheFile() = runBlocking {
+        val body = ByteArray(256 * 1024) { (it % 251).toByte() }   // 4 个 64 KB 的读，够看出单调
+        server.enqueue(MockResponse().setBody(okio.Buffer().write(body)))
+        val seen = mutableListOf<Pair<Long, Long?>>()
+
+        ServerDownload.fetch(api, 31, part(), body.size.toLong()) { done, total -> seen += done to total }
+
+        assertTrue("至少要报一次进度", seen.isNotEmpty())
+        assertTrue("第一次回调就该带上已写入的字节：${seen.first()}", seen.first().first > 0)
+        assertEquals("最后一段等于文件长度", body.size.toLong(), seen.last().first)
+        assertEquals("总长度取服务器声明的那一份", body.size.toLong(), seen.last().second)
+        assertTrue("字节数不能回退：$seen", seen.map { it.first }.zipWithNext().all { (a, b) -> b >= a })
+    }
+
     @Test fun resumesFromExistingBytes() = runBlocking {
         val file = part()
         file.writeBytes(whole.copyOfRange(0, 6))

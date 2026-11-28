@@ -168,6 +168,13 @@ object LibrarySyncJson {
             status == 429 -> LibrarySyncException(
                 LibrarySyncProblem.RATE_LIMITED, "同步太频繁，稍后自动重试", code, retryAfterSeconds,
             )
+            // 裸 400（没有业务码）不是"你的请求写错了"。应用自己的每个错误都带 `code`
+            // （errors.ApiError 构造时必填），能回出裸 400 的只有边缘：手机传到一半连接断了，
+            // nginx 就在访问日志里记一行 `400 0`，响应体是空的。这类失败重试就能好，
+            // 一旦按 INPUT 处理就会被 [LocalArchiveBackup] 判成"永久失败"，本机原件悄悄不再备份。
+            status == 400 && code.isBlank() -> LibrarySyncException(
+                LibrarySyncProblem.SERVER, "传输中断，稍后自动重试", code,
+            )
             status in 400..499 -> LibrarySyncException(
                 LibrarySyncProblem.INPUT, detail.ifBlank { "请求被服务器拒绝" }, code,
             )

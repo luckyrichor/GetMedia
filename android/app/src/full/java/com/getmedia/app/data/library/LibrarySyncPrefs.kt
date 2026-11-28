@@ -61,6 +61,21 @@ class LibrarySyncPrefs(context: Context) {
         prefs.edit().putBoolean("$account.cloud-reconcile", true).apply()
     }
 
+    /**
+     * 上一次"给没备份成功的原件立刻重试一次"是在哪个 versionCode 做的。
+     *
+     * 为什么不用一次性布尔：`archiveNextAt` 是退避（2/5/15/60/300 秒，一轮 5 次后冷却逐轮
+     * 翻倍，最长 6 小时），而客户端逻辑会随版本变——0.1.41 及以前每一次上传都必然失败
+     * （nginx 把 1m 的上限带进了认证子请求），退避次数早就攒到顶。**每个版本升级后重试一次**
+     * 才是这个语义；用布尔会漏掉"上一版已经放行过、这一版又改了规则"的情况。
+     */
+    fun archiveRetryVersion(account: String): Int =
+        prefs.getInt("$account.archive-retry-version", 0)
+
+    fun markArchiveRetryVersion(account: String, versionCode: Int) {
+        prefs.edit().putInt("$account.archive-retry-version", versionCode).apply()
+    }
+
     fun requiresManualUpload(account: String, id: Long): Boolean =
         prefs.getBoolean("$account.restored.$id.manual", false)
 
