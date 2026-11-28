@@ -73,9 +73,13 @@ const PLATFORMS = [
   { value: 'douyin', label: '抖音' },
 ];
 
-/** 上传上限：nginx 给 owner 通道的 body 上限是 210 MiB，留一点余量按 200 MiB 挡。
- *  真正的配额（全站 archive 池）在服务端，超了会回 409，错误文案原样显示。 */
-const UP_LIMIT = 200 * 1024 ** 2;
+/** 服务器给 owner 通道的请求体上限是 1024 MiB（nginx `client_max_body_size 1024m`）。
+ *  以前这里按 200 MiB 挡，是因为更早的 nginx 只有 210m——0.1.44 提到 1024m 之后这道
+ *  限制就没必要了，网页端跟着手机端一起放到 1 GB。
+ *  真正的配额（全站 archive 池，5 GiB）在服务端，超了会回 409，错误文案原样显示。 */
+const UP_LIMIT = 1024 * 1024 ** 2;
+/** 文件本身要比请求体上限小一点：multipart 还有边界与表单头（几百字节）。 */
+const FILE_LIMIT = UP_LIMIT - 1024 * 1024;
 /** 浏览器给的 MIME 有时是空的（尤其 mkv/flv），退回看扩展名。 */
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|flv|wmv|ts|mpg|mpeg)$/i;
 
@@ -177,8 +181,8 @@ export function LibraryPage() {
     for (let i = 0; i < list.length; i++) {
       const f = list[i]!;
       setUp({ i: i + 1, n: list.length, name: f.name });
-      if (f.size > UP_LIMIT) {
-        failed.push(`${f.name}：${fmtBytes(f.size)}，超过 ${fmtBytes(UP_LIMIT)} 上限`);
+      if (f.size > FILE_LIMIT) {
+        failed.push(`${f.name}：${fmtBytes(f.size)}，超过单个 ${fmtBytes(UP_LIMIT)} 的上限`);
         continue;
       }
       try {

@@ -93,7 +93,7 @@ class BackupCardRenderTest {
     fun normalStateLight() {
         render(normal)
         saveShot("backup-light-normal")
-        rule.onNodeWithText("上次备份：128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("上次备份：128 个", substring = true).assertIsDisplayed()
         rule.onNodeWithText("立即备份").assertIsDisplayed()
         rule.onNodeWithText("删除云端备份").assertIsDisplayed()
     }
@@ -103,7 +103,7 @@ class BackupCardRenderTest {
     fun normalStateDark() {
         render(normal, dark = true)
         saveShot("backup-dark-normal")
-        rule.onNodeWithText("上次备份：128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("上次备份：128 个", substring = true).assertIsDisplayed()
     }
 
     @Test
@@ -163,7 +163,7 @@ class BackupCardRenderTest {
         render(normal.copy(lastTracks = 0, lastAtMs = 0, restoreDecisionPending = true, restoreCloudTracks = 128))
         saveShot("backup-light-restore-paused")
         rule.onNodeWithText("自动备份已暂停：等你决定是否恢复云端备份").assertIsDisplayed()
-        rule.onNodeWithText("云端有 128 首的备份", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("云端有备份（128 个", substring = true).assertIsDisplayed()
         rule.onNodeWithText("去处理").assertIsDisplayed()
     }
 
@@ -196,7 +196,7 @@ class BackupCardRenderTest {
         renderDecisionSheet(dark = false)
         saveShot("restore-decision-light")
         rule.onNodeWithText("云端已有曲库备份").assertIsDisplayed()
-        rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("128 个", substring = true).assertIsDisplayed()
         rule.onNodeWithText("恢复云端备份").assertIsDisplayed()
         rule.onNodeWithText("用本机内容（不恢复）").assertIsDisplayed()
         rule.onNodeWithText("稍后再说").assertIsDisplayed()
@@ -242,7 +242,7 @@ class BackupCardRenderTest {
     fun pickerLight() {
         renderPicker(dark = false)
         saveShot("restore-light-picker")
-        rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("128 个", substring = true).assertIsDisplayed()
         rule.onNodeWithText("恢复只补", substring = true).assertIsDisplayed()
     }
 
@@ -251,10 +251,10 @@ class BackupCardRenderTest {
     fun pickerDark() {
         renderPicker(dark = true)
         saveShot("restore-dark-picker")
-        rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("128 个", substring = true).assertIsDisplayed()
     }
 
-    /** 0 首的备份要标成「空备份」并且点不动——它能被选中就会让人以为"恢复了一份备份"。 */
+    /** 0 个的备份要标成「空备份」并且点不动——它能被选中就会让人以为"恢复了一份备份"。 */
     @Test
     @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
     fun pickerMarksEmptyBackupAndIgnoresTap() {
@@ -308,7 +308,7 @@ class BackupCardRenderTest {
         }
         saveShot("backup-cloud-list")
 
-        rule.onNodeWithText("128 首", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("128 个", substring = true).assertIsDisplayed()
         rule.onNodeWithText("空备份", substring = true).assertIsDisplayed()
         rule.onAllNodesWithText("删除").assertCountEquals(items.size)
 

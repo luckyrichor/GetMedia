@@ -304,4 +304,51 @@ class LibraryRemovalReplayTest {
         assertTrue(write.deletes.isEmpty())
         assertEquals(1, db.libraryAuxDao().removalCount("other"))
     }
+
+    /**
+     * 本机导入的条目：删它就要真的把云端那份删掉。
+     *
+     * 队列键用 `videoId`（`loc_<uuid>`，不随改名变），重放时发的是 `remoteId` + `expectedSeq`。
+     * 以前这里一条都进不来——`canQueueCloudDelete` 最后一句是 `restoredKey() != null`，而
+     * `restoredIdentity` 只认 bilibili / douyin，`local` 恒为 null；结果手机上删了，云端行
+     * 与归档文件原地不动，另一台手机还能看到、还能下回来，还白占配额。
+     */
+    @Test fun localImportedRowQueuesARealCloudDelete() = runBlocking {
+        val row = imported(id = -201, videoId = "loc_6f1c", serverId = 82, serverSeq = 23)
+        db.trackDao().upsertAll(listOf(row))
+
+        val op = enqueue(row)
+        assertEquals("local", op.platform)
+        assertEquals("队列键就是 video_id，不靠链接解析", "loc_6f1c", op.videoKey)
+        assertEquals(82L, op.remoteId)
+        assertEquals(23L, op.expectedSeq)
+
+        val write = FakeWrite()
+        LibraryRemovalReplay(db, write, account).replay()
+        assertEquals("要真的发出 DELETE（带 If-Match 的版本）", listOf(82L to 23L), write.deletes)
+        assertEquals("成功之后队列清空", 0, db.libraryAuxDao().removalCount(account))
+    }
+
+    /** 本机导入的那份是用户自己的备份，服务端也不会拿 `archive_protected` 拦它。 */
+    @Test fun localArchiveIsNotTreatedAsProtected() = runBlocking {
+        val row = imported(id = -202, videoId = "loc_7a2d", serverId = 83, serverSeq = 24)
+        db.trackDao().upsertAll(listOf(row))
+
+        assertFalse(LibraryLocalEdits.isKnownArchive(row))
+        assertTrue(LibraryLocalEdits.canQueueCloudDelete(row, account))
+        assertEquals("archive", db.trackDao().byId(row.id)!!.serverStorage)
+    }
+
+    private fun imported(
+        id: Long,
+        videoId: String,
+        serverId: Long,
+        serverSeq: Long,
+    ) = TrackEntity(
+        id = id, platform = "local", videoId = videoId, title = "自己录的一段",
+        uploader = null, durationSec = 12.0, audioBytes = 4096, audioFormat = "mp3",
+        sourceUrl = "", localPath = null, mediaType = "audio",
+        syncState = SyncState.SYNCED.name, serverId = serverId, serverSeq = serverSeq,
+        accountKey = account, serverStorage = "archive",
+    )
 }

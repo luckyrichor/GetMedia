@@ -33,15 +33,11 @@ internal object MediaWording {
     /**
      * "3 个视频" / "3 个音频" / "3 项"。
      *
-     * [music] 为真时音频用「首」（分类卡片、列表计数沿用的量词），其余一律「个」。
+     * 量词统一用「个」：库里音频视频混在一起，同一种说法才不会在"3 首"和"3 个"之间来回跳。
      */
-    fun counted(kinds: Collection<String?>, count: Int, music: Boolean = false): String {
+    fun counted(kinds: Collection<String?>, count: Int): String {
         val noun = noun(kinds)
-        return when {
-            noun == ITEM -> "$count $ITEM"
-            music && noun == AUDIO -> "$count 首$AUDIO"
-            else -> "$count 个$noun"
-        }
+        return if (noun == ITEM) "$count $ITEM" else "$count 个$noun"
     }
 
     /** 批量删除的标题：`删除 5 个视频？` */
@@ -77,9 +73,9 @@ internal object MediaWording {
         return if (parts.isEmpty()) null else "其中 ${parts.joinToString("；")}。"
     }
 
-    /** 单条删除的确认：`删除这首音频？` / `删除这个视频？` */
+    /** 单条删除的确认：`删除这个音频？` / `删除这个视频？` */
     fun deleteOneQuestion(kinds: Collection<String?>): String = when (noun(kinds)) {
-        AUDIO -> "删除这首$AUDIO？"
+        AUDIO -> "删除这个$AUDIO？"
         VIDEO -> "删除这个$VIDEO？"
         else -> "删除这一$ITEM？"
     }
@@ -91,6 +87,6 @@ internal object MediaWording {
         else -> "分类下混有音频和视频"
     }
 
-    /** 类别计数：`5 首音频` / `5 个视频` / `5 项` */
-    fun categoryCount(kinds: Collection<String?>, count: Int): String = counted(kinds, count, music = true)
+    /** 类别计数：`5 个音频` / `5 个视频` / `5 项` */
+    fun categoryCount(kinds: Collection<String?>, count: Int): String = counted(kinds, count)
 }

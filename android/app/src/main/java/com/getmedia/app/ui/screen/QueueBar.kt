@@ -82,10 +82,10 @@ fun QueueBar() {
         onDismiss = { showQueue = false },
         subtitle = when {
             timer != null -> "定时停止：$timer"
-            missingCount > 0 -> "$missingCount 首本机未下载，播放时会跳过"
+            missingCount > 0 -> "$missingCount 个本机未下载，播放时会跳过"
             else -> "长按拖动调整播放顺序"
         },
-        badge = if (queue.size == 1) "1 首" else "${queue.size} 首",
+        badge = if (queue.size == 1) "1 个" else "${queue.size} 个",
         scroll = false,
         confirmText = "完成",
         onConfirm = { showQueue = false },

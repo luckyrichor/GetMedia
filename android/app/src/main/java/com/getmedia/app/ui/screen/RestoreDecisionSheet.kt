@@ -74,7 +74,7 @@ internal fun RestoreDecisionSheet(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "这个账号在云端有一份 ${cloudTracks} 首的备份（${decisionTime(cloudAtMs)}）。",
+                "这个账号在云端有一份备份（${cloudTracks} 个，${decisionTime(cloudAtMs)}）。",
                 fontSize = 13.sp,
                 lineHeight = 19.sp,
             )
@@ -123,4 +123,4 @@ private fun decisionTime(ms: Long): String =
 
 /** 供「数据备份」卡片复用的横幅文案：说清"暂停了、为什么、去哪儿处理"。 */
 internal fun restorePausedHint(tracks: Int): String =
-    "云端有 $tracks 首的备份，还没决定要不要恢复；自动备份已暂停。"
+    "云端有备份（$tracks 个），还没决定要不要恢复；自动备份已暂停。"

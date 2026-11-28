@@ -194,4 +194,28 @@ class LibrarySyncClientTest {
 
     /** 传完文件服务器回的那一行（`singleTrack` 直接解析根对象）。 */
     private fun trackJson(): String = """{"id":41,"platform":"local","video_id":"loc_x","page":1,"title":"自己录的一段","uploader":null,"duration_sec":12.5,"source_url":"","media_type":"audio","deleted":false,"updated_seq":91,"updated_at":1700000000,"storage":"archive","bytes":262144,"has_file":true}"""
+
+    /**
+     * 413 是边缘（nginx `client_max_body_size`）拦下来的"文件太大"，不是"你这条请求写错了"。
+     *
+     * 以前它落到 `400..499 → INPUT` 的兜底里，条目上显示「未备份 · 请求被服务器拒绝」——
+     * 用户会以为服务器不让传这一条，实际是文件超过了单文件上限。
+     */
+    @Test fun tooLargeUploadSaysTheFileIsTooBig() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(413)
+                .setBody("<html><body><h1>413 Request Entity Too Large</h1></body></html>"),
+        )
+        val file = File.createTempFile("gm-huge-", ".mp4").apply { writeBytes(ByteArray(1024) { 1 }) }
+        try {
+            client.uploadFile(41, file) { _, _ -> }
+            fail("应当抛 INPUT")
+        } catch (e: LibrarySyncException) {
+            assertEquals(LibrarySyncProblem.INPUT, e.problem)
+            assertTrue("要说清楚是文件太大：" + e.message, e.message.contains("太大"))
+            assertEquals("too_large", e.code)
+        } finally {
+            file.delete()
+        }
+    }
 }

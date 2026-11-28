@@ -175,6 +175,15 @@ object LibrarySyncJson {
             status == 400 && code.isBlank() -> LibrarySyncException(
                 LibrarySyncProblem.SERVER, "传输中断，稍后自动重试", code,
             )
+            // 413 只可能来自边缘：应用自己的配额检查回的是 409 `quota_exceeded`（那份文件
+            // 能落盘、只是池子腾不出地方），而 nginx 的 `client_max_body_size` 是在收请求
+            // 体的时候直接截断。落到下面的 INPUT 也能停手，但文案会是"请求被服务器拒绝"，
+            // 用户以为服务器不让传这一条，实际是文件太大。
+            status == 413 -> LibrarySyncException(
+                LibrarySyncProblem.INPUT,
+                "文件太大，服务器不接受这么大的上传（单个上限 1 GB）",
+                code.ifBlank { "too_large" },
+            )
             status in 400..499 -> LibrarySyncException(
                 LibrarySyncProblem.INPUT, detail.ifBlank { "请求被服务器拒绝" }, code,
             )

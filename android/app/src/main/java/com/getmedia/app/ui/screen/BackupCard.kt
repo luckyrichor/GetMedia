@@ -229,7 +229,7 @@ private fun statusText(state: BackupManager.UiState): String = when {
     // 限频不是失败：上一次成功的记录还在，这里只提示"等一会儿"，不覆盖上次时间
     state.throttleUntilMs > 0 -> "刚备份过，请 10 分钟后再试"
     state.dirty && state.lastAtMs > 0 -> "上次备份失败，将在下次打开时重试"
-    state.lastAtMs > 0 -> "上次备份：${state.lastTracks} 首 · ${formatBackupTime(state.lastAtMs)}"
+    state.lastAtMs > 0 -> "上次备份：${state.lastTracks} 个 · ${formatBackupTime(state.lastAtMs)}"
     else -> "还没备份过"
 }
 

@@ -104,7 +104,7 @@ internal fun CloudBackupsContent(
                     Column(Modifier.weight(1f)) {
                         Text(
                             if (item.tracks <= 0) "空备份 · ${cloudTime(item.createdAt)}"
-                            else "${item.tracks} 首 · ${cloudTime(item.createdAt)}",
+                            else "${item.tracks} 个 · ${cloudTime(item.createdAt)}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (item.tracks <= 0) uiMuted() else MaterialTheme.colorScheme.onSurface,
                         )

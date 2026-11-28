@@ -84,7 +84,7 @@ internal fun RestoreFlow(onClose: () -> Unit) {
                 title = { Text("恢复完成") },
                 text = {
                     Column {
-                        Text("本地新增 ${r.addedTracks} 首，跳过 ${r.skippedTracks} 首（本地已有）。")
+                        Text("本地新增 ${r.addedTracks} 个，跳过 ${r.skippedTracks} 个（本地已有）。")
                         if (r.addedCategories > 0 || r.addedPlaylists > 0) {
                             Spacer(Modifier.height(6.dp))
                             Text(
@@ -247,7 +247,7 @@ internal fun BackupPickerContent(
 ) {
     Column(Modifier.verticalScroll(rememberScrollState())) {
         items.forEach { item ->
-            // 0 首的备份是"空清单"：恢复它不会补回任何条目，却容易被当成"有一份备份"。
+            // 0 个的备份是"空清单"：恢复它不会补回任何条目，却容易被当成"有一份备份"。
             // 标出来并禁选，避免用户把它当成正常备份点下去。
             val empty = item.tracks <= 0
             Row(
@@ -264,7 +264,7 @@ internal fun BackupPickerContent(
                 Column(Modifier.padding(start = 4.dp)) {
                     Text(
                         if (empty) "空备份 · ${backupTime(item.createdAt)}"
-                        else "${item.tracks} 首 · ${backupTime(item.createdAt)}",
+                        else "${item.tracks} 个 · ${backupTime(item.createdAt)}",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
                         color = if (empty) uiMuted() else MaterialTheme.colorScheme.onSurface,

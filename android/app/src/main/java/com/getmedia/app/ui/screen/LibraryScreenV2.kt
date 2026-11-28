@@ -630,9 +630,9 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
         when {
             ready.isEmpty() -> notice = "这里还没有可播放的内容"
             play && ready.none { it.playable } ->
-                notice = "这 ${ready.size} 首都没下载到本机，先在列表里点「下载缺的 ${ready.size} 项」"
+                notice = "这 ${ready.size} 个都没下载到本机，先在列表里点「下载缺的 ${ready.size} 项」"
             play -> {
-                if (missing > 0) notice = "其中 $missing 首本机未下载，播放时会跳过"
+                if (missing > 0) notice = "其中 $missing 个本机未下载，播放时会跳过"
                 if (sourceId == null) PlayerHolder.playSelection(context, ready)
                 else PlayerHolder.playAll(context, ready, sourceId)
             }
@@ -641,7 +641,7 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                 val count = PlayerHolder.append(context, ready)
                 notice = when {
                     count == 0 -> "都已在播放列表中"
-                    missing > 0 -> "已加入 ${MediaWording.counted(tracks.map { it.mediaType }, count)}，其中 $missing 首未下载"
+                    missing > 0 -> "已加入 ${MediaWording.counted(tracks.map { it.mediaType }, count)}，其中 $missing 个未下载"
                     else -> "已加入 ${MediaWording.counted(tracks.map { it.mediaType }, count)}"
                 }
             }

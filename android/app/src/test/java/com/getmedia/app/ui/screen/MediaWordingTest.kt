@@ -40,10 +40,10 @@ class MediaWordingTest {
         assertEquals("3 个音频", MediaWording.counted(audio, 3))
         assertEquals("2 个视频", MediaWording.counted(video, 2))
         assertEquals("3 项", MediaWording.counted(mixed, 3))
-        // 分类卡片沿用「首」这个量词，但只对纯音频成立
-        assertEquals("5 首音频", MediaWording.counted(audio, 5, music = true))
-        assertEquals("5 个视频", MediaWording.counted(video, 5, music = true))
-        assertEquals("5 项", MediaWording.counted(mixed, 5, music = true))
+        // 量词统一用「个」：音频视频混在一起时同一种说法才不会来回跳
+        assertEquals("5 个音频", MediaWording.counted(audio, 5))
+        assertEquals("5 个视频", MediaWording.counted(video, 5))
+        assertEquals("5 项", MediaWording.counted(mixed, 5))
     }
 
     @Test
@@ -73,12 +73,12 @@ class MediaWordingTest {
         assertEquals("删除 1 个视频？", MediaWording.batchDeleteTitle(listOf("VIDEO"), 1))
         assertEquals("删除 1 项？", MediaWording.batchDeleteTitle(emptyList(), 1))
         assertEquals("已删除 1 个视频", MediaWording.batchDeleteDone(listOf("VIDEO"), 1))
-        assertEquals("1 首音频", MediaWording.categoryCount(listOf("AUDIO"), 1))
+        assertEquals("1 个音频", MediaWording.categoryCount(listOf("AUDIO"), 1))
     }
 
     @Test
     fun singleDeleteQuestionFollowsType() {
-        assertEquals("删除这首音频？", MediaWording.deleteOneQuestion(audio))
+        assertEquals("删除这个音频？", MediaWording.deleteOneQuestion(audio))
         assertEquals("删除这个视频？", MediaWording.deleteOneQuestion(video))
     }
 
@@ -88,6 +88,6 @@ class MediaWordingTest {
         assertEquals("分类下的音频", MediaWording.categorySubtitle(audio))
         assertEquals("分类下混有音频和视频", MediaWording.categorySubtitle(mixed))
         assertEquals("5 个视频", MediaWording.categoryCount(video, 5))
-        assertEquals("5 首音频", MediaWording.categoryCount(audio, 5))
+        assertEquals("5 个音频", MediaWording.categoryCount(audio, 5))
     }
 }

@@ -31,7 +31,7 @@ object LibraryLocalEdits {
         if (track.syncState != SyncState.SYNCED.name && track.syncState != LibraryMark.PENDING_UP) return false
         if (track.serverStorage == "archive" && !isLocal(track)) return false
         if (track.sourceTrackId != null || track.locallyEdited) return false
-        return track.restoredKey() != null
+        return identityOf(track) != null
     }
 
     /** 归档行里只有"平台资产"受保护；本机导入的那份是用户自己的备份，可以删。 */
@@ -39,6 +39,29 @@ object LibraryLocalEdits {
         track.serverStorage == "archive" && !isLocal(track)
 
     private fun isLocal(track: TrackEntity): Boolean = track.platform.equals("local", ignoreCase = true)
+
+    /**
+     * 本机导入行的队列身份。
+     *
+     * `videoId` 不随改名变化（改名改的是 `title`，不是这一列），本身就是稳定主键——不需要像
+     * B 站/抖音那样从链接里解析作品号，所以走不到 [restoredIdentity] 那条路（那个函数只认
+     * bilibili / douyin，`local` 落到 `else -> null`）。0.1.36 起新导入的行是 `loc_<uuid>`，
+     * 更早的行是导入时的标题，两者都能当主键，这里不按前缀筛。
+     *
+     * 这一条以前是漏的：`canQueueCloudDelete` 最后一句原本是 `restoredKey() != null`，
+     * 于是**所有本机导入的条目都进不了删除队列**，云端行与归档文件永远删不掉——另一台
+     * 手机还能看到、还能下回来，还白占配额。
+     */
+    private fun localIdentity(track: TrackEntity): RestoredIdentity? {
+        if (!isLocal(track)) return null
+        if (track.videoId.isBlank()) return null
+        val kind = track.mediaType.lowercase().takeIf { it == "audio" || it == "video" } ?: return null
+        return RestoredIdentity("local", track.videoId, 1, kind)
+    }
+
+    /** 删除队列用的身份：平台条目靠链接解析，本机导入靠 `loc_` 编号。 */
+    private fun identityOf(track: TrackEntity): RestoredIdentity? =
+        track.restoredKey() ?: localIdentity(track)
 
     /**
      * 入队；调用方必须已经在 Room 事务里。返回实际入队的条数。
@@ -50,7 +73,7 @@ object LibraryLocalEdits {
               cloudIds: Set<Long>, nowMs: Long): Int {
         var queued = 0
         tracks.filter { it.id in cloudIds && canQueueCloudDelete(it, account) }.forEach { track ->
-            val identity = track.restoredKey() ?: return@forEach
+            val identity = identityOf(track) ?: return@forEach
             val videoKey = LocalIds.key(identity.platform, identity.videoId, identity.page)
             val previous = db.libraryAuxDao().removal(account, identity.platform, videoKey)
             val generation = maxOf(nowMs, (previous?.generation ?: 0L) + 1)
