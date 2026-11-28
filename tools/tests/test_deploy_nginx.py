@@ -247,6 +247,31 @@ def test_body_size_limits(site):
     assert other[0] == 413 and len(site.hits()) == n                           # 其他接口 1m 上限，超限不到应用
 
 
+def test_owner_upload_channel_takes_bodies_well_over_the_shared_server_limit(site):
+    """手机上传本机导入的原件（`POST /v2/tracks/{id}/file`）必须能过 owner 通道。
+
+    回归：夹具的 server 块里带着同机其他项目留下的 `client_max_body_size 1m`。
+    认证子请求 `/_getmedia_owner_check` 若没显式放开就会继承它 —— 子请求不读 body，
+    但大小检查在 location 匹配之后、与是否转发 body 无关，于是**主请求**先被判 413，
+    `auth_request` 拿到 413 后只回 500（实测 0.1.41 归档 162 MB 视频时踩到）。
+    """
+    n = 3 * 1024 * 1024                                                        # 3 MB，远超 server 块的 1m
+    st, _, _ = site.req("POST", "/getmedia/owner/api/v2/tracks/79/file", body=b"x" * n,
+                        headers={"Cookie": "gm_tier=owner", "Content-Type": "application/octet-stream"})
+    assert st == 200
+    assert site.hits()[-1]["path"] == "/v2/tracks/79/file"                      # 前缀剥掉，整个 body 都到了应用
+    assert site.hits()[-1]["body"] == n
+
+
+def test_owner_channel_hides_itself_even_when_the_body_is_huge(site):
+    """匿名带大 body 打 owner 通道：仍是那个 404，不能因为 413 而暴露通道存在。"""
+    n = 3 * 1024 * 1024
+    st, h, body = site.req("POST", "/getmedia/owner/api/v2/tracks/79/file", body=b"x" * n,
+                           headers={"Content-Type": "application/octet-stream"})
+    assert st == 404 and "x-gm-owner" not in h
+    assert all(hit["path"].startswith("/v2/config/owner") for hit in site.hits())
+
+
 # ---------------------------------------------------------------- 限流
 def test_auth_rate_limit_returns_429_and_is_scoped(site):
     codes = [site.req("POST", "/getmedia/api/account/login", body=b"{}", headers={"Content-Type": "application/json"})[0] for _ in range(16)]
