@@ -223,7 +223,7 @@ export function Overview({ cfg, tier }: { cfg: OwnerConfig; tier: string }) {
   const archive = gbParts(cfg.archive_quota_bytes);
   return (
     <>
-      <PageHead title="概览" sub="当前服务端的缓存与提取限额" />
+      <PageHead title="概览" />
 
       <div class="cards">
         <div class="metric">

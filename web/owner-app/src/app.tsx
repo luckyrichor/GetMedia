@@ -14,6 +14,7 @@ import { isApiError, messageFor } from '@shared/errors';
 import { isAdmin } from '@shared/api';
 import { LOGIN_URL, PUBLIC_BASE, ownerApi, type Me, type OwnerConfig } from './api';
 import { Link, navigate, useRoute } from './router';
+import { prefetchLists } from './swr';
 import { Overview, Placeholder, sectionFor, visibleSections } from './sections';
 import { SectionIcon } from './icons';
 import { FeedbackPage } from './pages/feedback';
@@ -60,16 +61,28 @@ function useGate(): { gate: Gate; retry: () => void } {
     let alive = true;
     setGate({ k: 'loading' });
     (async () => {
-      try {
-        const cfg = await ownerApi.config();
-        const me = await ownerApi.me();
-        if (alive) setGate({ k: 'ready', cfg, me });
-      } catch (e) {
-        if (!alive) return;
-        if (isApiError(e) && e.status === 404) setGate({ k: 'hidden' });
-        else if (isApiError(e) && e.status === 401) setGate({ k: 'login' });
-        else if (isApiError(e) && e.status === 403) setGate({ k: 'forbidden' });
-        else setGate({ k: 'error', message: messageFor(e) });
+      /** 两个请求**并行**发：探针和账号信息互不依赖，串行等于白等一个跨境往返。
+       *  代价是「通道被隐藏」时也会多打一次 `/account/me`——边缘对这两条路径一律回 404，
+       *  所以不会因此暴露管理台的存在（见 nginx 的 `getmedia-prefix.conf`）。
+       *
+       *  判定优先级沿用串行时的顺序：隐藏 > 未登录 > 无权限 > 其他错误，
+       *  这样「两个都 404」和「404 + 401」都仍然落回「页面不存在」。 */
+      const [cfgR, meR] = await Promise.allSettled([ownerApi.config(), ownerApi.me()]);
+      if (!alive) return;
+      const errs = [cfgR, meR]
+        .filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        .map((r) => r.reason as unknown);
+      const hit = (code: number) => errs.some((e) => isApiError(e) && e.status === code);
+      if (hit(404)) setGate({ k: 'hidden' });
+      else if (hit(401)) setGate({ k: 'login' });
+      else if (hit(403)) setGate({ k: 'forbidden' });
+      else if (errs.length > 0) setGate({ k: 'error', message: messageFor(errs[0]) });
+      else {
+        setGate({
+          k: 'ready',
+          cfg: (cfgR as PromiseFulfilledResult<OwnerConfig>).value,
+          me: (meR as PromiseFulfilledResult<Me>).value,
+        });
       }
     })();
     return () => {
@@ -252,6 +265,13 @@ export function App() {
     // 从栏目页直接刷新时，路由已经在 URL 里；这里只保证首屏不滚到中间
     window.scrollTo(0, 0);
   }, []);
+
+  /** 身份一确认就空闲预取三个列表页的数据（媒体库 / 单个提取 / 批量提取）。
+   *  它们是最常切过去的页面，提前拉好，第一次点进去也不用干等一个来回。
+   *  失败静默：页面自己挂载时还会再拉。 */
+  useEffect(() => {
+    if (gate.k === 'ready') prefetchLists();
+  }, [gate.k]);
 
   switch (gate.k) {
     case 'loading':

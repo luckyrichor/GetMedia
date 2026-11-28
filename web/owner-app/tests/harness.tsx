@@ -7,6 +7,7 @@ import { render } from 'preact';
 import { act } from 'preact/test-utils';
 import { vi } from 'vitest';
 import { App } from '../src/app';
+import { clearCache } from '../src/swr';
 
 export interface Reply { status?: number; json?: unknown }
 export interface Call { method: string; path: string; search: string; body?: unknown }
@@ -102,4 +103,6 @@ export function cleanup() {
     container = null;
   }
   calls.length = 0;
+  // 页面之间的列表缓存是模块级的：不清掉，下一个用例会读到上一个用例的数据
+  clearCache();
 }

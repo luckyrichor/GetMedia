@@ -6,6 +6,7 @@ import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { Link } from './router';
+import { Select } from './select';
 
 export type Loaded<T> = { k: 'loading' } | { k: 'error'; message: string } | { k: 'ok'; data: T };
 
@@ -151,7 +152,10 @@ export function Segmented({ items, value, onChange, ariaLabel }: {
           onClick={() => onChange(it.key)}
         >
           {it.label}
-          {typeof it.n === 'number' ? <span class="seg-n">{it.n}</span> : null}
+          {/* 数量为 0 的段（「排队中 0」）压淡一点：它还是能点，只是提示"点进去是空的" */}
+          {typeof it.n === 'number'
+            ? <span class={it.n === 0 ? 'seg-n zero' : 'seg-n'}>{it.n}</span>
+            : null}
         </button>
       ))}
     </div>
@@ -501,6 +505,125 @@ export function Field({ label, value, mono }: { label: string; value: ComponentC
   );
 }
 
+/** 确认弹窗：替掉 `window.confirm`。
+ *
+ *  原生 confirm 会把「<服务器 IP> 显示：」这句浏览器自带的前缀也画出来，跟页面完全不是一个语气；
+ *  而且它拦不住"删多少条"这种需要列清单的场景。
+ *
+ *  - `danger` 时确认键走红色（`.btn-danger`），和页面里的「播放 / 下载」拉开距离；
+ *  - **默认焦点放在「取消」**：这两个按钮是并排的，误按一次回车的代价是删数据，不值得；
+ *  - 两个按钮都受 `busy` 控制，提交中连点不会重复发请求。
+ */
+export function ConfirmDialog({ title, children, confirmText = '确定', danger = false,
+  busy = false, onConfirm, onCancel }: {
+  title: string;
+  children?: ComponentChildren;
+  confirmText?: string;
+  danger?: boolean;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal title={title} onClose={onCancel}>
+      <div class="confirm-body">{children}</div>
+      <div class="filter-row modal-actions">
+        {/* 取消在前：Modal 打开时把焦点给第一个按钮，正好落在「取消」上 */}
+        <button type="button" class="btn btn-ghost" disabled={busy} onClick={onCancel}>取消</button>
+        <button type="button" class={danger ? 'btn btn-danger' : 'btn'} disabled={busy} onClick={onConfirm}>
+          {confirmText}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/** 页码序列：≤7 页全列，否则首尾 + 当前左右各一页，中间省略号。
+ *  批量提取的分页与媒体库共用（原来写在 `pages/creators.tsx` 里）。 */
+export function pageList(cur: number, pages: number): (number | '…')[] {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const out: (number | '…')[] = [1];
+  const from = Math.max(2, cur - 1);
+  const to = Math.min(pages - 1, cur + 1);
+  if (from > 2) out.push('…');
+  for (let p = from; p <= to; p++) out.push(p);
+  if (to < pages - 1) out.push('…');
+  out.push(pages);
+  return out;
+}
+
+/** 分页条：只有一页时整条不渲染（不占位置，也不留一条空导航）。
+ *
+ *  例外：给了 `onPageSize` 就**一定要渲染**——只有 1 页时也得让用户能把「每页 20 条」
+ *  改回 5 条，否则切到 20 条后整条消失，就再也切不回来了。
+ */
+export function Pager({ page, pages, onPage, total, unit = '条', label = '分页',
+  pageSize, sizeOptions, onPageSize }: {
+  page: number;
+  pages: number;
+  onPage: (p: number) => void;
+  /** 总条数：给了就在右侧补一句「共 N 条」，省得用户自己按页数乘 */
+  total?: number;
+  unit?: string;
+  label?: string;
+  /** 每页条数（配合 `sizeOptions` / `onPageSize` 才出现选择器） */
+  pageSize?: number;
+  sizeOptions?: readonly number[];
+  onPageSize?: (n: number) => void;
+}) {
+  const canSize = !!(onPageSize && sizeOptions && sizeOptions.length > 1 && pageSize);
+  if (pages <= 1 && !canSize) return null;
+  const multi = pages > 1;
+  return (
+    <nav class="pager" aria-label={label}>
+      {multi && (
+        <button type="button" class="btn btn-ghost small" disabled={page <= 1}
+                onClick={() => onPage(page - 1)}>
+          上一页
+        </button>
+      )}
+      {multi && pageList(page, pages).map((p) => (
+        p === '…'
+          ? <span class="pager-gap" aria-hidden="true">…</span>
+          : (
+            <button
+              type="button"
+              class={p === page ? 'btn small pager-on' : 'btn btn-ghost small'}
+              aria-current={p === page ? 'page' : undefined}
+              onClick={() => onPage(p)}
+            >
+              {p}
+            </button>
+          )
+      ))}
+      {/* 右侧一组：每页条数 + 「第 x / y 页，共 N 条」。整体 margin-left:auto 右推，
+          这样「下一页」始终是最后一项、位置不随页码按钮数量漂移。 */}
+      <div class="pager-meta">
+        {canSize && (
+          <span class="pager-size">
+            <span class="small muted">每页</span>
+            <Select
+              value={String(pageSize)}
+              options={sizeOptions!.map((n) => ({ value: String(n), label: `${n} 条` }))}
+              onChange={(v) => onPageSize!(Number(v))}
+              ariaLabel="每页显示条数"
+            />
+          </span>
+        )}
+        <span class="small muted pager-total">
+          第 {page} / {pages} 页{total == null ? '' : `，共 ${total} ${unit}`}
+        </span>
+      </div>
+      {multi && (
+        <button type="button" class="btn btn-ghost small" disabled={page >= pages}
+                onClick={() => onPage(page + 1)}>
+          下一页
+        </button>
+      )}
+    </nav>
+  );
+}
+
 /** 表格里的时间：日期一段（正常色）+ 时分一段（小一号、淡灰），整格不显得笨重。
  *
  *  `at` 为空给「—」（邀请码的到期时间 / 使用时间本来就可能是空）。
@@ -519,7 +642,7 @@ export function DateTimeCell({ at, cls, secs = true }: {
   );
 }
 
-export type ToastKind = 'ok' | 'err';
+export type ToastKind = 'ok' | 'err' | 'warn';
 export interface ToastAction { label: string; onClick: () => void }
 
 /** 轻量提示条：底部居中浮一条，到点自己消失。

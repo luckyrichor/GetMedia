@@ -8,7 +8,7 @@
  * 下方任务列表按批量提取页的规范做成表格：状态分段 + 平台 / 类型 / 存放方式 / 昵称 / 发起时间筛选，
  * 视觉与「权限管理」「邀请码」「批量提取」同一套，见 styles.css 的「单个提取页」段。
  */
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import {
   downloadUrl, ownerApi, type ExtractionJob, type FormatKey, type MediaType,
@@ -16,8 +16,9 @@ import {
 } from '../api';
 import { FORMAT, FORMATS_OF, FORMAT_TIP, STORAGE, STORAGE_DESC, platformName } from '../labels';
 import { Select } from '../select';
+import { KEYS, loadOnce, peek } from '../swr';
 import {
-  BytesCell, DateRange, DateTimeCell, ErrorBox, Loading, PageHead, Segmented,
+  BytesCell, DateRange, DateTimeCell, ErrorBox, Loading, PageHead, Pager, Segmented,
   dayEndSec, dayStartSec,
   fmtBytes, fmtDateTime, fmtDuration, relTime, useToast,
 } from '../ui';
@@ -40,6 +41,31 @@ const STATUS_TONE: Record<string, string> = {
   failed: 'bad',
 };
 const STATUS_KEYS = ['queued', 'running', 'done', 'failed'] as const;
+
+/** 每页条数：默认 5 条，可选 5 / 10 / 20。
+ *  任务是一次全量拉回来的（`/v2/extraction-jobs?limit=50`），所以分页纯在前端做，不动接口。
+ *  选过的值记在 localStorage 里——刷新一次就跳回 5 条，等于这个设置白给了。 */
+const PAGE_SIZES = [5, 10, 20] as const;
+const PAGE_SIZE_DEFAULT = PAGE_SIZES[0];
+const PAGE_SIZE_KEY = 'getmedia.extract.pageSize';
+
+function readPageSize(): number {
+  try {
+    const n = Number(localStorage.getItem(PAGE_SIZE_KEY));
+    return (PAGE_SIZES as readonly number[]).includes(n) ? n : PAGE_SIZE_DEFAULT;
+  } catch {
+    // 隐私模式下 localStorage 会抛，读不到就用默认值
+    return PAGE_SIZE_DEFAULT;
+  }
+}
+
+function savePageSize(n: number) {
+  try {
+    localStorage.setItem(PAGE_SIZE_KEY, String(n));
+  } catch {
+    /* 存不了就算了，不影响本次使用 */
+  }
+}
 
 /** 表格列。宽度由 styles.css 的 `--e-*` 变量给，`<col style="width: var(--e-*)">` 引用。 */
 const COLS: { label: string; cls: string; mid?: boolean; tip?: string }[] = [
@@ -74,8 +100,10 @@ export function ExtractPage() {
   const [err, setErr] = useState('');
 
   // —— 任务列表 ——
-  const [jobs, setJobs] = useState<ExtractionJob[]>([]);
-  const [jobsPhase, setJobsPhase] = useState<'loading' | 'ok' | 'error'>('loading');
+  /** 上次拉到的任务：有就直接当初始值，切回本页立刻有内容，不用再等一个来回。 */
+  const cachedJobs = peek<ExtractionJob[]>(KEYS.extractionJobs);
+  const [jobs, setJobs] = useState<ExtractionJob[]>(cachedJobs ?? []);
+  const [jobsPhase, setJobsPhase] = useState<'loading' | 'ok' | 'error'>(cachedJobs ? 'ok' : 'loading');
   const [jobsErr, setJobsErr] = useState('');
 
   // —— 筛选：每项为空 = 不筛；多项之间是「且」关系 ——
@@ -88,12 +116,16 @@ export function ExtractPage() {
   const [fSince, setFSince] = useState('');
   const [fUntil, setFUntil] = useState('');
 
+  /** 第几页（1 起）与每页条数：筛选一变就回第 1 页，否则会停在一个已经不存在的页码上。 */
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(readPageSize);
+
   const timer = useRef<number | null>(null);
 
   async function loadJobs(silent = false) {
     if (!silent) setJobsPhase('loading');
     try {
-      setJobs(await ownerApi.extractionJobs());
+      setJobs(await loadOnce(KEYS.extractionJobs, () => ownerApi.extractionJobs()));
       setJobsPhase('ok');
       setJobsErr('');
     } catch (e) {
@@ -103,11 +135,17 @@ export function ExtractPage() {
   }
 
   useEffect(() => {
-    void loadJobs();
+    // 有缓存时静默刷新：列表先出来，再在背后对齐服务端
+    void loadJobs(!!cachedJobs);
     return () => {
       if (timer.current) window.clearInterval(timer.current);
     };
   }, []);
+
+  /** 筛选条件或每页条数一变就回第 1 页：留在第 3 页看新结果没有意义。 */
+  useEffect(() => {
+    setPage(1);
+  }, [fStatus, fNick, fPlatform, fMedia, fStorage, fSince, fUntil, pageSize]);
 
   // 有在跑的任务才轮询，跑完就停（不留一个永远转的定时器）
   const active = jobs.some((j) => j.status === 'queued' || j.status === 'running');
@@ -204,7 +242,16 @@ export function ExtractPage() {
     return true;
   }
 
-  const shown = jobs.filter(matchesFilters);
+  /** 过滤后的全部命中项（分页之前） */
+  const filtered = jobs.filter(matchesFilters);
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  /** 删到只剩一页 / 换了筛选条件时页码可能越界，渲染与翻页都按夹住后的页码来 */
+  const pageSafe = Math.min(page, pages);
+  /** 当前页真正渲染出来的那些行 */
+  const shown = useMemo(
+    () => filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [filtered, pageSafe, pageSize],
+  );
   const hasFilter = fStatus !== '' || fNick.trim() !== '' || fPlatform !== ''
     || fMedia !== '' || fStorage !== '' || fSince !== '' || fUntil !== '';
   /** 状态分段的每段数量：任务是一次全量拉回来的，所以这些数字是准的。 */
@@ -380,7 +427,7 @@ export function ExtractPage() {
         {jobsPhase === 'loading' ? <Loading what="提取任务" /> : null}
         {jobsPhase === 'error' ? <ErrorBox message={jobsErr} retry={() => void loadJobs()} /> : null}
 
-        {jobsPhase === 'ok' && shown.length === 0 ? (
+        {jobsPhase === 'ok' && filtered.length === 0 ? (
           <div class="empty-state">
             <p>{jobs.length === 0 ? '还没有提取任务' : '没有符合条件的任务'}</p>
             {jobs.length === 0 ? (
@@ -411,24 +458,24 @@ export function ExtractPage() {
                   const downloadable = j.status === 'done' && !!j.track_id && j.storage !== 'metadata';
                   return (
                     <tr data-job={j.id}>
-                      <td class="e-no muted">{idx + 1}</td>
+                      <td class="e-no muted">{(pageSafe - 1) * pageSize + idx + 1}</td>
                       <td class="e-title">
-                        {/* 两行共用一个横向滚动容器：滚动条落在「作品号 / 失败原因」那一行下方的
-                            留白里，不会像原来那样浮在标题文字上把它盖住（macOS 是覆盖式滚动条，
-                            浮在内容上方、不占布局高度，所以必须留出真实的空白给它）。 */}
-                        <div class="t-scroll">
-                          <div class="t-main" title={j.title || j.input}>{j.title || j.input}</div>
-                          {/* 失败的任务把原因写在这行（不藏在 tooltip 里）：这条列宽够，
-                              而且失败时作品号没什么用，位置让给原因更值 */}
-                          {j.status === 'failed' && j.error_detail ? (
-                            <div class="t-sub bad-text" title={j.error_detail}>{j.error_detail}</div>
-                          ) : (
-                            <div class="t-sub">{j.video_id || '—'}</div>
-                          )}
-                        </div>
+                        {/* 标题单行、超出用省略号（悬停看全文）；失败原因最多两行。
+                            以前这里是横向滚动：格子里再套一个滚动条，既跟表格本身的横滚打架，
+                            鼠标滚轮划过时还会把页面滚走。 */}
+                        <div class="t-main" title={j.title || j.input}>{j.title || j.input}</div>
+                        {/* 失败的任务把原因写在这行（不藏在 tooltip 里）：这条列宽够，
+                            而且失败时作品号没什么用，位置让给原因更值 */}
+                        {j.status === 'failed' && j.error_detail ? (
+                          <div class="t-sub bad-text" title={j.error_detail}>{j.error_detail}</div>
+                        ) : (
+                          <div class="t-sub">{j.video_id || '—'}</div>
+                        )}
                       </td>
                       <td class="e-who">
-                        <div class="who-name" title={j.uploader ?? ''}>{j.uploader || '昵称未知'}</div>
+                        <div class={j.uploader ? 'who-name' : 'who-name weak'} title={j.uploader ?? ''}>
+                          {j.uploader || '昵称未知'}
+                        </div>
                         <div class="who-sub">{platformName(j.platform)}</div>
                       </td>
                       <td>
@@ -452,12 +499,19 @@ export function ExtractPage() {
                       <td class="e-ops">
                         <div class="row-ops">
                           {downloadable ? (
-                            <a class="text-btn" href={downloadUrl(j.track_id!)} download>下载</a>
+                            <a class="btn btn-ghost small" href={downloadUrl(j.track_id!)} download>下载</a>
                           ) : null}
                           {j.status === 'failed' ? (
-                            <button type="button" class="text-btn" onClick={() => void retry(j)}>重试</button>
+                            <button type="button" class="btn btn-ghost small" onClick={() => void retry(j)}>重试</button>
                           ) : null}
-                          {!downloadable && j.status !== 'failed' ? <span class="muted">—</span> : null}
+                          {/* 已入库但「只存元数据」：服务端没有文件可下，这是预期行为不是漏了按钮，
+                              所以写「无文件」并说明原因，而不是一个让人以为出错的「—」。 */}
+                          {!downloadable && j.status === 'done' ? (
+                            <span class="ops-none" title="这条只存了元数据，服务器上没有文件，无法下载">无文件</span>
+                          ) : null}
+                          {!downloadable && j.status !== 'done' && j.status !== 'failed'
+                            ? <span class="muted">—</span>
+                            : null}
                         </div>
                       </td>
                     </tr>
@@ -468,10 +522,23 @@ export function ExtractPage() {
           </div>
         ) : null}
 
-        {shown.length > 0 ? (
+        {filtered.length > 0 ? (
           <div class="box-foot">
-            <span class="small muted">共 {shown.length} 条</span>
-            {active ? <span class="foot-page small muted">有任务在跑，每 2 秒自动刷新</span> : null}
+            {/* 左边：总数 + 轮询提示；右边：分页器 + 每页条数（`.pager` 自己右推） */}
+            <span class="small muted">共 {filtered.length} 条</span>
+            {active ? <span class="small muted">有任务在跑，每 2 秒自动刷新</span> : null}
+            <Pager
+              page={pageSafe}
+              pages={pages}
+              onPage={setPage}
+              label="提取任务分页"
+              pageSize={pageSize}
+              sizeOptions={PAGE_SIZES}
+              onPageSize={(n) => {
+                savePageSize(n);
+                setPageSize(n);
+              }}
+            />
           </div>
         ) : null}
       </section>

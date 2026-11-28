@@ -22,13 +22,33 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { messageFor } from '@shared/errors';
 import { downloadUrl, mediaUrl, ownerApi, type MediaType, type Track } from '../api';
 import { Select } from '../select';
-import { Chips, DateInput, Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading } from '../ui';
+import { KEYS, loadOnce, peek } from '../swr';
+import { Chips, ConfirmDialog, DateInput, Empty, ErrorBox, fmtBytes, fmtDuration, fmtTime, Loading, PageHead, Pager, useToast } from '../ui';
 
-const STORAGE_LABEL: Record<Track['storage'], string> = {
-  archive: '存储',
-  cache: '缓存',
-  metadata: '元数据',
-};
+/** 每页条数：默认 5 条，用户可在 5 / 10 / 20 之间自选。
+ *  5 条在 1080p 下正好不用滚动就能看全；要快速扫一大段就切 20 条。
+ *  选过的值记在 localStorage 里——刷新一次就跳回 5 条，等于这个设置白给了。 */
+const PAGE_SIZES = [5, 10, 20] as const;
+const PAGE_SIZE_DEFAULT = PAGE_SIZES[0];
+const PAGE_SIZE_KEY = 'getmedia.library.pageSize';
+
+function readPageSize(): number {
+  try {
+    const n = Number(localStorage.getItem(PAGE_SIZE_KEY));
+    return (PAGE_SIZES as readonly number[]).includes(n) ? n : PAGE_SIZE_DEFAULT;
+  } catch {
+    // 隐私模式下 localStorage 会抛，读不到就用默认值
+    return PAGE_SIZE_DEFAULT;
+  }
+}
+
+function savePageSize(n: number) {
+  try {
+    localStorage.setItem(PAGE_SIZE_KEY, String(n));
+  } catch {
+    /* 存不了就算了，不影响本次使用 */
+  }
+}
 
 type SortField = 'created' | 'duration' | 'title' | 'bytes';
 type SortDir = 'asc' | 'desc';
@@ -40,10 +60,10 @@ const SORT_FIELDS: {
   dir: SortDir;
   dirLabel: Record<SortDir, string>;
 }[] = [
-  { key: 'created', label: '时间', dir: 'desc', dirLabel: { desc: '新→旧', asc: '旧→新' } },
-  { key: 'duration', label: '时长', dir: 'desc', dirLabel: { desc: '长→短', asc: '短→长' } },
+  { key: 'created', label: '时间', dir: 'desc', dirLabel: { desc: '最新在前', asc: '最早在前' } },
+  { key: 'duration', label: '时长', dir: 'desc', dirLabel: { desc: '最长在前', asc: '最短在前' } },
   { key: 'title', label: '标题', dir: 'asc', dirLabel: { desc: 'Z→A', asc: 'A→Z' } },
-  { key: 'bytes', label: '文件大小', dir: 'desc', dirLabel: { desc: '大→小', asc: '小→大' } },
+  { key: 'bytes', label: '大小', dir: 'desc', dirLabel: { desc: '最大在前', asc: '最小在前' } },
 ];
 
 const PLATFORMS = [
@@ -70,14 +90,29 @@ function localId(): string {
   return `local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** 文件状态那一格：把「存放方式」和「有没有文件」并成一句人话。
+ *
+ *  服务端 `storage` 有三种（`server/getmedia/media.py` 顶部）：
+ *  - `archive`：文件长期存在 media_dir，**计入 owner 配额** → 「已存储 3.9 MB」
+ *  - `cache`：文件在 cache_dir，**到期会被清掉** → 「已缓存 3.9 MB」（不能也叫"存储"）
+ *  - `metadata`：只有一行记录，媒体始终由客户端当场解析 → 「仅元数据」
+ *  有没有文件看的是 `has_file`（= `media_path IS NOT NULL`），不是 `storage` 本身，
+ *  所以这里以 `has_file` 为准，`storage` 只决定用「已存储」还是「已缓存」。 */
+function fileState(t: Track): string {
+  if (!t.has_file) return '仅元数据';
+  return `${t.storage === 'cache' ? '已缓存' : '已存储'} ${fmtBytes(t.bytes)}`;
+}
+
 /** 行里那行小字显示平台，别把 `local` 这种内部值直接摊给用户看。 */
 function platformLabel(p: string): string {
   return PLATFORMS.find((x) => x.value === p)?.label ?? p;
 }
 
 export function LibraryPage() {
-  const [items, setItems] = useState<Track[]>([]);
-  const [phase, setPhase] = useState<'loading' | 'ok' | 'error'>('loading');
+  /** 上次拉到的列表：有就直接拿来当初始值，切回这一页立刻有内容，不用再等一个来回。 */
+  const cached = peek<Track[]>(KEYS.tracks);
+  const [items, setItems] = useState<Track[]>(cached ?? []);
+  const [phase, setPhase] = useState<'loading' | 'ok' | 'error'>(cached ? 'ok' : 'loading');
   const [err, setErr] = useState('');
   const [kind, setKind] = useState<MediaType>('audio');
   const [q, setQ] = useState('');
@@ -87,11 +122,21 @@ export function LibraryPage() {
   const [to, setTo] = useState('');
   const [sortField, setSortField] = useState<SortField>('created');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
+  /** 第几页（1 起）。筛选/排序一变就回第 1 页，否则会停在一个已经不存在的页码上。 */
+  const [page, setPage] = useState(1);
+  /** 每页条数：初值取上次选过的（读不到就是 5）。 */
+  const [pageSize, setPageSize] = useState(readPageSize);
   const [playing, setPlaying] = useState<number | null>(null);
   /** 展开着的那个播放器是否处于暂停：跟着媒体元素自己的 play/pause 事件走。 */
   const [paused, setPaused] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
+  /** 待确认的删除：单条记 id，批量记 id 数组。null = 没弹窗。
+   *  用页面内的 `ConfirmDialog` 而不是原生 `confirm`——后者会带出「<IP> 显示：」那串前缀。 */
+  const [confirming, setConfirming] = useState<
+    { kind: 'one'; track: Track } | { kind: 'many'; ids: number[] } | null
+  >(null);
+  const toast = useToast();
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState('');
   /** 挂在当前展开的播放器上：暂停/继续要直接操作媒体元素，不能靠重渲染。 */
@@ -140,25 +185,44 @@ export function LibraryPage() {
     if (ok > 0) await load();
   }
 
-  async function load() {
-    setPhase('loading');
+  /** `quiet` = 不切到「加载中」：批量删除后重新对齐服务端状态时用，
+   *  否则整张列表会闪一下、勾选和滚动位置也跟着跳。 */
+  async function load(quiet = false) {
+    if (!quiet) setPhase('loading');
     try {
-      setItems(await ownerApi.tracks());
+      // 走 `loadOnce`：预取已经在拉的话直接复用那一个请求，不重复发
+      setItems(await loadOnce(KEYS.tracks, () => ownerApi.tracks()));
       setPhase('ok');
     } catch (e) {
       setErr(messageFor(e));
-      setPhase('error');
+      if (!quiet) setPhase('error');
     }
   }
 
   useEffect(() => {
-    void load();
+    // 有缓存时静默刷新：先让用户看见列表，再在背后对齐服务端
+    void load(!!cached);
   }, []);
+
+  /** 筛选/排序/标签页一变就清空选中，并且回到第 1 页。
+   *
+   *  列表是**纯前端过滤**，所以「选中了但看不见」没有任何正当场景；而批量删除不可逆，
+   *  宁可让用户重勾一次，也不能让他在「已选 4 项 / 本页 0 项」的状态下按删除。
+   *  翻页同样清空——批量动作只作用于当前这一页看得见的条目。
+   *  `prev.length ? [] : prev` 是为了空选中时不触发一次多余的重渲染。 */
+  useEffect(() => {
+    setPage(1);
+  }, [kind, q, platform, onlyFile, from, to, sortField, sortDir, pageSize]);
+
+  useEffect(() => {
+    setPicked((prev) => (prev.length ? [] : prev));
+  }, [kind, q, platform, onlyFile, from, to, sortField, sortDir, page, pageSize]);
 
   const audioN = items.filter((t) => t.media_type === 'audio').length;
   const videoN = items.length - audioN;
 
-  const shown = useMemo(() => {
+  /** 全部命中的条目（未分页）。计数、空状态都看它。 */
+  const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const startMs = from ? new Date(`${from}T00:00:00`).getTime() : null;
     const endMs = to ? new Date(`${to}T23:59:59`).getTime() : null;
@@ -188,7 +252,18 @@ export function LibraryPage() {
     });
   }, [items, kind, q, platform, onlyFile, from, to, sortField, sortDir]);
 
-  const pickedTracks = items.filter((t) => picked.includes(t.id));
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  /** 删到只剩一页时页码可能越界，渲染与翻页都按夹住后的页码来，免得出现空页 */
+  const pageSafe = Math.min(page, pages);
+  /** 当前页真正渲染出来的条目 = 用户能勾选的那一批 */
+  const shown = useMemo(
+    () => filtered.slice((pageSafe - 1) * pageSize, pageSafe * pageSize),
+    [filtered, pageSafe, pageSize],
+  );
+
+  /** 批量动作只认「当前列表里看得见 + 勾上了」的交集：`picked` 里即便混进了不可见的 id，
+   *  也不会被批量下载/删除碰到。计数也用它，避免「已选 N 项」比列表里的勾还多。 */
+  const pickedTracks = shown.filter((t) => picked.includes(t.id));
   const allShownPicked = shown.length > 0 && shown.every((t) => picked.includes(t.id));
 
   function replace(next: Track) {
@@ -251,10 +326,18 @@ export function LibraryPage() {
     setPicked((prev) => (on ? [...new Set([...prev, ...ids])] : prev.filter((x) => !ids.includes(x))));
   }
 
-  /** 批量下载：逐个点一个隐藏的 `<a download>`，间隔一点，免得浏览器把连发当弹窗拦掉。 */
+  /** 批量下载：逐个点一个隐藏的 `<a download>`，间隔一点，免得浏览器把连发当弹窗拦掉。
+   *
+   *  「仅元数据」的条目也**能**下载：`GET /v2/media/{id}` 在服务器没有文件时会当场解析并中转
+   *  （见 `server/getmedia/media_api.py` 的 `/v2/media/{id}`）。真正取不到的是连 `source_url`
+   *  都没有的条目，这类要明确告诉用户跳过了几条，而不是静默少下几个文件。 */
   async function downloadPicked() {
     const list = pickedTracks.filter((t) => t.has_file || t.source_url);
-    if (list.length === 0) return;
+    const skipped = pickedTracks.length - list.length;
+    if (list.length === 0) {
+      toast.show(`没有可下载的条目：${skipped} 项既没有文件也没有来源链接`, 'warn');
+      return;
+    }
     setBusy(true);
     try {
       for (const [i, t] of list.entries()) {
@@ -268,38 +351,40 @@ export function LibraryPage() {
         a.remove();
       }
       setErr('');
+      // 批量动作收尾：清掉勾选，别让用户对着"已选 N 项"再点一次
+      setPicked([]);
+      toast.show(
+        skipped > 0 ? `已下载 ${list.length} 项，跳过 ${skipped} 项（无文件）` : `已开始下载 ${list.length} 项`,
+        skipped > 0 ? 'warn' : 'ok',
+      );
     } finally {
       setBusy(false);
     }
   }
 
-  /** 删除整条：只有一次确认，不解释服务端到底怎么删。 */
-  async function removeTrack(t: Track) {
-    if (!confirm(`确定删除《${t.title || '无标题'}》吗？`)) return;
-    setBusy(true);
-    try {
-      await ownerApi.deleteTrack(t.id);
-      setItems((prev) => prev.filter((x) => x.id !== t.id));
-      setPicked((prev) => prev.filter((id) => id !== t.id));
-      setPlaying((prev) => (prev === t.id ? null : prev));
-      setErr('');
-    } catch (e) {
-      setErr(messageFor(e));
-    } finally {
-      setBusy(false);
-    }
+  /** 单条删除：只弹一次确认，弹窗里写明要删哪一条。 */
+  function askRemove(t: Track) {
+    setConfirming({ kind: 'one', track: t });
   }
 
-  async function removePicked() {
-    const list = pickedTracks;
-    if (list.length === 0) return;
-    if (!confirm(`确定删除选中的 ${list.length} 项吗？`)) return;
+  /** 批量删除：确认框里写数量 + 前三个标题，其余用「等 N 项」概括。 */
+  function askRemovePicked() {
+    if (pickedTracks.length === 0) return;
+    setConfirming({ kind: 'many', ids: pickedTracks.map((t) => t.id) });
+  }
+
+  /** 真正执行删除。单条与批量共用一段：失败到一半也把已删的从列表里摘掉，
+   *  然后统一清勾选、向服务端对齐一次。 */
+  async function doRemove() {
+    const c = confirming;
+    if (!c) return;
+    const ids = c.kind === 'one' ? [c.track.id] : c.ids;
     setBusy(true);
     const gone: number[] = [];
     try {
-      for (const t of list) {
-        await ownerApi.deleteTrack(t.id);
-        gone.push(t.id);
+      for (const id of ids) {
+        await ownerApi.deleteTrack(id);
+        gone.push(id);
       }
       setErr('');
     } catch (e) {
@@ -307,15 +392,19 @@ export function LibraryPage() {
     } finally {
       const removed = new Set(gone);
       setItems((prev) => prev.filter((t) => !removed.has(t.id)));
-      setPicked((prev) => prev.filter((id) => !removed.has(id)));
+      // 单条删除只把这一条从选中里摘掉（用户可能还勾着别的）；
+      // 批量删除成功也好、删到一半失败也好，勾选一律清空——剩下的半截选中没有意义。
+      setPicked((prev) => (c.kind === 'one' ? prev.filter((id) => !removed.has(id)) : []));
       if (playing != null && removed.has(playing)) setPlaying(null);
+      setConfirming(null);
       setBusy(false);
+      void load(true);
     }
   }
 
   return (
     <>
-      <h1>媒体库</h1>
+      <PageHead title="媒体库" />
 
       {/* 上传本地文件：建一条 platform=local 的条目再传原件，和手机端"本机导入"是同一条路径 */}
       <div class="toolbar">
@@ -338,6 +427,7 @@ export function LibraryPage() {
         />
         <span class="small muted">
           可多选；单个不超过 {fmtBytes(UP_LIMIT)}。原件存进服务器「存储」，计入账号配额。
+          <strong>双击标题可改名。</strong>
         </span>
       </div>
 
@@ -381,68 +471,70 @@ export function LibraryPage() {
             <span class="small muted">共 {items.length} 条</span>
           </div>
 
+          {/* 筛选区一行放完：搜索 / 平台 / 起止日期 / 只看有文件 / 排序。
+              窄屏靠 flex-wrap 自己换行，不再人为拆成两行（两行各空一半才是真浪费）。 */}
           <div class="filters">
-            <div class="filter-row">
-              <input
-                class="search"
-                type="search"
-                placeholder="搜标题、UP 主、作品号"
-                value={q}
-                onInput={(e) => setQ((e.target as HTMLInputElement).value)}
-                aria-label="搜索媒体库"
-              />
-              <div class="filter-select">
-                <Select value={platform} options={PLATFORMS} onChange={setPlatform} ariaLabel="按平台筛选" />
-              </div>
-              <SortSplit
-                field={sortField}
-                dir={sortDir}
-                onField={(f) => {
-                  setSortField(f);
-                  setSortDir(SORT_FIELDS.find((x) => x.key === f)!.dir);
-                }}
-                onFlip={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
-              />
+            <input
+              class="search"
+              type="search"
+              placeholder="搜标题、UP 主、作品号"
+              value={q}
+              onInput={(e) => setQ((e.target as HTMLInputElement).value)}
+              aria-label="搜索媒体库"
+            />
+            <div class="filter-select">
+              <Select value={platform} options={PLATFORMS} onChange={setPlatform} ariaLabel="按平台筛选" />
             </div>
-            <div class="filter-row dates">
-              <label class="small muted date-field">
-                从
-                <DateInput class="search date" label="起始日期" value={from} onInput={setFrom} />
-              </label>
-              <label class="small muted date-field">
-                到
-                <DateInput class="search date" label="结束日期" value={to} onInput={setTo} />
-              </label>
-              <label class="small muted check-field">
-                <input type="checkbox" checked={onlyFile} aria-label="只看服务器有文件的"
-                       onChange={(e) => setOnlyFile((e.target as HTMLInputElement).checked)} />
-                只看有文件
-              </label>
-            </div>
+            <span class="date-range-inline">
+              <DateInput class="search date" label="起始日期" placeholder="开始" value={from} onInput={setFrom} />
+              <span class="sep" aria-hidden="true">至</span>
+              <DateInput class="search date" label="结束日期" placeholder="结束" value={to} onInput={setTo} />
+            </span>
+            <label class="small muted check-field">
+              <input type="checkbox" checked={onlyFile} aria-label="只看服务器有文件的"
+                     onChange={(e) => setOnlyFile((e.target as HTMLInputElement).checked)} />
+              只看有文件
+            </label>
+            <SortSplit
+              field={sortField}
+              dir={sortDir}
+              onField={(f) => {
+                setSortField(f);
+                setSortDir(SORT_FIELDS.find((x) => x.key === f)!.dir);
+              }}
+              onFlip={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+            />
           </div>
 
-          <div class="toolbar selectbar">
-            <label class="small muted">
-              <input type="checkbox" checked={allShownPicked} aria-label="全选当前列表"
-                     onChange={(e) => pickAll((e.target as HTMLInputElement).checked)} />
-              全选
-            </label>
-            <span class="small muted">本页 {shown.length} 项</span>
-            {picked.length > 0 && (
-              <>
-                <span class="small">已选 {picked.length} 项</span>
+          {/* 选择栏常驻、高度固定：勾选后内容换成批量动作，但**不改变高度**，
+              所以下面的列表不会上下弹。 */}
+          <div class={pickedTracks.length > 0 ? 'selectbar on' : 'selectbar'}>
+            {pickedTracks.length > 0 ? (
+              <div class="batch-act">
+                <span class="small"><strong>已选 {pickedTracks.length} 项</strong></span>
                 <button type="button" class="btn small" disabled={busy}
                         onClick={() => void downloadPicked()}>
                   批量下载
                 </button>
-                <button type="button" class="btn btn-ghost small" disabled={busy}
-                        onClick={() => void removePicked()}>
-                  删除
+                <button type="button" class="btn btn-danger small" disabled={busy}
+                        onClick={askRemovePicked}>
+                  批量删除
                 </button>
                 <button type="button" class="btn btn-ghost small" onClick={() => setPicked([])}>
-                  取消
+                  取消选择
                 </button>
-              </>
+              </div>
+            ) : (
+              <div class="batch-act">
+                <label class="small muted">
+                  <input type="checkbox" checked={allShownPicked} aria-label="全选当前列表"
+                         onChange={(e) => pickAll((e.target as HTMLInputElement).checked)} />
+                  全选
+                </label>
+                <span class="small muted">
+                  本页 {shown.length} 项{filtered.length > shown.length ? ` / 共 ${filtered.length} 条` : ''}
+                </span>
+              </div>
             )}
           </div>
 
@@ -461,7 +553,8 @@ export function LibraryPage() {
                              aria-label={`选择 ${t.title || '无标题'}`}
                              onChange={(e) => pick(t.id, (e.target as HTMLInputElement).checked)} />
                     </label>
-                    <span class="track-no">{index + 1}</span>
+                    {/* 序号跨页连续：第 2 页第一条是 6，不是 1 */}
+                    <span class="track-no">{(pageSafe - 1) * pageSize + index + 1}</span>
                     <div class="track-main">
                       <span class="track-kind" aria-hidden="true">{t.media_type === 'audio' ? '♪' : '▣'}</span>
                       <span class="track-body">
@@ -484,42 +577,55 @@ export function LibraryPage() {
                               }}
                             />
                           ) : (
-                            <span class="track-title" title="双击改名"
-                                  onDblClick={(e) => { e.stopPropagation(); beginRename(t); }}>
+                            /* `title` 给完整标题（长标题两行截断，得能悬停看全）；
+                               「双击改名」放进 aria-label —— 两个都塞 title 会互相顶掉。 */
+                            <span
+                              class="track-title"
+                              title={t.title || '(无标题)'}
+                              aria-label={`${t.title || '(无标题)'}（双击改名）`}
+                              onDblClick={(e) => { e.stopPropagation(); beginRename(t); }}
+                            >
                               {t.title || '(无标题)'}
                             </span>
                           )}
-                          <span class="track-author" title={t.uploader || '未知 UP 主'}>
+                          <span class={t.uploader ? 'track-author' : 'track-author unknown'}
+                                title={t.uploader || '未知 UP 主'}>
                             {t.uploader || '未知 UP 主'}
                           </span>
                         </span>
-                        {/* 顺序固定：平台 → 时长 → 入库时间 → 存放方式 → 文件大小（无文件）。
-                            每格各一种颜色，相邻三格颜色必不相同，扫一眼就能分开。 */}
+                        {/* 顺序固定：平台 → 时长 → 入库时间 → 文件状态。
+                            「存放方式」和「有没有文件」并成一格（见 `fileState`）。 */}
                         <span class="track-meta">
                           <span class="meta-tag t-plat">{platformLabel(t.platform)}</span>
                           <span class="meta-tag t-dur">{fmtDuration(t.duration_sec)}</span>
                           <span class="meta-tag t-time">{fmtTime(t.created_at)}</span>
-                          <span class="meta-tag t-store">{STORAGE_LABEL[t.storage]}</span>
-                          {t.has_file
-                            ? <span class="meta-tag t-size">{fmtBytes(t.bytes)}</span>
-                            : <span class="meta-tag t-none">无文件</span>}
+                          <span class={t.has_file ? 'meta-tag t-file' : 'meta-tag t-file none'}>
+                            {fileState(t)}
+                          </span>
                         </span>
                       </span>
                     </div>
                     <div class="track-actions">
-                      <button type="button" class="btn btn-ghost small" onClick={() => playNow(t)}>
+                      <button
+                        type="button"
+                        class="btn btn-ghost small"
+                        disabled={!t.has_file || busy}
+                        title={t.has_file ? undefined : '服务器没有这条的文件，无法播放'}
+                        onClick={() => playNow(t)}
+                      >
                         {playing === t.id && !paused ? '暂停' : '播放'}
                       </button>
-                      {t.has_file || t.source_url ? (
+                      {t.has_file ? (
                         <a class="btn btn-ghost small" href={downloadUrl(t.id)} download>下载</a>
                       ) : (
                         <button type="button" class="btn btn-ghost small" disabled
-                                title="这条没有来源链接，服务器也取不到流，无法下载">
+                                title="服务器没有这条的文件，无法下载">
                           下载
                         </button>
                       )}
-                      <button type="button" class="btn btn-ghost small" disabled={busy}
-                              onClick={() => void removeTrack(t)}>
+                      {/* 删除是危险动作：红字红边，跟上面两个蓝色按钮分开 */}
+                      <button type="button" class="btn btn-danger small" disabled={busy}
+                              onClick={() => askRemove(t)}>
                         删除
                       </button>
                     </div>
@@ -535,9 +641,61 @@ export function LibraryPage() {
               ))}
             </ul>
           )}
+
+          <Pager
+            page={pageSafe}
+            pages={pages}
+            onPage={setPage}
+            total={filtered.length}
+            label="媒体库分页"
+            pageSize={pageSize}
+            sizeOptions={PAGE_SIZES}
+            onPageSize={(n) => {
+              savePageSize(n);
+              setPageSize(n);
+            }}
+          />
           {err && <div class="alert warn small">{err}</div>}
         </>
       )}
+
+      {/* 删除确认：页面内弹窗，替掉会带出「<IP> 显示：」前缀的原生 confirm。
+          默认焦点落在「取消」上（`ConfirmDialog` 里取消按钮排第一个）。 */}
+      {confirming?.kind === 'one' && (
+        <ConfirmDialog
+          title="删除这一条？"
+          danger
+          busy={busy}
+          confirmText="删除"
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => void doRemove()}
+        >
+          <p>确定删除《{confirming.track.title || '无标题'}》吗？删除后无法恢复。</p>
+        </ConfirmDialog>
+      )}
+      {confirming?.kind === 'many' && (
+        <ConfirmDialog
+          title={`删除选中的 ${confirming.ids.length} 项？`}
+          danger
+          busy={busy}
+          confirmText={`删除 ${confirming.ids.length} 项`}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => void doRemove()}
+        >
+          <p>以下条目将被删除，删除后无法恢复：</p>
+          <ul class="confirm-list">
+            {shown
+              .filter((t) => confirming.ids.includes(t.id))
+              .slice(0, 3)
+              .map((t) => <li key={t.id}>{t.title || '(无标题)'}</li>)}
+          </ul>
+          {confirming.ids.length > 3 && (
+            <p class="small muted">等 {confirming.ids.length} 项</p>
+          )}
+        </ConfirmDialog>
+      )}
+
+      {toast.node}
     </>
   );
 }
@@ -598,10 +756,12 @@ function SortSplit({ field, dir, onField, onFlip }: {
         type="button"
         class="sort-field"
         aria-label={`排序依据：${cur.label}（${dirText}），点击切换正倒序`}
-        title="点击切换正序 / 倒序"
+        title={`当前：${dirText}，点击切换`}
         onClick={onFlip}
       >
         <span class="sort-name">{cur.label}</span>
+        {/* 箭头旁边补一句人话：光看 ↑↓ 得先想一下是"最新在前"还是"最早在前" */}
+        <span class="sort-dir">{dirText}</span>
         <span class="sort-arrow" aria-hidden="true">{dir === 'asc' ? '↑' : '↓'}</span>
       </button>
       <button

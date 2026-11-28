@@ -20,6 +20,7 @@ import {
   FORMAT, FORMATS_OF, FORMAT_TIP, JOB, SELECTION, STORAGE, STORAGE_DESC, platformName,
 } from '../labels';
 import { MultiSelect, Select } from '../select';
+import { KEYS, loadOnce, peek } from '../swr';
 import {
   BytesCell, DateInput, DateRange, DateTimeCell, ErrorBox, Loading, Menu, PageHead, Segmented, Stepper,
   dayEndSec, dayStartSec,
@@ -275,8 +276,10 @@ export function CreatorsPage() {
   const [busy, setBusy] = useState<'' | 'preview' | 'create' | 'act'>('');
 
   // —— 任务列表 ——
-  const [jobs, setJobs] = useState<CreatorJob[]>([]);
-  const [jobsPhase, setJobsPhase] = useState<'loading' | 'ok' | 'error'>('loading');
+  /** 上次拉到的批量任务：有就直接当初始值，切回本页立刻有内容，不用再等一个来回。 */
+  const cachedJobs = peek<CreatorJob[]>(KEYS.creatorJobs);
+  const [jobs, setJobs] = useState<CreatorJob[]>(cachedJobs ?? []);
+  const [jobsPhase, setJobsPhase] = useState<'loading' | 'ok' | 'error'>(cachedJobs ? 'ok' : 'loading');
   const [jobsErr, setJobsErr] = useState('');
   const [openId, setOpenId] = useState<number | null>(null);
   const [hidden, setHidden] = useState<number[]>(() => readHidden());
@@ -342,7 +345,7 @@ export function CreatorsPage() {
   async function loadJobs(silent = false) {
     if (!silent) setJobsPhase('loading');
     try {
-      setJobs(await ownerApi.creatorJobs());
+      setJobs(await loadOnce(KEYS.creatorJobs, () => ownerApi.creatorJobs()));
       setJobsPhase('ok');
       setJobsErr('');
     } catch (e) {
@@ -352,7 +355,8 @@ export function CreatorsPage() {
   }
 
   useEffect(() => {
-    void loadJobs();
+    // 有缓存时静默刷新：列表先出来，再在背后对齐服务端
+    void loadJobs(!!cachedJobs);
     return () => {
       if (timer.current) window.clearInterval(timer.current);
     };

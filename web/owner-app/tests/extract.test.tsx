@@ -30,6 +30,28 @@ function titles(): string[] {
   return Array.from(document.querySelectorAll('.ex-table .t-main')).map((el) => el.textContent ?? '');
 }
 
+
+/** 表格当前页的行数与序号（序号跨页连续，用来验证分页切得对）。 */
+const rowCount = () => document.querySelectorAll('.ex-table tbody tr').length;
+const nos = () => Array.from(document.querySelectorAll('.ex-table tbody .e-no')).map((e) => e.textContent);
+
+/** 在底栏「每页」下拉里选一项（`Select` 是自绘的，先点开再点选项）。 */
+async function pickPageSize(label: string) {
+  await click(document.querySelector('.box-foot .pager-size .select-trigger')!);
+  const opt = Array.from(document.querySelectorAll('.box-foot .pager-size [role="option"]'))
+    .find((o) => (o.textContent || '').trim() === label);
+  if (!opt) throw new Error(`每页条数里没有「${label}」`);
+  await click(opt);
+}
+
+/** 点分页器上的某个页码。 */
+async function goPage(n: number) {
+  const b = Array.from(document.querySelectorAll('.box-foot .pager button'))
+    .find((x) => x.textContent?.trim() === String(n));
+  if (!b) throw new Error(`分页器上没有第 ${n} 页`);
+  await click(b);
+}
+
 beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
 });
@@ -183,8 +205,110 @@ describe('单个提取', () => {
     mount('/extract');
     await until(() => titles().length === 2);
 
-    const links = Array.from(document.querySelectorAll('.ex-table a.text-btn'));
+    // 「下载」已改成小号按钮（`btn btn-ghost small`，与媒体库一致），不再是文字链接
+    const links = Array.from(document.querySelectorAll('.ex-table a.btn'));
     expect(links).toHaveLength(1);
     expect(links[0]!.getAttribute('href')).toContain('/v2/media/12');
+    expect(links[0]!.classList.contains('btn-ghost')).toBe(true);
+
+    // 「只记清单」那行：不是漏了按钮，是确实没有文件——写「无文件」并说明原因
+    const rows = Array.from(document.querySelectorAll('.ex-table tbody tr'));
+    const metaRow = rows.find((r) => r.textContent?.includes('只记清单'))!;
+    const ops = metaRow.querySelector('.e-ops')!;
+    expect(ops.textContent).toContain('无文件');
+    expect(ops.textContent).not.toContain('—');
+    expect(ops.querySelector('.ops-none')!.getAttribute('title')).toContain('没有文件');
+  });
+
+  test('分页：每页 5 条，序号跨页连续', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => job({ id: i + 1, title: `任务 ${i + 1}` }));
+    server(ownerRoutes({ [JOBS]: { json: { jobs: many } } }));
+    localStorage.removeItem('getmedia.extract.pageSize');
+    mount('/extract');
+    await until(() => rowCount() === 5);
+
+    expect(nos()).toEqual(['1', '2', '3', '4', '5']);
+    expect(text()).toContain('共 12 条');
+    expect(document.querySelector('.box-foot .pager-total')!.textContent).toContain('第 1 / 3 页');
+
+    await goPage(3);
+    await until(() => titles()[0] === '任务 11');
+    expect(nos()).toEqual(['11', '12']);
+    expect(document.querySelector('.box-foot .pager-total')!.textContent).toContain('第 3 / 3 页');
+  });
+
+  test('每页条数：默认 5，可切 10 / 20，切换后回到第 1 页并记住选择', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => job({ id: i + 1, title: `任务 ${i + 1}` }));
+    server(ownerRoutes({ [JOBS]: { json: { jobs: many } } }));
+    localStorage.removeItem('getmedia.extract.pageSize');
+    mount('/extract');
+    await until(() => rowCount() === 5);
+    expect(document.querySelector('.box-foot .pager-size .select-value')!.textContent).toBe('5 条');
+
+    // 先翻到第 2 页，再切 20 条：应当回到第 1 页，12 条一屏放完
+    await goPage(2);
+    await until(() => titles()[0] === '任务 6');
+    await pickPageSize('20 条');
+    await until(() => rowCount() === 12);
+    expect(nos()[0]).toBe('1');
+    expect(document.querySelector('.box-foot .pager-total')!.textContent).toContain('第 1 / 1 页');
+    expect(localStorage.getItem('getmedia.extract.pageSize')).toBe('20');
+
+    // 切 10 条：12 条 → 2 页
+    await pickPageSize('10 条');
+    await until(() => rowCount() === 10);
+    expect(document.querySelector('.box-foot .pager-total')!.textContent).toContain('第 1 / 2 页');
+    localStorage.removeItem('getmedia.extract.pageSize');
+  });
+
+  test('筛选变化回到第 1 页', async () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      job({ id: i + 1, title: `任务 ${i + 1}`, uploader: i < 6 ? '甲UP' : '乙UP' }));
+    server(ownerRoutes({ [JOBS]: { json: { jobs: many } } }));
+    localStorage.removeItem('getmedia.extract.pageSize');
+    mount('/extract');
+    await until(() => rowCount() === 5);
+
+    await goPage(3);
+    await until(() => titles()[0] === '任务 11');
+
+    // 搜「甲」：命中 6 条（2 页），页码应当回到 1，而不是停在不存在的第 3 页
+    await type(document.querySelector('input[aria-label="搜索昵称"]')!, '甲');
+    await until(() => rowCount() === 5);
+    expect(nos()[0]).toBe('1');
+    expect(text()).toContain('共 6 条');
+    expect(document.querySelector('.box-foot .pager-total')!.textContent).toContain('第 1 / 2 页');
+  });
+
+  test('条数不足一页：只留页码提示和每页选择器，没有上一页/下一页', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [job({ id: 1, title: '任务 1' }), job({ id: 2, title: '任务 2' })] } } }));
+    localStorage.removeItem('getmedia.extract.pageSize');
+    mount('/extract');
+    await until(() => rowCount() === 2);
+
+    expect(document.querySelector('.box-foot .pager-total')!.textContent).toContain('第 1 / 1 页');
+    const labels = Array.from(document.querySelectorAll('.box-foot .pager button')).map((b) => b.textContent?.trim());
+    expect(labels).not.toContain('上一页');
+    expect(labels).not.toContain('下一页');
+    // 每页选择器必须还在，否则切到 20 条之后就再也切不回来
+    expect(document.querySelector('.box-foot .pager-size')).not.toBeNull();
+  });
+
+  test('空状态：一条任务都没有 vs 筛选后没有命中', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [] } } }));
+    mount('/extract');
+    await until(() => text().includes('还没有提取任务'));
+    // 空库时底栏整条不渲染（没有「共 0 条」的分页器）
+    expect(document.querySelector('.box-foot')).toBeNull();
+    cleanup();
+
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [job({ id: 1, title: '任务 1', uploader: '甲UP' })] } } }));
+    mount('/extract');
+    await until(() => rowCount() === 1);
+    await type(document.querySelector('input[aria-label="搜索昵称"]')!, '查无此人');
+    await until(() => text().includes('没有符合条件的任务'));
+    expect(document.querySelector('.box-foot')).toBeNull();
+    await click(button('重置筛选'));
+    await until(() => rowCount() === 1);
   });
 });

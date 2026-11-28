@@ -17,7 +17,8 @@ describe('owner 认证壳', () => {
     server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ME } });
     mount();
     await until(() => text().includes('概览'));
-    expect(callKeys()).toEqual(['GET /v2/config/owner', 'GET /account/me']);
+    // 两个请求并行发出（省一个往返），所以顺序不再是契约——只要求两个都发了
+    expect(callKeys().sort()).toEqual(['GET /account/me', 'GET /v2/config/owner']);
     expect(text()).toContain('owner1');
     expect(text()).toContain('5 GB');
     expect(text()).toContain('1 天');
@@ -33,7 +34,10 @@ describe('owner 认证壳', () => {
   });
 
   test('未登录（401，未经边缘时）：给登录入口，不自动跳转，不显示任何 owner 内容', async () => {
-    server({ 'GET /v2/config/owner': { status: 401, json: { detail: '请先登录', code: 'unauthenticated' } } });
+    server({
+      'GET /v2/config/owner': { status: 401, json: { detail: '请先登录', code: 'unauthenticated' } },
+      'GET /account/me': { status: 401, json: { detail: '请先登录', code: 'unauthenticated' } },
+    });
     const before = location.href;
     mount('/');
     await until(() => text().includes('需要先登录'));
@@ -43,21 +47,29 @@ describe('owner 认证壳', () => {
     expect(text()).not.toContain('正在跳到登录页');
     const link = Array.from(document.querySelectorAll('a')).find((a) => a.textContent?.includes('去登录'))!;
     expect(link.getAttribute('href')).toContain('login?next=');
-    expect(callKeys()).toEqual(['GET /v2/config/owner']);
+    // 两个请求并行发出、都回 401；判定仍然是「未登录」，不会被后到的那个带偏
+    expect(callKeys().sort()).toEqual(['GET /account/me', 'GET /v2/config/owner']);
   });
 
   test('匿名/非 owner（边缘 404）：回中性"页面不存在"，不透露管理台存在', async () => {
-    server({ 'GET /v2/config/owner': { status: 404, json: { error: 'not_found' } } });
+    server({
+      'GET /v2/config/owner': { status: 404, json: { error: 'not_found' } },
+      'GET /account/me': { status: 404, json: { error: 'not_found' } },
+    });
     mount('/');
     await until(() => text().includes('页面不存在'));
     expect(text()).toContain('这个地址下没有内容');
     // 不能出现任何暗示"这是权限问题"的字样，也不能出现 owner 相关内容
     for (const w of ['owner', '管理台', '登录', '权限']) expect(text()).not.toContain(w);
-    expect(callKeys()).toEqual(['GET /v2/config/owner']);
+    // 两条路径都被边缘回 404，页面上仍然只是一个中性的「不存在」
+    expect(callKeys().sort()).toEqual(['GET /account/me', 'GET /v2/config/owner']);
   });
 
   test('非 owner（403）：说明原因，不把人绕回登录页', async () => {
-    server({ 'GET /v2/config/owner': { status: 403, json: { detail: '需要完整版权限', code: 'forbidden_tier' } } });
+    server({
+      'GET /v2/config/owner': { status: 403, json: { detail: '需要完整版权限', code: 'forbidden_tier' } },
+      'GET /account/me': { status: 403, json: { detail: '需要完整版权限', code: 'forbidden_tier' } },
+    });
     mount();
     await until(() => text().includes('当前账号没有完整版权限'));
     expect(Array.from(document.querySelectorAll('a.btn')).some((a) => a.getAttribute('href')?.includes('login'))).toBe(false);
@@ -143,6 +155,10 @@ describe('owner 认证壳', () => {
     server({ 'GET /v2/config/owner': { json: CONFIG }, 'GET /account/me': { json: ME } });
     mount();
     await until(() => text().includes('概览'));
+
+    // 页头只有标题，标题下不再挂说明小字
+    expect(document.querySelector('.page-head h1')?.textContent).toBe('概览');
+    expect(document.querySelector('.page-head .page-sub')).toBeNull();
 
     // 数值与改造前一致：数字与单位是两个 span，但 textContent 里仍带空格（「5 GB」而不是「5GB」）
     const metrics = Array.from(document.querySelectorAll('.metric'));
