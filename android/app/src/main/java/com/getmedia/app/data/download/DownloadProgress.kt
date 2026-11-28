@@ -15,11 +15,12 @@ import kotlinx.coroutines.flow.asStateFlow
  * 只记"当前这一条"：下载是串行的（`CloudSyncHook.download` 里有锁），批量补下载也是一条
  * 接一条，所以同一时刻只可能有一个活跃项；换成列表只会让界面更难读。
  *
- * 三条纪律：
+ * 四条纪律：
  * - **不持有 Context**：这是纯数据，放进程里就够了，Activity 重建不影响它；
  * - **不猜总长度**：服务器没给 `Content-Length` / `Content-Range` 时 [Active.total] 为 null，
  *   界面画不确定进度条——编一个百分比反而更让人糊涂；
- * - **结束时一定清空**：调用方在 `finally` 里 [finish]，否则界面会永远挂着一条 100% 的条。
+ * - **结束时一定清空**：调用方在 `finally` 里 [finish]，否则界面会永远挂着一条 100% 的条；
+ * - **取消只有一次**：[cancel] 取走回调就置空，连点两下不会重复取消，也不会取消到下一条。
  */
 object DownloadProgress {
 
@@ -28,12 +29,16 @@ object DownloadProgress {
      *
      * [done] / [total] 是字节数。`total` 可能比 `done` 小（服务器声明有误）或为 null，
      * 所以 [fraction] 自己钳在 0..1，界面不需要再判。
+     *
+     * [cancellable] 为 true 时界面才画「取消」：发起方拿不到自己的 Job（例如自由线程里的
+     * 调用）就没有可取消的东西，画一个点了没反应的按钮比不画更糟。
      */
     data class Active(
         val trackId: Long,
         val title: String,
         val done: Long = 0,
         val total: Long? = null,
+        val cancellable: Boolean = false,
     ) {
         /** 0..1；总长度未知时返回 null（界面画不确定进度）。 */
         val fraction: Float?
@@ -43,8 +48,13 @@ object DownloadProgress {
     private val _state = MutableStateFlow<Active?>(null)
     val state: StateFlow<Active?> = _state.asStateFlow()
 
-    fun start(trackId: Long, title: String) {
-        _state.value = Active(trackId = trackId, title = title)
+    /** 当前这一条的取消动作；只由 [start] 写入，[cancel] / [finish] 取走后置空。 */
+    @Volatile
+    private var onCancel: (() -> Unit)? = null
+
+    fun start(trackId: Long, title: String, onCancel: (() -> Unit)? = null) {
+        this.onCancel = onCancel
+        _state.value = Active(trackId = trackId, title = title, cancellable = onCancel != null)
     }
 
     /**
@@ -57,7 +67,23 @@ object DownloadProgress {
         _state.value = current.copy(done = done, total = total ?: current.total)
     }
 
+    /**
+     * 用户点了「取消」。**只对正在传的这一条生效**：列表里别的行、或者已经收尾的下载，
+     * 点了都不该有任何后果。
+     *
+     * 回调取走即置空——取消本身是异步的（协程要跑到下一个检查点才真的停），这期间界面
+     * 可能还在画进度条，再点一次不能又触发一遍。
+     */
+    fun cancel(trackId: Long) {
+        if (_state.value?.trackId != trackId) return
+        val action = onCancel ?: return
+        onCancel = null
+        _state.value = _state.value?.copy(cancellable = false)
+        action()
+    }
+
     fun finish() {
+        onCancel = null
         _state.value = null
     }
 }

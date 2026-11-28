@@ -1,6 +1,7 @@
 package com.getmedia.app.data.library
 
 import java.net.UnknownHostException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,6 +114,24 @@ class RefillBatchTest {
         )
         assertEquals(1, RefillBatch.okCount(results))
         assertEquals(1L, RefillBatch.failed(results).single().id)
+    }
+
+    // 用户点了「取消」：整批停下，已经落地的照常返回，剩下的既不成功也不记成失败
+    @Test
+    fun cancelStopsTheBatchAndKeepsWhatAlreadyLanded() = runBlocking {
+        val calls = mutableListOf<Long>()
+        val results = RefillBatch.run(
+            items = items(1, 2, 3),
+            download = { id ->
+                calls += id
+                if (id == 2L) throw CancellationException("下载已取消")
+            },
+            landed = { true },
+        )
+        assertEquals("取消之后不该再碰第三项", listOf(1L, 2L), calls)
+        assertEquals("取消不是失败：已经下好的那条留在结果里", 1, results.size)
+        assertTrue(results.single().ok)
+        assertNull(RefillBatch.failuresText(results))
     }
 
     // 失败明细最多列 3 条，多的用「另有 N 项」收口，避免一行长到看不完

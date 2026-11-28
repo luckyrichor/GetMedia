@@ -595,7 +595,14 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
         }
     }
     LaunchedEffect(notice) { notice?.let { snackbar.showSnackbar(it); notice = null } }
-    fun operate(block: suspend () -> Unit) { scope.launch { runCatching { DiagnosticsStore.operation("媒体库操作", block) }.onFailure { notice = ErrorText.humanMessage(it) } } }
+    fun operate(block: suspend () -> Unit) {
+        scope.launch {
+            runCatching { DiagnosticsStore.operation("媒体库操作", block) }.onFailure {
+                // 用户自己点了「取消」不是失败：别弹红色错误，说一句就够了
+                notice = if (it is CancellationException) "已取消下载" else ErrorText.humanMessage(it)
+            }
+        }
+    }
     fun queueItems(tracks: List<TrackEntity>, play: Boolean, sourceId: Long? = null) = operate {
         // 要点：**点播放不再把整张列表同步下载完**。
         // 以前这里对每个缺文件的条目当场 download()，列表越长等得越久，还容易撞平台风控。
@@ -1311,14 +1318,26 @@ fun LibraryScreenV2(openCategories: Boolean = false, onGoExtract: () -> Unit = {
                                 operate {
                                     notice = "正在补齐 ${downloadable.size} 项…"
                                     var done = 0
+                                    var cancelled = false
                                     val failed = ArrayList<String>()
                                     for (item in downloadable) {
-                                        runCatching { cloudSync.download(context, item) }
-                                            .onSuccess { done++ }
-                                            .onFailure { failed += item.title }
+                                        try {
+                                            cloudSync.download(context, item)
+                                            done++
+                                        } catch (stop: CancellationException) {
+                                            // 取消是"整批停下"，不是"这一项失败、接着下下一项"
+                                            cancelled = true
+                                            break
+                                        } catch (error: Throwable) {
+                                            failed += item.title
+                                        }
                                     }
-                                    notice = if (failed.isEmpty()) "已补齐 $done 项"
-                                    else "已补齐 $done 项，${failed.size} 项未完成：${failed.first()}"
+                                    notice = when {
+                                        cancelled -> "已取消，已补齐 $done 项"
+                                        failed.isEmpty() -> "已补齐 $done 项"
+                                        else -> "已补齐 $done 项，${failed.size} 项未完成：${failed.first()}"
+                                    }
+                                    if (cancelled) return@operate
                                     // 队列里这些条目原本是占位（播到会跳过），文件到手后原地转成可播，
                                     // 不用重新点一次"播放此列表"。
                                     runCatching { PlayerHolder.refreshFiles(context) }

@@ -40,6 +40,7 @@ import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.ui.components.RowDivider
 import com.getmedia.app.ui.components.SectionCard
 import com.getmedia.app.ui.components.SectionTitle
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -141,8 +142,14 @@ internal fun LibrarySyncSettings() {
             actionMessage = if (row == null) {
                 "这一条已被移除"
             } else {
-                runCatching { cloudSync.download(context, row) }
-                    .fold({ "已下载到原条目" }, { "没取到：${ErrorText.humanMessage(it)}" })
+                try {
+                    cloudSync.download(context, row)
+                    "已下载到原条目"
+                } catch (stop: CancellationException) {
+                    "已取消下载"
+                } catch (error: Throwable) {
+                    "没取到：${ErrorText.humanMessage(error)}"
+                }
             }
         }
     }

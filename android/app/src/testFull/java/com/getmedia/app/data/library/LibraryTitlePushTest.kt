@@ -94,6 +94,50 @@ class LibraryTitlePushTest {
         assertEquals(LibraryMark.PENDING_UP, changed.syncState)
     }
 
+    /**
+     * 旧版本写下的草稿没有基线版本号。
+     *
+     * 以前这里用 `serverSeq` 兜底：于是 base 永远等于服务器当前版本，每轮同步都判定
+     * "我改完之后没人动过"，把旧名字 PATCH 回去。真机现象就是——手机 B 把《出山》改成
+     * 《出山3》，手机 A 下一分钟又推回《出山》，用户怎么改都留不住。
+     * 现在没有基线一律按服务器为准收尾，一次 PATCH 都不发。
+     */
+    @Test fun draftWithoutBaselineAdoptsServerTitleInsteadOfPushing() = runBlocking {
+        val t = bound().copy(
+            title = "出山", confirmedTitle = "出山3", localTitleOverride = "出山",
+            pendingTitle = "出山", pendingTitleBaseSeq = null, pendingTitleGen = 2_000,
+            syncState = LibraryMark.PENDING_UP,
+        )
+        db.trackDao().upsertAll(listOf(t))
+        val write = FakeWrite(detail = cloud(12, "出山3"))
+
+        val summary = LibraryTitlePush(db, write, account).push()
+
+        assertTrue("没有基线就不能声称不冲突：不该发 PATCH", write.patches.isEmpty())
+        assertEquals(1, summary.conflicts)
+        val row = db.trackDao().byId(t.id)!!
+        assertEquals("服务器上的名字才是准的", "出山3", row.title)
+        assertNull(row.pendingTitle)
+        assertNull(row.localTitleOverride)
+    }
+
+    @Test fun draftWithoutBaselineThatAlreadyMatchesIsAdoptedQuietly() = runBlocking {
+        val t = bound().copy(
+            title = "出山", confirmedTitle = "出山", localTitleOverride = "出山",
+            pendingTitle = "出山", pendingTitleBaseSeq = null, pendingTitleGen = 2_000,
+            syncState = LibraryMark.PENDING_UP,
+        )
+        db.trackDao().upsertAll(listOf(t))
+        val write = FakeWrite(detail = cloud(12, "出山"))
+
+        val summary = LibraryTitlePush(db, write, account).push()
+
+        assertTrue(write.patches.isEmpty())
+        assertEquals("名字本来就一样，不算冲突", 1, summary.adopted)
+        assertEquals(0, summary.conflicts)
+        assertNull(db.trackDao().byId(t.id)!!.pendingTitle)
+    }
+
     @Test fun secondRenameKeepsOriginalBaseAndLatestDraft() = runBlocking {
         val t = bound()
         db.trackDao().upsertAll(listOf(t))

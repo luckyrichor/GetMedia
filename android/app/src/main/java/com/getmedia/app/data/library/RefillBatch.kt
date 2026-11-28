@@ -1,6 +1,7 @@
 package com.getmedia.app.data.library
 
 import com.getmedia.app.data.repo.ErrorText
+import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * 「先下载这 N 项」的批量执行与汇总（0.1.16）。
@@ -41,15 +42,27 @@ object RefillBatch {
         items: List<Item>,
         download: suspend (Long) -> Unit,
         landed: suspend (Long) -> Boolean,
-    ): List<Result> = dedupe(items).map { item ->
-        val failure = runCatching { download(item.id) }.exceptionOrNull()
-        when {
-            failure != null -> Result(item.id, item.title, ok = false, reason = ErrorText.humanMessage(failure))
-            // 入口说成功、回读却没有文件：宁可算失败也不虚报，原因写清楚，方便以后查。
-            !runCatching { landed(item.id) }.getOrDefault(false) ->
-                Result(item.id, item.title, ok = false, reason = "下载完成但文件没有落到本机")
-            else -> Result(item.id, item.title, ok = true)
+    ): List<Result> {
+        val results = ArrayList<Result>(items.size)
+        for (item in dedupe(items)) {
+            val failure = try {
+                download(item.id)
+                null
+            } catch (stop: CancellationException) {
+                // 用户点了「取消」：整批停下，已经完成的照常返回，剩下的既不算成功也不算失败
+                break
+            } catch (error: Throwable) {
+                error
+            }
+            results += when {
+                failure != null -> Result(item.id, item.title, ok = false, reason = ErrorText.humanMessage(failure))
+                // 入口说成功、回读却没有文件：宁可算失败也不虚报，原因写清楚，方便以后查。
+                !runCatching { landed(item.id) }.getOrDefault(false) ->
+                    Result(item.id, item.title, ok = false, reason = "下载完成但文件没有落到本机")
+                else -> Result(item.id, item.title, ok = true)
+            }
         }
+        return results
     }
 
     fun okCount(results: List<Result>): Int = results.count { it.ok }

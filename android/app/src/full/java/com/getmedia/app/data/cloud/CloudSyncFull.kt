@@ -18,6 +18,8 @@ import com.getmedia.app.data.repo.ErrorText
 import com.getmedia.app.data.repo.TrackRepository
 import com.getmedia.app.data.serverextract.ServerMediaApi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -76,7 +78,12 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
     override suspend fun download(context: Context, track: TrackEntity): File = downloadLock.withLock {
         // 进度条的唯一来源：远端下载可能几百 MB、要几分钟，中途没有反馈的话用户只能反复点。
         // 起止都放在锁内，锁是串行的，所以同一时刻只会有一条活跃进度。
-        DownloadProgress.start(track.id, track.title)
+        //
+        // 取消挂在发起这次下载的 Job 上：界面点「取消」→ `DownloadProgress.cancel` 取走这个
+        // 回调 → `job.cancel()`。**光取消协程停不下来**，读流是阻塞 IO，真正生效靠
+        // `ServerDownload` 写盘循环里的 `cancelled()` 检查（它读的就是这个 Job 的 isCancelled）。
+        val job = currentCoroutineContext()[Job]
+        DownloadProgress.start(track.id, track.title) { job?.cancel() }
         try {
             val session = SessionStore.current.value
             check(session != null && track.accountKey == session.loginName && LibrarySyncGate.maySync(session)) {
@@ -95,7 +102,13 @@ val cloudSync: CloudSyncHook = object : CloudSyncHook {
                 prefs = LibrarySyncPrefs(app),
                 session = session,
                 sameSession = ::sameSession,
-            ).download(track) { done, total -> DownloadProgress.update(track.id, done, total) }
+            ).download(
+                track,
+                { done, total -> DownloadProgress.update(track.id, done, total) },
+                // 写盘循环每 64 KB 问一次：这样点取消最多丢掉一个缓冲块的进度，
+                // 而不是等整条 200 MB 传完才"取消成功"。
+                cancelled = { job?.isCancelled == true },
+            )
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {

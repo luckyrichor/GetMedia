@@ -2,7 +2,10 @@ package com.getmedia.app.data.download
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -55,5 +58,39 @@ class DownloadProgressTest {
         // 收尾之后再到回调也不能把条重新点亮
         DownloadProgress.update(7, 200, 1000)
         assertNull(DownloadProgress.state.value)
+    }
+
+    @Test fun cancelOnlyFiresOnceAndOnlyForTheActiveTrack() {
+        var fired = 0
+        DownloadProgress.start(trackId = 7, title = "A") { fired++ }
+        assertTrue("有取消回调才画按钮", DownloadProgress.state.value!!.cancellable)
+
+        DownloadProgress.cancel(8)
+        assertEquals("别的行点了不该有后果", 0, fired)
+
+        DownloadProgress.cancel(7)
+        assertEquals(1, fired)
+        assertFalse("取消取走回调，按钮随即消失", DownloadProgress.state.value!!.cancellable)
+
+        // 连点两下：协程还没跑到检查点，界面可能还在画进度条，不能又取消一遍
+        DownloadProgress.cancel(7)
+        assertEquals(1, fired)
+    }
+
+    @Test fun cancelWithoutCallbackDoesNothing() {
+        // 发起方拿不到自己的 Job（例如自由线程里的调用）：不注册回调，
+        // 界面就不该画一个点了没反应的按钮
+        DownloadProgress.start(trackId = 7, title = "A")
+        assertFalse(DownloadProgress.state.value!!.cancellable)
+        DownloadProgress.cancel(7)
+        assertNotNull("什么都不该发生", DownloadProgress.state.value)
+    }
+
+    @Test fun finishDropsTheCancelCallback() {
+        var fired = 0
+        DownloadProgress.start(trackId = 7, title = "A") { fired++ }
+        DownloadProgress.finish()
+        DownloadProgress.cancel(7)
+        assertEquals("收尾之后取消不该再打到上一条", 0, fired)
     }
 }

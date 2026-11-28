@@ -7,11 +7,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.getmedia.app.data.download.DownloadProgress
 import com.getmedia.app.ui.theme.GetMediaTheme
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -68,5 +70,27 @@ class DownloadLineRenderTest {
         render(8)
 
         rule.onNodeWithText("正在下载").assertDoesNotExist()
+    }
+
+    @Test
+    fun cancelIsOfferedOnlyWhenTheDownloadCanActuallyBeStopped() {
+        // 没有取消回调（发起方拿不到自己的 Job）：不画一个点了没反应的按钮
+        DownloadProgress.start(trackId = 7, title = "x")
+        DownloadProgress.update(7, 1_000, 2_000)
+        render(7)
+        rule.onNodeWithText("取消").assertDoesNotExist()
+    }
+
+    @Test
+    fun cancelIsVisibleAndFiresTheRegisteredCallback() {
+        var fired = 0
+        DownloadProgress.start(trackId = 7, title = "x") { fired++ }
+        DownloadProgress.update(7, 1_000, 2_000)
+        render(7)
+
+        rule.onNodeWithText("取消").assertIsDisplayed().performClick()
+        assertEquals(1, fired)
+        // 取消取走回调，按钮随即消失——不能留一个还能再点的"取消"
+        rule.onNodeWithText("取消").assertDoesNotExist()
     }
 }

@@ -18,6 +18,7 @@ import org.junit.Before
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import kotlin.coroutines.cancellation.CancellationException
 
 class ServerDownloadTest {
 
@@ -81,7 +82,7 @@ class ServerDownloadTest {
         server.enqueue(MockResponse().setBody(okio.Buffer().write(body)))
         val seen = mutableListOf<Pair<Long, Long?>>()
 
-        ServerDownload.fetch(api, 31, part(), body.size.toLong()) { done, total -> seen += done to total }
+        ServerDownload.fetch(api, 31, part(), body.size.toLong(), onProgress = { done, total -> seen += done to total })
 
         assertTrue("至少要报一次进度", seen.isNotEmpty())
         assertTrue("第一次回调就该带上已写入的字节：${seen.first()}", seen.first().first > 0)
@@ -90,8 +91,31 @@ class ServerDownloadTest {
         assertTrue("字节数不能回退：$seen", seen.map { it.first }.zipWithNext().all { (a, b) -> b >= a })
     }
 
-    @Test fun resumesFromExistingBytes() = runBlocking {
+    /**
+     * 取消要真的停下来。
+     *
+     * 读流是阻塞 IO，**协程取消打断不了它**——只 cancel Job 的话，用户点完「取消」得等
+     * 整条 200 MB 传完才生效。所以 `fetch` 的写盘循环每读一块就问一次 [cancelled]。
+     * 停下时已经落盘的字节要留着（和断流一样），下次点下载用 Range 接着要。
+     */
+    @Test fun cancelStopsMidwayAndKeepsThePartForResume() = runBlocking {
+        val body = ByteArray(512 * 1024) { (it % 251).toByte() }   // 8 个 64 KB 的读
+        server.enqueue(MockResponse().setBody(okio.Buffer().write(body)))
         val file = part()
+        var checks = 0
+
+        try {
+            ServerDownload.fetch(api, 31, file, body.size.toLong(), cancelled = { ++checks > 1 })
+            fail("取消必须抛出 CancellationException，不能假装下载完了")
+        } catch (expected: CancellationException) {
+            // 正是想要的：协程语义上的"不要了"，上层的 catch(IOException) 不会误吞
+        }
+
+        assertTrue("确实提前停了：$checks 次检查", checks in 2..body.size)
+        assertTrue("已写下的字节要留着续传，实际 ${file.length()}", file.length() in 1 until body.size.toLong())
+    }
+
+    @Test fun resumesFromExistingBytes() = runBlocking {        val file = part()
         file.writeBytes(whole.copyOfRange(0, 6))
         val rest = whole.copyOfRange(6, whole.size)
         server.enqueue(MockResponse().setResponseCode(206)

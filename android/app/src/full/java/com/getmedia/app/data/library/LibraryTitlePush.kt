@@ -45,12 +45,23 @@ class LibraryTitlePush(
             if (!valid()) return Summary(pushed, adopted, conflicts, LibrarySyncProblem.LOGIN_REQUIRED, "登录已失效")
             val serverId = row.serverId?.takeIf { it > 0 } ?: continue
             val title = row.pendingTitle ?: continue
-            val base = row.pendingTitleBaseSeq ?: row.serverSeq ?: continue
+            // 基线必须来自"改名前看到的那一版"，**不能拿当前的 `serverSeq` 兜底**：
+            // 旧版本写下的草稿没有基线，兜底之后 base 永远等于服务器版本，于是每轮同步都
+            // 判定"没人动过"，把旧名字 PATCH 回去——另一台设备刚改的名下一分钟就被覆盖。
+            // 0.1.46 真机：手机 A 的《出山》草稿每轮把服务器从《出山3》推回《出山》，
+            // 用户在手机 B 上怎么改都留不住。没有基线就走下面 `base == null` 的分支。
+            val base = row.pendingTitleBaseSeq
             val gen = row.pendingTitleGen ?: 0L
             try {
                 val detail = transport.detail(serverId)
                 when {
                     detail.deleted -> { tombstoned(row, detail, gen); conflicts++; continue }
+                    // 没有基线：证明不了"我改的时候看到的就是这一版"，按服务器为准收尾。
+                    // 名字恰好一样就算顺利采纳，否则计入冲突（调用方会提示"已改用云端标题"）。
+                    base == null -> {
+                        adopt(row, detail, gen)
+                        if (detail.title == title) adopted++ else conflicts++
+                    }
                     detail.updatedSeq != base && detail.title == title -> {
                         adopt(row, detail, gen); adopted++
                     }

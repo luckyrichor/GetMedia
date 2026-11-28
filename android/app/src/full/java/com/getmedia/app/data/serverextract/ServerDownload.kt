@@ -8,6 +8,7 @@ import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.security.MessageDigest
+import kotlin.coroutines.cancellation.CancellationException
 
 /** 下载完成的结果：文件已落到暂存路径、长度校验通过。 */
 data class DownloadedFile(val file: File, val bytes: Long, val sha256: String)
@@ -75,6 +76,7 @@ object ServerDownload {
         expected: Long?,
         storedOnly: Boolean = false,
         onProgress: (downloaded: Long, total: Long?) -> Unit = { _, _ -> },
+        cancelled: () -> Boolean = { false },
     ): DownloadedFile = withContext(Dispatchers.IO) {
         var lastReason = ""
         var network = false
@@ -84,7 +86,7 @@ object ServerDownload {
             if (offset == 0L && part.exists() && part.length() > 0) part.delete()
 
             val result = try {
-                downloadOnce(api, trackId, part, offset, expected, storedOnly, onProgress)
+                downloadOnce(api, trackId, part, offset, expected, storedOnly, onProgress, cancelled)
             } catch (e: IOException) {
                 // 断流、读超时：已落盘的字节是真实前缀，保留给下一轮用 Range 续；
                 // 不把原始 IOException 抛给上层（上层只认 ServerMediaException 与中文文案）。
@@ -127,6 +129,7 @@ object ServerDownload {
         expected: Long?,
         storedOnly: Boolean,
         onProgress: (downloaded: Long, total: Long?) -> Unit,
+        cancelled: () -> Boolean,
     ): Attempt {
         val response: Response = if (storedOnly) api.openStoredMedia(trackId, offset) else api.openMedia(trackId, offset)
         response.use { r ->
@@ -166,6 +169,11 @@ object ServerDownload {
                 val buffer = ByteArray(64 * 1024)
                 body.byteStream().use { input ->
                     while (true) {
+                        // 取消只能在这里检查：读流是阻塞 IO，协程取消不会打断它，
+                        // 光 cancel Job 要等到这一整段（甚至整条）读完才生效。
+                        // 抛 CancellationException 而不是自定义异常：语义就是"这个协程不要了"，
+                        // 上层 `catch (IOException)` 不会误吞，`response.use` 也照常关连接。
+                        if (cancelled()) throw CancellationException("下载已取消")
                         val count = input.read(buffer)
                         if (count < 0) break
                         out.write(buffer, 0, count)

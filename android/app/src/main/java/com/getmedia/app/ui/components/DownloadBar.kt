@@ -1,5 +1,6 @@
 package com.getmedia.app.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material3.Icon
@@ -20,6 +22,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -67,6 +70,19 @@ fun DownloadBar() {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (item.cancellable) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "取消",
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { DownloadProgress.cancel(item.trackId) }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 1,
+                )
+            }
         }
         if (fraction != null) {
             LinearProgressIndicator(
@@ -126,6 +142,21 @@ fun DownloadLine(trackId: Long, modifier: Modifier = Modifier) {
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            // 取消只挂在"正在传的这一条"上：回调由发起方注册，取消一次就取走，
+            // 连点两下不会重复取消，也不会取消到别的条目。
+            if (item.cancellable) {
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "取消",
+                    Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { DownloadProgress.cancel(trackId) }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 1,
+                )
+            }
         }
         if (fraction != null) {
             LinearProgressIndicator(

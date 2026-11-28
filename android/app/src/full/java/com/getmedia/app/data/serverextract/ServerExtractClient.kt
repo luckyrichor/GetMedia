@@ -75,9 +75,10 @@ class ServerExtractClient(
         PartStore.sweep(cacheDir, part)
         // 断流时 **不删** `.part`：里面的字节是真实前缀，下一次下载用 Range 接着要。
         // 只有 [ServerDownload] 判定"内容已确认不可用"时才由它自己删。
-        val downloaded = ServerDownload.fetch(api, track.id, part, track.bytes) { got, total ->
-            onProgress(Progress(Stage.DOWNLOADING, got, total))
-        }
+        val downloaded = ServerDownload.fetch(
+            api, track.id, part, track.bytes,
+            onProgress = { got, total -> onProgress(Progress(Stage.DOWNLOADING, got, total)) },
+        )
         val entity = entityOf(track, kind, downloaded.sha256, accountKey)
         val saved = adopt(entity, downloaded.file)
         onProgress(Progress(Stage.SAVED, saved.audioBytes ?: 0, saved.audioBytes))
@@ -88,6 +89,7 @@ class ServerExtractClient(
     suspend fun refillOriginal(
         original: TrackEntity,
         onProgress: (downloaded: Long, total: Long?) -> Unit = { _, _ -> },
+        cancelled: () -> Boolean = { false },
         save: suspend (TrackEntity, ServerTrack, DownloadedFile) -> TrackEntity,
     ): TrackEntity {
         val id = original.serverId ?: mismatch()
@@ -106,7 +108,7 @@ class ServerExtractClient(
         when (detail.storage) {
             "archive", "cache" -> {
                 val file = try {
-                    fetchStored(detail, onProgress)
+                    fetchStored(detail, onProgress, cancelled)
                 } catch (e: ServerMediaException) {
                     if (e.code != "stored_file_missing" || detail.storage != "cache") throw e
                     null
@@ -146,6 +148,7 @@ class ServerExtractClient(
     suspend fun refillArchived(
         original: TrackEntity,
         onProgress: (downloaded: Long, total: Long?) -> Unit = { _, _ -> },
+        cancelled: () -> Boolean = { false },
         save: suspend (TrackEntity, ServerTrack, DownloadedFile) -> TrackEntity,
     ): TrackEntity {
         val id = original.serverId ?: mismatch()
@@ -156,19 +159,23 @@ class ServerExtractClient(
             detail.page == original.serverPage &&
             detail.mediaType.equals(original.mediaType, ignoreCase = true)
         if (!same) mismatch()
-        return save(original, detail, fetchStored(detail, onProgress))
+        return save(original, detail, fetchStored(detail, onProgress, cancelled))
     }
 
     private suspend fun fetchStored(
         track: ServerTrack,
         onProgress: (downloaded: Long, total: Long?) -> Unit,
+        cancelled: () -> Boolean = { false },
     ): DownloadedFile = withContext(Dispatchers.IO) {
         val bytes = track.bytes?.takeIf { it > 0 }
         // 即便缓存详情尚未更新，也让只读接口判断文件是否已清理；成功响应仍须有条目长度。
         val directory = File(cacheDir, "cloud-refill").apply { mkdirs() }
         val part = PartStore.file(directory, track.id, track.updatedSeq, bytes)
         PartStore.sweep(directory, part)
-        val file = ServerDownload.fetch(api, track.id, part, bytes, storedOnly = true, onProgress = onProgress)
+        val file = ServerDownload.fetch(
+            api, track.id, part, bytes, storedOnly = true,
+            onProgress = onProgress, cancelled = cancelled,
+        )
         val hash = track.sha256
         if (bytes != file.bytes || (hash != null && !hash.equals(file.sha256, ignoreCase = true))) {
             file.file.delete()
