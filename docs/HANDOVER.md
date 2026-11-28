@@ -1,6 +1,6 @@
 # GetMedia 接手说明（面向下一个 Agent）
 
-写于 2026-11-27，最后更新 2026-11-28，对应 `main`（`b8baeef`）、tag `v0.1.40`。
+写于 2026-11-27，最后更新 2026-11-28，对应 `main`（`dabc757` 之后）、tag `v0.1.41`。
 
 本文件是**接手入口**，只讲"怎么接着干"。历史流水账在 `docs/STATUS.local.md`（本机，不入库），
 方案与契约在 `docs/PLAN.md` / `docs/contracts/`。**旧文档与本文件冲突时，以本文件为准。**
@@ -15,7 +15,7 @@
 
 | 部分 | 状态 |
 |---|---|
-| Android | free / full 两个包，`0.1.40 / versionCode 41`（tag `v0.1.40`） |
+| Android | free / full 两个包，`0.1.41 / versionCode 42`（tag `v0.1.41`） |
 | 服务端 | release `20261127-9`，SQLite schema **21**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
@@ -47,17 +47,18 @@ export ANDROID_HOME=/Users/lc/Library/Android/sdk
 
 # 网页（在 web/ 下，npm 依赖已装好）
 cd web && npm run typecheck          # tsc --noEmit
-npm test                             # vitest，基线 258 项
+npm test                             # vitest，基线 259 项
 npm run build:owner                  # 产物 web/owner-app/dist/
 
 # 服务端（在仓库根）
-.venv/bin/python -m pytest -q server/tests tools/tests        # 基线 537 passed / 50 skipped
+.venv/bin/python -m pytest -q server/tests tools/tests        # 基线 544 passed / 50 skipped
 python3 tools/scan_leaks.py --all                             # 提交前必跑
 python3 tools/scan_forbidden.py legacy server android web
 python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free web/public-app web/shared
 
 # Android（构建慢，务必后台跑并用日志文件接退出码）
-sh android/gradlew -p android testDebugUnitTest lintDebug assembleFullRelease --console=plain > /tmp/build.log 2>&1; echo exit=$?
+# 基线：testFullDebugUnitTest 645 / testFreeDebugUnitTest 388，全 0 failed
+sh android/gradlew -p android testFullDebugUnitTest testFreeDebugUnitTest assembleFullRelease --console=plain > /tmp/build.log 2>&1; echo exit=$?
 ```
 
 沙箱里跑 pytest 的两个坑：
@@ -142,7 +143,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 ### 4.3 Android 发版
 
 1. 改 `android/app/build.gradle.kts` 的 `versionName` / `versionCode`（**必须递增**，否则覆盖安装被系统拒绝）。
-   当前 0.1.40 / 41，**下次 full ≥ 42**。
+   当前 0.1.41 / 42，**下次 full ≥ 43**。
 2. 构建：`assembleFreeRelease` + `assembleFullRelease`。
 3. 把版本、versionCode、两个包的 SHA-256 登记到 `docs/PLAN.md` §15-7。
 4. 归档到 `local-artifacts/getmedia-apk/`，并上传到服务器 `/var/www/getmedia/download/`。
@@ -171,7 +172,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 | # | 事项 | 状态 / 判据 |
 |---|---|---|
-| 1 | 真机验收 0.1.40 | **等用户**。装上后重点看：永久完整版（owner1/owner2）的「我的」页**没有**邀请码入口、free 和有时限 full 仍有、完整版**到期后同步入口不消失**而是退化成「已到期，续期后可继续同步」（`LibrarySyncSettings.kt:49-63`）、免费版没有任何同步入口；空库点「立即备份」的确认框份数文案与实际云端份数一致。 |
+| 1 | 真机验收 0.1.41 | **已装两台手机（`adb install -r`）**，等用户点一遍。重点看：①手机 B 的「音频」页不再有那条 `《老友记…(1)》` 假条目（`repairPlaceholderTypes` 把它抹成"类型未知"）；②手机 A 的「我的 → 曲目同步」里「上传本机新增」从 **0 条**变成可点（`reconcileOrphans` 把 `serverId` 指向已硬删行的孤儿脱钩成 `LOCAL_ONLY`）；③上传后手机 B 拉到同一条，类型是**视频**、标题是「老友记第五季第14集」；④手机 A 能收到手机 B 改的名字（水位允许回落）。<br>0.1.40 遗留的验收项（永久完整版没有邀请码入口、到期后同步入口退化成「已到期，续期后可继续同步」、免费版无同步入口、空库备份确认框份数文案）仍可一并看。 |
 | 2 | 管理台「权限管理」「邀请码」两页的真实浏览器验收 | 只做过构建 + vitest（数据层桩），没在真账号上点过。要验：改等级是否踢下线、待注销行的截止时间、邀请码明文只出现一次、**「改有效期」设完 /account/me 是否立刻反映新时间且设备没被踢**。 |
 | 3 | 邀请码发放流程 | 只能由 admin 在 `/invites` 生成，1 天有效、一码一人。生成后关掉面板就没了，必须当场「下载 .txt」。 |
 | 4 | 网页端「上传本地文件」 | 已做（媒体库页顶部），上限 200 MiB，串行上传并汇总失败项。未在真机上跑过大文件。 |
@@ -211,7 +212,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 接手后第一次动手前：
 
-- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 258 / pytest 537 passed、50 skipped）。
+- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 259 / pytest 544 passed、50 skipped；Android full 645 / free 388）。
 - [ ] `git status` 干净、`git log -1` 对得上 §0。
 - [ ] 确认这次改动属于 §4 的哪一类，**按对应流程走完整套**，不要只改代码不部署。
 - [ ] 改完在 `docs/STATUS.local.md` 顶部补一节（起因/改动/部署/验证），并提交。
