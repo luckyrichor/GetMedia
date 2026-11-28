@@ -1,6 +1,6 @@
 # GetMedia 接手说明（面向下一个 Agent）
 
-写于 2026-11-27，对应 `main`（`v0.1.38` 那次提交）、tag `v0.1.38`。
+写于 2026-11-27，最后更新 2026-11-28，对应 `main`（`b8baeef`）、tag `v0.1.40`。
 
 本文件是**接手入口**，只讲"怎么接着干"。历史流水账在 `docs/STATUS.local.md`（本机，不入库），
 方案与契约在 `docs/PLAN.md` / `docs/contracts/`。**旧文档与本文件冲突时，以本文件为准。**
@@ -15,7 +15,7 @@
 
 | 部分 | 状态 |
 |---|---|
-| Android | free / full 两个包，`0.1.39 / versionCode 40`（tag `v0.1.39`） |
+| Android | free / full 两个包，`0.1.40 / versionCode 41`（tag `v0.1.40`） |
 | 服务端 | release `20261127-9`，SQLite schema **21**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
@@ -142,7 +142,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 ### 4.3 Android 发版
 
 1. 改 `android/app/build.gradle.kts` 的 `versionName` / `versionCode`（**必须递增**，否则覆盖安装被系统拒绝）。
-   当前 0.1.37 / 38，**下次 full ≥ 39**。
+   当前 0.1.40 / 41，**下次 full ≥ 42**。
 2. 构建：`assembleFreeRelease` + `assembleFullRelease`。
 3. 把版本、versionCode、两个包的 SHA-256 登记到 `docs/PLAN.md` §15-7。
 4. 归档到 `local-artifacts/getmedia-apk/`，并上传到服务器 `/var/www/getmedia/download/`。
@@ -163,6 +163,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 7. 协议文本**只能升版本，不能降**；`docs/legal/` 与 `android/app/src/main/assets/legal/` 必须字节一致。
 8. 免费版不得只隐藏 UI 而保留重型功能实现。
 9. 用户说"优化一下"时**别删功能**。之前删掉行内按钮被明确纠正过：他只是要优化，不是要砍。
+10. **构建目录里只留 release 包**。debug 包与正式包包名相同、签名不同，误装会把正式包顶掉（必须卸载重装才能恢复）。跑完单测/调试编译后，`android/app/build/outputs/apk/*/debug/` 要清掉。
 
 ---
 
@@ -170,7 +171,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 | # | 事项 | 状态 / 判据 |
 |---|---|---|
-| 1 | 真机验收 0.1.39 | **等用户**。装上后重点看：永久完整版（owner1/owner2）的「我的」页**没有**邀请码入口、free 和有时限 full 仍有、完整版到期后同步入口消失、免费版没有任何同步入口。 |
+| 1 | 真机验收 0.1.40 | **等用户**。装上后重点看：永久完整版（owner1/owner2）的「我的」页**没有**邀请码入口、free 和有时限 full 仍有、完整版**到期后同步入口不消失**而是退化成「已到期，续期后可继续同步」（`LibrarySyncSettings.kt:49-63`）、免费版没有任何同步入口；空库点「立即备份」的确认框份数文案与实际云端份数一致。 |
 | 2 | 管理台「权限管理」「邀请码」两页的真实浏览器验收 | 只做过构建 + vitest（数据层桩），没在真账号上点过。要验：改等级是否踢下线、待注销行的截止时间、邀请码明文只出现一次、**「改有效期」设完 /account/me 是否立刻反映新时间且设备没被踢**。 |
 | 3 | 邀请码发放流程 | 只能由 admin 在 `/invites` 生成，1 天有效、一码一人。生成后关掉面板就没了，必须当场「下载 .txt」。 |
 | 4 | 网页端「上传本地文件」 | 已做（媒体库页顶部），上限 200 MiB，串行上传并汇总失败项。未在真机上跑过大文件。 |
@@ -210,7 +211,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 接手后第一次动手前：
 
-- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（169 / 382）。
+- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 258 / pytest 537 passed、50 skipped）。
 - [ ] `git status` 干净、`git log -1` 对得上 §0。
 - [ ] 确认这次改动属于 §4 的哪一类，**按对应流程走完整套**，不要只改代码不部署。
 - [ ] 改完在 `docs/STATUS.local.md` 顶部补一节（起因/改动/部署/验证），并提交。
