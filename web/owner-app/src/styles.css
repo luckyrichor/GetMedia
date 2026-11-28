@@ -492,6 +492,12 @@ audio.player-media { background: none; }
   flex: 1; min-width: 0; font-size: 0.82rem; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* 播放条下面的一行说明：「仅元数据」在现解析时别让人对着不动的播放器发呆；
+   解析失败也要说清是取不到，而不是永远"加载中"。 */
+.player-note {
+  margin: 6px 0 0; font-size: 0.78rem; line-height: 1.5; color: var(--muted);
+}
+.player-note.bad { color: #a4271c; }
 
 @media (max-width: 760px) {
   .thumbs img { width: 96px; height: 96px; }

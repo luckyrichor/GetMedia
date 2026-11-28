@@ -3,7 +3,8 @@
 职责边界：
 - 只做「单条作品 → 直链」与「直链 → 字节流」，不做列表（列表在 ``creators/``）；
 - B 站走公开 Web 接口（view + wbi playurl，``fnval=1`` 取混流 mp4，便于直接播放）；
-- 抖音不逆向私有接口：未配置浏览器桥接/授权时明确报"请用手机端提取"，不猜测直链。
+- 抖音接口要 ``a_bogus`` 签名、裸请求 403，所以走 ``douyin_media`` 的浏览器桥接；
+  桥接没开时明确报"请用手机端提取"，不猜测直链。
 
 测试通过 ``FakeResolver`` 注入，不联网。
 """
@@ -11,12 +12,14 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from . import douyin_media
 from .creator_rt import settings
 from .creator_wbi import _get_mixin_key, _parse_cookie_file, _sign
 
@@ -109,7 +112,7 @@ class ResolvedMedia:
 
 
 class MediaResolver:
-    """默认实现：B 站可解析；抖音明确交回手机端。"""
+    """默认实现：B 站走公开接口；抖音走浏览器桥接（未开启时交回手机端）。"""
 
     platform_name = "bilibili"
 
@@ -190,14 +193,51 @@ class MediaResolver:
             raise ResolveError("unsupported_link", "识别不出作品链接；请传单条作品链接或 BV 号", 400)
         platform, vid = found
         if platform == "douyin":
+            return self._resolve_douyin(vid, media_type=media_type, user_id=user_id)
+        page = _page_of(expanded)
+        return self._resolve_bilibili(vid, media_type=media_type,
+                                      target_page=page if page > 1 else None, user_id=user_id)
+
+    def _resolve_douyin(self, aweme_id: str, *, media_type: str,
+                        user_id: str | None = None) -> ResolvedMedia:
+        """抖音单条：走 Playwright 打开作品页，截获详情响应里的播放直链。
+
+        接口直连要 ``a_bogus`` 签名，裸请求一律 403（服务器上实测），所以只能开浏览器。
+        桥接没开（``GETMEDIA_DOUYIN_BROWSER``）时保持原来的 503，不静默降级——
+        "服务端能不能取"必须是显式配置，而不是碰运气。
+        """
+        if not settings.douyin_browser:
             raise ResolveError(
                 "platform_needs_phone",
                 "抖音直链需要授权 Cookie 与浏览器桥接；请在手机端提取，或先在网页端完成抖音授权",
                 503,
             )
-        page = _page_of(expanded)
-        return self._resolve_bilibili(vid, media_type=media_type,
-                                      target_page=page if page > 1 else None, user_id=user_id)
+        started = time.monotonic()
+        try:
+            info = douyin_media.resolve(
+                aweme_id,
+                self.cookie_file("douyin", user_id),
+                timeout=float(settings.douyin_browser_timeout),
+                headless=bool(settings.douyin_browser_headless),
+            )
+        except douyin_media.DouyinMediaError as exc:
+            log.warning("抖音解析失败（%s）：%s", exc.code, exc)
+            raise ResolveError(exc.code, str(exc), 502) from exc
+        headers = {"User-Agent": douyin_media.UA, "Referer": "https://www.douyin.com/"}
+        log.info("抖音解析完成：%s，%d 个直链，耗时 %.1fs",
+                 aweme_id, len(info["urls"]), time.monotonic() - started)
+        return ResolvedMedia(
+            platform="douyin",
+            video_id=aweme_id,
+            title=info["title"] or aweme_id,
+            duration_sec=info["duration_sec"],
+            sources=tuple(MediaSource(url=u, headers=dict(headers)) for u in info["urls"]),
+            ext="mp4",
+            uploader=info["uploader"],
+            cover_url=info["cover_url"],
+            source_url=f"https://www.douyin.com/video/{aweme_id}",
+            media_type=media_type,
+        )
 
     def resolve_target(self, text: str, *, media_type: str, page: int,
                        user_id: str | None = None) -> ResolvedMedia:

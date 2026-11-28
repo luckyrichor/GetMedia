@@ -791,3 +791,24 @@ def test_upload_quota_rejects_oversized_file(tmp_path):
     # 失败不留半成品
     assert [p for p in (env.tmp / "media").iterdir() if p.is_file()] == []
     assert env.client.get(f"/v2/tracks/{t['id']}", headers=hdr(env.token)).json()["has_file"] is False
+
+
+def test_sync_resets_when_client_watermark_is_ahead_of_server(menv):
+    """清库/硬删后序号回落到 1 开始，设备还攥着旧的高水位。
+
+    2026-11-28 实测踩到：新行 seq 1/3/5，另一台设备水位 156，增量拉取永远为空，
+    改名也永远传不过去。水位高于全库最大序号时按全量重来。
+    """
+    extract(menv, text="BVtest0002")
+    full = menv.client.get("/v2/sync?since_seq=0", headers=hdr(menv.token)).json()
+    assert len(full["items"]) == 1
+
+    # 模拟"设备水位比全库最大序号还高"
+    ahead = menv.client.get("/v2/sync?since_seq=99999", headers=hdr(menv.token)).json()
+    assert [i["id"] for i in ahead["items"]] == [full["items"][0]["id"]]
+    assert ahead["next_seq"] <= 99999
+
+    # 正常水位仍按增量走：不重复返回
+    normal = menv.client.get(f"/v2/sync?since_seq={ahead['next_seq']}",
+                             headers=hdr(menv.token)).json()
+    assert normal["items"] == []

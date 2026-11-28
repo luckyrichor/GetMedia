@@ -108,6 +108,22 @@ function platformLabel(p: string): string {
   return PLATFORMS.find((x) => x.value === p)?.label ?? p;
 }
 
+/** 能不能播/下载。
+ *
+ *  「仅元数据」不是"没有媒体"，只是"服务器没存文件"：`GET /v2/media/{id}` 会在
+ *  没有落盘文件时当场解析并中转（见 `server/getmedia/media_api.py`），所以只要有
+ *  `source_url` 就能放。真正取不到的是连来源链接都没有的条目（比如已脱钩的旧行）。 */
+function canStream(t: Track): boolean {
+  return t.has_file || !!t.source_url;
+}
+
+/** 播放/下载按钮的悬停说明：为什么能放、为什么要等、为什么不能放。 */
+function streamHint(t: Track): string | undefined {
+  if (t.has_file) return undefined;
+  if (t.source_url) return '服务器只存了元数据，播放或下载时会现解析，可能需要几秒';
+  return '这条既没有服务器文件也没有来源链接，无法播放或下载';
+}
+
 export function LibraryPage() {
   /** 上次拉到的列表：有就直接拿来当初始值，切回这一页立刻有内容，不用再等一个来回。 */
   const cached = peek<Track[]>(KEYS.tracks);
@@ -354,7 +370,7 @@ export function LibraryPage() {
       // 批量动作收尾：清掉勾选，别让用户对着"已选 N 项"再点一次
       setPicked([]);
       toast.show(
-        skipped > 0 ? `已下载 ${list.length} 项，跳过 ${skipped} 项（无文件）` : `已开始下载 ${list.length} 项`,
+        skipped > 0 ? `已下载 ${list.length} 项，跳过 ${skipped} 项（无来源链接）` : `已开始下载 ${list.length} 项`,
         skipped > 0 ? 'warn' : 'ok',
       );
     } finally {
@@ -609,17 +625,18 @@ export function LibraryPage() {
                       <button
                         type="button"
                         class="btn btn-ghost small"
-                        disabled={!t.has_file || busy}
-                        title={t.has_file ? undefined : '服务器没有这条的文件，无法播放'}
+                        disabled={!canStream(t) || busy}
+                        title={streamHint(t)}
                         onClick={() => playNow(t)}
                       >
                         {playing === t.id && !paused ? '暂停' : '播放'}
                       </button>
-                      {t.has_file ? (
-                        <a class="btn btn-ghost small" href={downloadUrl(t.id)} download>下载</a>
+                      {canStream(t) ? (
+                        <a class="btn btn-ghost small" href={downloadUrl(t.id)} download
+                           title={streamHint(t)}>下载</a>
                       ) : (
                         <button type="button" class="btn btn-ghost small" disabled
-                                title="服务器没有这条的文件，无法下载">
+                                title={streamHint(t)}>
                           下载
                         </button>
                       )}
@@ -816,6 +833,12 @@ function Player({ track, mediaRef, onState, onClose }: {
   /** 自己这一份引用：换到上面那条时，旧播放器的卸载清理可能晚于新播放器挂载，
    *  共享引用会被清空，所以播哪个元素必须以自己的为准。 */
   const own = useRef<HTMLMediaElement | null>(null);
+  /** 「仅元数据」要现解析，先给一句"在解析"，别让人对着一个不动的播放器发呆；
+   *  解析失败（平台拒流）时也得说清是取不到，而不是"加载中"永远转。 */
+  const [phase, setPhase] = useState<'loading' | 'ok' | 'failed'>(track.has_file ? 'ok' : 'loading');
+  /** 失败原因取自服务端的 `message`（如「抖音直链需要授权 Cookie…」）：
+   *  `<audio>` 的 error 事件读不到响应体，只能先探一次。 */
+  const [failMsg, setFailMsg] = useState('');
 
   const attach = (el: HTMLVideoElement | HTMLAudioElement | null) => {
     own.current = el;
@@ -831,13 +854,43 @@ function Player({ track, mediaRef, onState, onClose }: {
     };
   }, [track.id]);
 
+  /** 先探一个字节：能播就让媒体元素去取，不能播就把服务端那句话原样告诉用户。
+   *  只有「仅元数据」才探——有文件的条目本来就是 200/206，多一个请求没意义。 */
+  useEffect(() => {
+    if (track.has_file) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(mediaUrl(track.id), {
+          headers: { Range: 'bytes=0-0' },
+          credentials: 'same-origin',
+        });
+        if (cancelled) return;
+        if (r.ok) return;
+        let msg = '';
+        try {
+          const body = await r.json() as { message?: string };
+          msg = body?.message || '';
+        } catch { /* 不是 JSON 就用状态码兜底 */ }
+        setFailMsg(msg || `服务器返回 ${r.status}`);
+        setPhase('failed');
+        onState(false);
+      } catch {
+        // 网络层失败交给媒体元素自己报错，这里不抢
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [track.id, track.has_file]);
+
   const common = {
     class: 'player-media',
     controls: true,
     preload: 'metadata' as const,
     src: mediaUrl(track.id),
-    onPlay: () => onState(true),
+    onPlay: () => { setPhase('ok'); onState(true); },
+    onPlaying: () => setPhase('ok'),
     onPause: () => onState(false),
+    onError: () => { setPhase('failed'); onState(false); },
   };
 
   return (
@@ -851,6 +904,16 @@ function Player({ track, mediaRef, onState, onClose }: {
       {track.media_type === 'video'
         ? <video key={track.id} ref={attach} {...common} />
         : <audio key={track.id} ref={attach} {...common} />}
+      {phase === 'loading' && (
+        <p class="player-note">
+          这条只存了元数据，服务器正在现解析，可能需要几秒…
+        </p>
+      )}
+      {phase === 'failed' && (
+        <p class="player-note bad">
+          {failMsg ? `取不到媒体流：${failMsg}` : '取不到媒体流：平台可能拒绝了这次解析。稍后重试，或在手机端重新解析这条。'}
+        </p>
+      )}
     </div>
   );
 }

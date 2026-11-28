@@ -469,6 +469,13 @@ def register(app, guard, engine, clock, *, resolver=None, store: MediaStore | No
     @app.get("/v2/sync")
     def sync(since_seq: int = Query(0, ge=0), limit: int = Query(200, ge=1, le=500),
              ctx: AuthCtx = Depends(guard)):
+        # 计数器被重置（清库/硬删后 MAX 回落）时，设备手里的水位会永远高于全库最大序号，
+        # 增量拉取就再也拉不到新行。这种情况按全量重来一次，客户端水位随之回到真实位置。
+        highest = store.max_seq()
+        if since_seq > highest:
+            log.warning("同步水位 %s 高于全库最大序号 %s，按全量重来（账号 %s）",
+                        since_seq, highest, ctx.user_id)
+            since_seq = 0
         items = store.list(ctx.user_id, since_seq=since_seq, limit=limit, include_deleted=True)
         next_seq = max((i["updated_seq"] for i in items), default=since_seq)
         return {"items": items, "next_seq": next_seq, "has_more": len(items) >= limit,

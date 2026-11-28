@@ -483,10 +483,37 @@ describe('媒体库', () => {
     await until(() => clicked.length === 1);
     expect(clicked[0]).toMatch(/\/api\/v2\/media\/1\?download=1$/);
     // 跳过的要说清楚跳了几条、为什么
-    await until(() => text().includes('已下载 1 项，跳过 1 项（无文件）'));
+    await until(() => text().includes('已下载 1 项，跳过 1 项（无来源链接）'));
   });
 
-  test('无文件：播放与下载都禁用并说明原因，删除仍然可用（危险色）', async () => {
+  test('仅元数据但有来源链接：播放与下载都能点，播放条说明会现解析', async () => {
+    server(ownerRoutes({
+      [LIST]: {
+        json: {
+          items: [track(1, { has_file: false, storage: 'metadata', bytes: 0, source_url: 'https://www.bilibili.com/video/BV1xx' })],
+          count: 1,
+        },
+      },
+    }));
+    mount('/library');
+    await until(() => text().includes('曲目 1'));
+
+    const btns = Array.from(document.querySelectorAll('.track-actions button, .track-actions a'));
+    const play = btns.find((b) => b.textContent?.trim() === '播放') as HTMLButtonElement;
+    expect(play.disabled).toBe(false);
+    expect(play.getAttribute('title')).toContain('只存了元数据');
+
+    // 下载不再是禁用按钮，而是真链接（服务端没文件时会现解析后按附件下发）
+    const dl = btns.find((b) => b.textContent?.trim() === '下载') as HTMLAnchorElement;
+    expect(dl.tagName).toBe('A');
+    expect(dl.getAttribute('href')).toContain('/v2/media/1');
+
+    // 播放：播放条展开，且先给一句"正在现解析"
+    await click(play);
+    expect(text()).toContain('服务器正在现解析');
+  });
+
+  test('无文件且无来源链接：播放与下载都禁用并说明原因，删除仍然可用（危险色）', async () => {
     server(ownerRoutes({
       [LIST]: {
         json: {
@@ -503,11 +530,11 @@ describe('媒体库', () => {
 
     const play = byText('播放') as HTMLButtonElement;
     expect(play.disabled).toBe(true);
-    expect(play.getAttribute('title')).toContain('没有这条的文件');
+    expect(play.getAttribute('title')).toContain('也没有来源链接');
 
     const dl = byText('下载') as HTMLButtonElement;
     expect(dl.disabled).toBe(true);
-    expect(dl.getAttribute('title')).toContain('没有这条的文件');
+    expect(dl.getAttribute('title')).toContain('也没有来源链接');
 
     // 删除不受影响，而且是危险样式
     const del = byText('删除') as HTMLButtonElement;

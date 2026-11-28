@@ -126,6 +126,16 @@ class MediaStore:
             result["sha256"] = row._mapping["sha256"]
         return result
 
+    def max_seq(self) -> int:
+        """全库最大的 ``updated_seq``（跨账号，因为序号本身是全局单调的）。
+
+        ``/v2/sync`` 用它识别"计数器被重置"：清库/硬删之后 ``MAX`` 会回落到很小的值，
+        而设备手里还攥着旧的高水位，增量拉取就会永远拉不到新行（2026-11-28 清空账号后
+        实测踩到：新行 seq 1/3/5，设备水位 156）。这种情况按全量重来一次。
+        """
+        with self.engine.begin() as c:
+            return int(c.execute(text("SELECT COALESCE(MAX(updated_seq),0) FROM tracks")).scalar_one())
+
     def list(self, user_id: str, *, media_type: str | None = None, since_seq: int = 0,
              limit: int = 200, include_deleted: bool = False) -> list[dict]:
         sql = f"SELECT {_COLS} FROM tracks WHERE user_id=:u AND updated_seq>:s"
