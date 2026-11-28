@@ -111,9 +111,13 @@ class BackupEmptyLibraryTest {
         Thread.sleep(600)
 
         assertEquals("空库不应发出上传", 0, uploads.get())
-        // 登录后要问一次"云端有没有可恢复的备份"（见 BackupRestoreDecisionTest），
-        // 这是唯一允许的那次读；落成"以本机为准"之后就不再查了。
-        assertTrue("空库只允许一次决策查询", listed.get() <= 1)
+        // 读请求只允许两次，都是有理由的：
+        //   ① 登录后要问一次"云端有没有可恢复的备份"（见 BackupRestoreDecisionTest），
+        //      落成"以本机为准"之后就不再查；
+        //   ② 用户点「立即备份」被空库拦下时，确认框要显示云端**现有几份**
+        //      （BackupManager.cloudCount），查一次列表。
+        // 除此之外不许轮询——这条断言防的是"反复查"。
+        assertTrue("空库只允许两次读：登录决策 + 确认框查份数", listed.get() <= 2)
         assertNull("空库上传被拦后不能写 lastHash", BackupPrefs(context).read("u1").lastHash)
     }
 

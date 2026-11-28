@@ -186,7 +186,7 @@ fun BackupSection(injected: BackupManager.UiState? = null) {
         AlertDialog(
             onDismissRequest = { BackupManager.cancelEmptyConfirm() },
             title = { Text("本地曲库为空") },
-            text = { Text("上传会占用云端 3 份备份中的 1 份，且会挤掉最旧的一份。仍要上传？") },
+            text = { Text(emptyBackupMessage(state.cloudCount)) },
             confirmButton = {
                 TextButton(onClick = { BackupManager.confirmEmptyBackup() }) { Text("仍要上传") }
             },
@@ -247,3 +247,23 @@ private val timeFormat = DateTimeFormatter.ofPattern("M月d日 HH:mm")
 
 private fun formatBackupTime(ms: Long): String =
     Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).format(timeFormat)
+
+/**
+ * 「本地曲库为空」时点「立即备份」的确认文案。
+ *
+ * `cloudCount` = 云端现有几份（`BackupManager.UiState.cloudCount`）：
+ * - `-1` 没查到（离线/超时），只说通用规则，不编造份数；
+ * - `0` 云端是空的，这次上传**不会**挤掉任何东西——原来的文案在这里会吓人；
+ * - `1..2` 传完还没满 3 份，也不会挤掉；
+ * - `>=3` 才会真的挤掉最旧的一份（服务端 `metadata_backup.KEEP = 3`）。
+ */
+internal fun emptyBackupMessage(cloudCount: Int): String = when {
+    cloudCount < 0 ->
+        "云端最多保留 3 份备份。上传这一份会占掉 1 格，已经满 3 份时会挤掉最旧的一份。仍要上传？"
+    cloudCount == 0 ->
+        "云端现在没有任何备份。上传会占用 3 格中的 1 格，不会挤掉任何东西。仍要上传？"
+    cloudCount >= 3 ->
+        "云端现有 $cloudCount 份备份（上限 3 份）。上传会占掉 1 格，并挤掉最旧的那份。仍要上传？"
+    else ->
+        "云端现有 $cloudCount 份备份（上限 3 份）。上传后是 ${cloudCount + 1} 份，还没满，不会挤掉已有的。仍要上传？"
+}

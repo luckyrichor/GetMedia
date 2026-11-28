@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -56,6 +57,13 @@ object BackupManager {
         val noticePending: Boolean = false,
         /** 本地库为空时点了「立即备份」：等用户确认"空清单也要传"。 */
         val emptyConfirmPending: Boolean = false,
+        /**
+         * 确认框要用的「云端现有几份备份」。
+         *
+         * `-1` = 没查（离线、超时、接口失败），界面退回中性文案。
+         * 只在 [backupNow] 拦下来时顺手查一次，不做常驻轮询。
+         */
+        val cloudCount: Int = -1,
         /**
          * 云端有内容备份、用户还没决定是否恢复。为真时**自动备份暂停**，
          * 设置页常驻一条提示与「去处理」入口（见 [BackupCard]）。
@@ -245,7 +253,12 @@ object BackupManager {
         if (gate() == null) return
         scope.launch {
             if (localContentCount() == 0) {
-                _state.value = _state.value.copy(emptyConfirmPending = true)
+                // 确认框要按真实份数说话：文案原来写死「会挤掉最旧的一份」，
+                // 云端一份都没有时读起来像要毁掉什么。查不到就留 -1，界面退回中性说法。
+                val n = withTimeoutOrNull(1500) {
+                    runCatching { api?.list()?.size }.getOrNull()
+                } ?: -1
+                _state.value = _state.value.copy(emptyConfirmPending = true, cloudCount = n)
                 return@launch
             }
             runCheck("立即备份", force = true)
@@ -254,13 +267,13 @@ object BackupManager {
 
     /** 用户在确认框里点了"仍要上传"：空库这次放行。 */
     fun confirmEmptyBackup() {
-        _state.value = _state.value.copy(emptyConfirmPending = false)
+        _state.value = _state.value.copy(emptyConfirmPending = false, cloudCount = -1)
         if (gate() == null) return
         scope.launch { runCheck("立即备份（空库已确认）", force = true, allowEmpty = true) }
     }
 
     fun cancelEmptyConfirm() {
-        _state.value = _state.value.copy(emptyConfirmPending = false)
+        _state.value = _state.value.copy(emptyConfirmPending = false, cloudCount = -1)
     }
 
     /**

@@ -141,6 +141,21 @@ class BackupCardRenderTest {
         rule.onNodeWithText("仍要上传").assertIsDisplayed()
     }
 
+    /** 确认框要按云端**真实份数**说话：一份都没有时不能吓唬人说"会挤掉最旧的"。 */
+    @Test
+    fun emptyBackupMessageFollowsRealCloudCount() {
+        // 没查到（离线/超时）：只说规则，不编造份数
+        assertTrue(emptyBackupMessage(-1).contains("已经满 3 份时"))
+        // 云端是空的：明确说不会挤掉任何东西
+        assertTrue(emptyBackupMessage(0).contains("不会挤掉任何东西"))
+        assertFalse(emptyBackupMessage(0).contains("挤掉最旧"))
+        // 传完还没满：说清楚是第几份
+        assertTrue(emptyBackupMessage(1).contains("上传后是 2 份"))
+        assertTrue(emptyBackupMessage(2).contains("上传后是 3 份"))
+        // 满 3 份才会真的挤掉最旧的
+        assertTrue(emptyBackupMessage(3).contains("挤掉最旧的那份"))
+    }
+
     /** 恢复决策没做之前：卡片上常驻一条提示与「去处理」，不是只弹一次了事。 */
     @Test
     @Config(sdk = [33], qualifiers = "w360dp-h740dp-xhdpi")
