@@ -1,6 +1,6 @@
 # GetMedia 接手说明（面向下一个 Agent）
 
-写于 2026-11-27，最后更新 2026-11-29，对应 `main`（0.1.45 发版提交）、tag `v0.1.45`。
+写于 2026-11-27，最后更新 2026-11-28，对应 `main`（0.1.46 发版提交）、tag `v0.1.46`。
 
 本文件是**接手入口**，只讲"怎么接着干"。历史流水账在 `docs/STATUS.local.md`（本机，不入库），
 方案与契约在 `docs/PLAN.md` / `docs/contracts/`。**旧文档与本文件冲突时，以本文件为准。**
@@ -15,7 +15,7 @@
 
 | 部分 | 状态 |
 |---|---|
-| Android | free / full 两个包，`0.1.45 / versionCode 46`（tag `v0.1.45`） |
+| Android | free / full 两个包，`0.1.46 / versionCode 47`（tag `v0.1.46`） |
 | 服务端 | release `20261127-9`，SQLite schema **21**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
@@ -57,7 +57,7 @@ python3 tools/scan_forbidden.py legacy server android web
 python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free web/public-app web/shared
 
 # Android（构建慢，务必后台跑并用日志文件接退出码）
-# 基线：testFullDebugUnitTest 660 / testFreeDebugUnitTest 395，全 0 failed
+# 基线：testFullDebugUnitTest 669 / testFreeDebugUnitTest 401，全 0 failed
 sh android/gradlew -p android testFullDebugUnitTest testFreeDebugUnitTest assembleFullRelease --console=plain > /tmp/build.log 2>&1; echo exit=$?
 ```
 
@@ -143,7 +143,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 ### 4.3 Android 发版
 
 1. 改 `android/app/build.gradle.kts` 的 `versionName` / `versionCode`（**必须递增**，否则覆盖安装被系统拒绝）。
-   当前 0.1.45 / 46，**下次 full ≥ 47**。
+   当前 0.1.46 / 47，**下次 full ≥ 48**。
 2. 构建：`assembleFreeRelease` + `assembleFullRelease`。
 3. 把版本、versionCode、两个包的 SHA-256 登记到 `docs/PLAN.md` §15-7。
 4. 归档到 `local-artifacts/getmedia-apk/`，并上传到服务器 `/var/www/getmedia/download/`。
@@ -172,7 +172,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 | # | 事项 | 状态 / 判据 |
 |---|---|---|
-| 1 | 真机验收 0.1.45 | **已装两台手机（`adb install -r -d`）**。0.1.45 要看的：①**改名跨设备跟随**——在手机 A 上把某一首改名，等一分钟（前台轮询 60 秒）看手机 B 是否跟着变；反向再试一次。升级后第一次同步会做一次全量对账，0.1.44 遗留的「A 显示《出山》、B 显示《出山3》」应该在这时自动对齐（本轮已在两台真机确认都变成《出山3》）。②**「无法备份」的原因**——条目行内出现「未备份 · 请求被服务器拒绝」这类红字，「设置 → 曲库同步」下方多出「本机文件备份」区块逐条列出条目与原因。0.1.44 那批（下载进度条长在正在下载的那一行、「云端未下载」标签让位、断网后不判永久失败）仍可一并复看。<br>0.1.40 遗留的验收项（永久完整版没有邀请码入口、到期后同步入口退化成「已到期，续期后可继续同步」、免费版无同步入口、空库备份确认框份数文案）也仍可一并看。 |
+| 1 | 真机验收 0.1.46 | **已装两台手机（`adb install -r -d`）**。0.1.46 要看的：①**下载可以取消**——发起一次「下载到本机」，进度条右侧出现「取消」，点了立刻停（不用等整条传完），进度条消失且不弹红色错误；再点一次下载应接着续传（`.part` 留着）。批量「下载缺的 N 项」中途取消，整批停下并保留已下好的几项。②**改名跨设备跟随**——一台改名，另一台一分钟内跟着变，且不会在一分钟后被旧名字推回去（本轮已在真机确认：B 改成「3」→ 服务器 `updated_seq` 11 → A 一分钟内变「3」）。0.1.45 那批（条目行内「未备份 · 原因」红字、「设置 → 曲库同步 → 本机文件备份」区块）仍可一并复看。<br>0.1.40 遗留的验收项（永久完整版没有邀请码入口、到期后同步入口退化成「已到期，续期后可继续同步」、免费版无同步入口、空库备份确认框份数文案）也仍可一并看。 |
 | 2 | 管理台「权限管理」「邀请码」两页的真实浏览器验收 | 只做过构建 + vitest（数据层桩），没在真账号上点过。要验：改等级是否踢下线、待注销行的截止时间、邀请码明文只出现一次、**「改有效期」设完 /account/me 是否立刻反映新时间且设备没被踢**。 |
 | 3 | 邀请码发放流程 | 只能由 admin 在 `/invites` 生成，1 天有效、一码一人。生成后关掉面板就没了，必须当场「下载 .txt」。 |
 | 4 | 网页端「上传本地文件」 | 已做（媒体库页顶部），上限 200 MiB，串行上传并汇总失败项。未在真机上跑过大文件。 |
@@ -212,7 +212,7 @@ sqlite3 "file:路径.db?mode=ro&immutable=1" "…"
 
 接手后第一次动手前：
 
-- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 259 / pytest 544 passed、50 skipped；Android full 660 / free 395）。
+- [ ] 跑一遍前端 `npm test` 和服务端 `pytest`，确认与 §2 的基线一致（vitest 259 / pytest 544 passed、50 skipped；Android full 669 / free 401）。
 - [ ] `git status` 干净、`git log -1` 对得上 §0。
 - [ ] 确认这次改动属于 §4 的哪一类，**按对应流程走完整套**，不要只改代码不部署。
 - [ ] 改完在 `docs/STATUS.local.md` 顶部补一节（起因/改动/部署/验证），并提交。
