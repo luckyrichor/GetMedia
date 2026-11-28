@@ -27,6 +27,7 @@ import com.getmedia.app.data.backup.BackupPrefs
 import com.getmedia.app.ui.theme.GetMediaTheme
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.runner.RunWith
@@ -137,23 +138,22 @@ class BackupCardRenderTest {
         render(normal.copy(lastTracks = 0, lastAtMs = 0, emptyConfirmPending = true))
         saveShot("backup-light-empty-confirm")
         rule.onNodeWithText("本地曲库为空").assertIsDisplayed()
-        rule.onNodeWithText("会挤掉最旧的一份", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("移除最久的备份", substring = true).assertIsDisplayed()
         rule.onNodeWithText("仍要上传").assertIsDisplayed()
     }
 
-    /** 确认框要按云端**真实份数**说话：一份都没有时不能吓唬人说"会挤掉最旧的"。 */
+    /** 确认框要按云端**真实份数**说话：一份都没有时不能吓唬人说"会移除最久的"。 */
     @Test
     fun emptyBackupMessageFollowsRealCloudCount() {
         // 没查到（离线/超时）：只说规则，不编造份数
-        assertTrue(emptyBackupMessage(-1).contains("已经满 3 份时"))
-        // 云端是空的：明确说不会挤掉任何东西
-        assertTrue(emptyBackupMessage(0).contains("不会挤掉任何东西"))
-        assertFalse(emptyBackupMessage(0).contains("挤掉最旧"))
-        // 传完还没满：说清楚是第几份
-        assertTrue(emptyBackupMessage(1).contains("上传后是 2 份"))
-        assertTrue(emptyBackupMessage(2).contains("上传后是 3 份"))
-        // 满 3 份才会真的挤掉最旧的
-        assertTrue(emptyBackupMessage(3).contains("挤掉最旧的那份"))
+        assertEquals("云端最多保留 3 份备份。备份满时上传会移除最久的备份。", emptyBackupMessage(-1))
+        // 0/1/2 份走同一句：只说现有份数
+        assertEquals("云端现有 0 份备份（上限 3 份）。", emptyBackupMessage(0))
+        assertEquals("云端现有 1 份备份（上限 3 份）。", emptyBackupMessage(1))
+        assertEquals("云端现有 2 份备份（上限 3 份）。", emptyBackupMessage(2))
+        assertFalse(emptyBackupMessage(0).contains("移除"))
+        // 满 3 份才会真的移除最久的
+        assertEquals("云端现有 3 份备份（上限 3 份）。上传会移除最久的备份。", emptyBackupMessage(3))
     }
 
     /** 恢复决策没做之前：卡片上常驻一条提示与「去处理」，不是只弹一次了事。 */
