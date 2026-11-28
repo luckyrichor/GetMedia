@@ -67,6 +67,33 @@ function savePageSize(n: number) {
   }
 }
 
+/** 写剪贴板：优先 Clipboard API；http、旧浏览器、权限被拒时退回 `execCommand`。
+ *  返回 false 表示两条路都没成，调用方要给用户一个「手动选中复制」的提示。 */
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* 落到下面的兜底 */
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** 表格列。宽度由 styles.css 的 `--e-*` 变量给，`<col style="width: var(--e-*)">` 引用。 */
 const COLS: { label: string; cls: string; mid?: boolean; tip?: string }[] = [
   { label: '序号', cls: 'e-no' },
@@ -127,6 +154,51 @@ export function ExtractPage() {
   const [openIds, setOpenIds] = useState<number[]>([]);
   const toggleOpen = (id: number) =>
     setOpenIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  /** 作品列的右键菜单：记住落点和那一行，菜单项按这一行「有什么」决定。
+   *  用 fixed 定位跟着鼠标走——表格外面套着滚动容器，absolute 会被裁掉。 */
+  const [copyMenu, setCopyMenu] = useState<{ x: number; y: number; job: ExtractionJob } | null>(null);
+
+  /** 右击作品列。已经拖选了文字就放行浏览器原生菜单（系统自带的「复制」更好用）。 */
+  function openCopyMenu(
+    e: { clientX: number; clientY: number; preventDefault: () => void },
+    j: ExtractionJob,
+  ) {
+    if ((window.getSelection()?.toString() ?? '') !== '') return;
+    e.preventDefault();
+    // 贴到右/下边时把菜单收回视口内（宽 168 + 边距 8；每项 36px，最多 4 项）
+    const w = 176;
+    const h = 12 + 36 * 4;
+    setCopyMenu({
+      x: Math.max(8, Math.min(e.clientX, window.innerWidth - w - 8)),
+      y: Math.max(8, Math.min(e.clientY, window.innerHeight - h)),
+      job: j,
+    });
+  }
+
+  async function doCopy(text: string, label: string) {
+    setCopyMenu(null);
+    const ok = await writeClipboard(text);
+    toast(ok ? `已复制${label}` : '复制失败：浏览器不允许写剪贴板，请手动选中后按 ⌘C / Ctrl+C',
+      ok ? 'ok' : 'err');
+  }
+
+  // 点别处、滚动、Esc、改窗口大小都关掉右键菜单
+  useEffect(() => {
+    if (!copyMenu) return;
+    const close = () => setCopyMenu(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setCopyMenu(null); };
+    document.addEventListener('mousedown', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [copyMenu]);
 
   const timer = useRef<number | null>(null);
 
@@ -265,9 +337,42 @@ export function ExtractPage() {
   /** 状态分段的每段数量：任务是一次全量拉回来的，所以这些数字是准的。 */
   const statusCount = (s: string) => jobs.filter((j) => j.status === s).length;
 
+  /** 右键菜单项：只列这一行**真的有**的内容，避免「复制作品号」复制出一个「—」。 */
+  const copyItems: { text: string; value: string; label: string }[] = [];
+  if (copyMenu) {
+    const j = copyMenu.job;
+    copyItems.push({ text: '复制标题', value: j.title || j.input, label: '标题' });
+    if (j.video_id) copyItems.push({ text: '复制作品号', value: j.video_id, label: '作品号' });
+    if (j.error_detail) copyItems.push({ text: '复制报错信息', value: j.error_detail, label: '报错信息' });
+    if (j.input && j.input !== (j.title || j.input)) {
+      copyItems.push({ text: '复制原始链接', value: j.input, label: '原始链接' });
+    }
+  }
+
   return (
     <>
       {toastNode}
+
+      {copyMenu ? (
+        <div
+          class="menu-pop ctx-menu"
+          role="menu"
+          aria-label="复制作品信息"
+          style={{ top: `${copyMenu.y}px`, left: `${copyMenu.x}px` }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {copyItems.map((it) => (
+            <button
+              type="button"
+              role="menuitem"
+              class="menu-item"
+              onClick={() => void doCopy(it.value, it.label)}
+            >
+              {it.text}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <PageHead title="单个提取" />
 
@@ -467,17 +572,30 @@ export function ExtractPage() {
                   return (
                     <tr data-job={j.id}>
                       <td class="e-no muted">{(pageSafe - 1) * pageSize + idx + 1}</td>
-                      <td class="e-title">
+                      <td class="e-title" onContextMenu={(e) => openCopyMenu(e, j)}>
                         {/* 标题默认两行、超出省略号，**点一下展开全文**（再点收起）。
                             不恢复横向滚动：格子里再套一个滚动条既跟表格本身的横滚打架，
                             滚轮划过还会把页面滚走；展开是整行变高，不新增第二层滚动。
-                            `title` 仍然放全文，悬停也能看。 */}
-                        <button
-                          type="button"
+                            这里用 div + role="button" 而不是 <button>：button 里的文字
+                            选不中（浏览器默认不让），而这一格恰恰是用户最想复制的地方。
+                            右击弹「复制」菜单，见下面的 .ctx-menu。 */}
+                        <div
                           class="t-toggle"
+                          role="button"
+                          tabIndex={0}
                           aria-expanded={openIds.includes(j.id)}
-                          title={j.title || j.input}
-                          onClick={() => toggleOpen(j.id)}
+                          title={`${j.title || j.input}（单击展开/收起，右击复制）`}
+                          onClick={() => {
+                            // 正在拖选文字就别顺手把行展开了
+                            if ((window.getSelection()?.toString() ?? '') !== '') return;
+                            toggleOpen(j.id);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              toggleOpen(j.id);
+                            }
+                          }}
                         >
                           <span class={openIds.includes(j.id) ? 't-main open' : 't-main'}>
                             {j.title || j.input}
@@ -494,7 +612,7 @@ export function ExtractPage() {
                           ) : (
                             <span class="t-sub">{j.video_id || '—'}</span>
                           )}
-                        </button>
+                        </div>
                       </td>
                       <td class="e-who">
                         <div class={j.uploader ? 'who-name' : 'who-name weak'} title={j.uploader ?? ''}>

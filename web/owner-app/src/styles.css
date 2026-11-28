@@ -1665,7 +1665,12 @@ td.zero .bytes-u { color: inherit; }
   display: block; width: 100%; text-align: left;
   margin: 0; padding: 0; border: 0; background: none;
   font: inherit; color: inherit; cursor: pointer;
+  /* 这一格是用户最想复制的地方：文字必须能拖选（<div role="button"> 才做得到，
+     <button> 里的文字浏览器默认不让选）。右击另有「复制」菜单。 */
+  user-select: text; -webkit-user-select: text;
 }
+/* 选中态：主色淡淡铺一层，让人一眼看出「这段能选、能复制」 */
+.ex-table .e-title ::selection { background: rgba(36, 88, 214, 0.22); color: inherit; }
 /* 只给标题加下划线当"可以点"的暗示，失败原因那行不加 */
 .ex-table .t-toggle:hover .t-main,
 .ex-table .t-toggle:focus-visible .t-main {
@@ -1728,6 +1733,10 @@ td.zero .bytes-u { color: inherit; }
 .ex-table .ops-none { color: var(--muted); font-size: 0.82rem; opacity: 0.8; cursor: help; }
 /* 上传者缺失时弱化（列还在，只是不抢眼） */
 .ex-table .who-name.weak { color: var(--muted); opacity: 0.72; font-weight: 500; }
+/* 作品列的右键菜单：外观沿用 `.menu-pop`（fixed + z-index 300），只是贴着鼠标落点出现。
+   宽度比默认的 168 窄一点，四个字的菜单项够用。 */
+.ctx-menu { min-width: 148px; }
+
 /* 底栏：左边「共 N 条」，右边分页器 + 每页条数（`.pager` 自带 `margin-left:auto`） */
 .box-foot .pager { margin-top: 0; }
 .box-foot .pager .pager-size .select-menu { top: auto; bottom: calc(100% + 4px); }

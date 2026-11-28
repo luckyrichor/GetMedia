@@ -59,7 +59,28 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  // 每个用例自己装的剪贴板桩要拆掉，否则会串到下一个用例
+  delete (navigator as unknown as { clipboard?: unknown }).clipboard;
 });
+
+/** 给 navigator.clipboard 装一个能记账的桩，返回被调用的文本。 */
+function stubClipboard() {
+  const writeText = vi.fn((_text: string) => Promise.resolve());
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+  return writeText;
+}
+
+/** 在某个元素上发一次 contextmenu（浏览器里就是右击）。 */
+async function rightClick(el: Element, at = { x: 120, y: 200 }) {
+  await act(async () => {
+    el.dispatchEvent(new MouseEvent('contextmenu', {
+      bubbles: true, cancelable: true, clientX: at.x, clientY: at.y,
+    }));
+  });
+}
+
+const menuItems = () =>
+  Array.from(document.querySelectorAll('.ctx-menu [role="menuitem"]')).map((b) => b.textContent);
 
 describe('单个提取', () => {
   test('只解析：显示标题/UP 主/时长/预估大小，并说明还没入库', async () => {
@@ -361,13 +382,16 @@ describe('单个提取', () => {
     mount('/extract');
     await until(() => titles().length === 2);
 
-    // 两行截断是 CSS 做的，jsdom 量不出高度；这里断言「结构上是可展开的按钮 + 默认没有 open 类」
+    // 两行截断是 CSS 做的，jsdom 量不出高度；这里断言「结构上是可展开的控件 + 默认没有 open 类」
     const toggles = Array.from(document.querySelectorAll('.ex-table .t-toggle'));
     expect(toggles).toHaveLength(2);
     const [first, second] = toggles;
-    expect(first!.tagName).toBe('BUTTON');
+    // 是 div 不是 <button>：button 里的文字浏览器不让选，而这一格要能复制
+    expect(first!.tagName).toBe('DIV');
+    expect(first!.getAttribute('role')).toBe('button');
+    expect(first!.getAttribute('tabindex')).toBe('0');
     expect(first!.getAttribute('aria-expanded')).toBe('false');
-    expect(first!.getAttribute('title')).toBe(long); // 悬停仍是全文
+    expect(first!.getAttribute('title')).toContain(long); // 悬停仍是全文
     expect(document.querySelectorAll('.ex-table .t-main.open')).toHaveLength(0);
     // 标题文字本身没被截断成短字符串（截断只发生在一行/两行的视觉层）
     expect(titles()[0]).toBe(long);
@@ -399,5 +423,67 @@ describe('单个提取', () => {
 
     await click(document.querySelector('.ex-table .t-toggle') as HTMLElement);
     await until(() => document.querySelectorAll('.ex-table .t-sub.bad-text.open').length === 1);
+  });
+
+  test('作品列右击出「复制」菜单：复制标题写进剪贴板，点完就关', async () => {
+    const writeText = stubClipboard();
+    server(ownerRoutes({
+      [JOBS]: { json: { jobs: [job({ id: 1, title: '可复制的标题', video_id: 'BV1xx411c7mD' })] } },
+    }));
+    mount('/extract');
+    await until(() => rowCount() === 1);
+
+    await rightClick(document.querySelector('.ex-table tbody .e-title')!);
+    // 正常行：标题、作品号、原始链接（input 与 title 不同才有这一项）
+    expect(menuItems()).toEqual(['复制标题', '复制作品号', '复制原始链接']);
+
+    await click(Array.from(document.querySelectorAll('.ctx-menu [role="menuitem"]'))[0]!);
+    await until(() => writeText.mock.calls.length === 1);
+    expect(writeText.mock.calls[0]![0]).toBe('可复制的标题');
+    // 点完菜单收起，并给一句 toast
+    expect(document.querySelector('.ctx-menu')).toBeNull();
+    expect(text()).toContain('已复制标题');
+  });
+
+  test('失败行右击：菜单里有「复制报错信息」，复制的是红字原文', async () => {
+    const writeText = stubClipboard();
+    const reason = '识别不出作品链接：这条分享文案里没有找到 B 站或抖音的作品地址';
+    server(ownerRoutes({
+      [JOBS]: {
+        json: {
+          jobs: [job({
+            id: 1, status: 'failed', error_code: 'bad_input', error_detail: reason,
+            track_id: null, video_id: null, title: null, input: '复制口令这一段文字',
+          })],
+        },
+      },
+    }));
+    mount('/extract');
+    await until(() => document.querySelectorAll('.ex-table .t-sub.bad-text').length === 1);
+
+    await rightClick(document.querySelector('.ex-table tbody .e-title')!);
+    // 没有作品号，所以没有「复制作品号」；标题回落到 input，与「复制原始链接」重复也去掉
+    expect(menuItems()).toEqual(['复制标题', '复制报错信息']);
+
+    await click(Array.from(document.querySelectorAll('.ctx-menu [role="menuitem"]'))
+      .find((b) => b.textContent === '复制报错信息')!);
+    await until(() => writeText.mock.calls.length === 1);
+    expect(writeText.mock.calls[0]![0]).toBe(reason);
+    expect(text()).toContain('已复制报错信息');
+  });
+
+  test('已经拖选了文字：右击不弹自定义菜单，交给浏览器原生复制', async () => {
+    server(ownerRoutes({ [JOBS]: { json: { jobs: [job({ id: 1, title: '一段可以选中的标题' })] } } }));
+    mount('/extract');
+    await until(() => rowCount() === 1);
+
+    const sel = vi.spyOn(window, 'getSelection')
+      .mockReturnValue({ toString: () => '可以选中' } as unknown as Selection);
+    const cell = document.querySelector('.ex-table tbody .e-title')!;
+    const ev = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 60 });
+    const notPrevented = cell.dispatchEvent(ev);
+    expect(notPrevented).toBe(true); // 没有 preventDefault → 原生菜单照常弹出
+    expect(document.querySelector('.ctx-menu')).toBeNull();
+    sel.mockRestore();
   });
 });

@@ -96,6 +96,9 @@ async function main() {
   const base = `http://127.0.0.1:${srv.address().port}/getmedia/owner/`;
   const browser = await puppeteer.launch({ executablePath: EXE, headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage();
+  // 剪贴板要显式授权，否则 navigator.clipboard.writeText 会拒绝
+  await browser.defaultBrowserContext()
+    .overridePermissions(new URL(base).origin, ['clipboard-read', 'clipboard-write']);
   await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
   await page.setRequestInterception(true);
 
@@ -308,6 +311,58 @@ async function main() {
   });
   console.log('  展开后 =', JSON.stringify(expanded));
   await shot('12-expanded');
+
+  // 8.5) 复制：右击出菜单 → 点「复制标题」→ toast；再验证文字能拖选
+  await goto();
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await sleep(200);
+  const titleCell = await page.$('.ex-table tbody .e-title');
+  const box = await titleCell.boundingBox();
+  await page.mouse.click(box.x + 40, box.y + 18, { button: 'right' });
+  await sleep(250);
+  const menu = await page.evaluate(() => ({
+    items: Array.from(document.querySelectorAll('.ctx-menu [role="menuitem"]')).map((b) => b.textContent.trim()),
+    top: Math.round(document.querySelector('.ctx-menu')?.getBoundingClientRect().top ?? -1),
+    left: Math.round(document.querySelector('.ctx-menu')?.getBoundingClientRect().left ?? -1),
+  }));
+  console.log('  右键菜单 =', JSON.stringify(menu));
+  await shot('14-ctx-menu');
+
+  await clickText('.ctx-menu [role="menuitem"]', '复制标题');
+  await sleep(320);
+  const copied = await page.evaluate(async () => ({
+    toast: document.querySelector('.toast-t')?.textContent ?? null,
+    menuGone: document.querySelector('.ctx-menu') === null,
+    clip: await navigator.clipboard.readText().catch(() => '(读不到)'),
+  }));
+  console.log('  复制结果 =', JSON.stringify(copied));
+  await shot('15-copied');
+
+  // 拖选：真的按住鼠标从标题开头拖到第一行末尾。
+  // 要验证两件事：① 文字能选中（返回非空）；② 拖选不会顺手把行展开（click 守卫）。
+  await page.bringToFront();
+  // 无头窗口没有焦点时 Chrome 不绘制选区高亮，截图上会「看着没选中」；
+  // 打开焦点模拟，选区才会真正画出来。
+  const cdp = await page.createCDPSession();
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  const mainBox = await (await page.$('.ex-table tbody .t-main')).boundingBox();
+  // 落点要在**第一行文字**里（height/2 正好卡在两行之间，会选不到任何东西）
+  await page.mouse.move(mainBox.x + 2, mainBox.y + 9);
+  await page.mouse.down();
+  await page.mouse.move(mainBox.x + mainBox.width - 10, mainBox.y + 9, { steps: 20 });
+  await page.mouse.up();
+  await sleep(200);
+  const sel = await page.evaluate(() => {
+    const s = window.getSelection();
+    const tr = document.querySelector('.ex-table tbody tr');
+    return {
+      text: s.toString().slice(0, 30),
+      len: s.toString().length,
+      expanded: tr.querySelector('.t-main').classList.contains('open'),
+    };
+  });
+  console.log('  拖选 =', JSON.stringify(sel));
+  await shot('16-selection');
 
   // 9) 批量提取页：同样的表头/列宽实测
   await page.goto(base + 'creators', { waitUntil: 'networkidle0' });
