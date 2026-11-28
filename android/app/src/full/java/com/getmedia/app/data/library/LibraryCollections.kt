@@ -497,8 +497,11 @@ class LibraryPlaylistSync(
      * 本来就是作品名，所以这类占位条显示正常；`bilibili`/`douyin` 会先显示作品号，
      * 等云端曲库行到了以后由 [LibrarySyncEngine] 的合并逻辑换成真标题。
      *
-     * `mediaType` 只能猜 `AUDIO`：三元组里没有类型。真行绑定后也不会改回来，
-     * 所以占位条若其实是视频，界面上会按音频措辞显示——只影响措辞，不影响播放。
+     * `mediaType` 只能标**未知**（`MediaKind.UNKNOWN_NAME`）：云端列表只存平台三元组
+     * （`platform/video_id/page`），里面没有类型。0.1.40 及以前这里猜的是 `AUDIO`，于是
+     * 视频条目被摆进「音频」分类、标着"云端未下载"（真机故障）。标成未知之后媒体库的
+     * 两个类型页签都不收录它，措辞退化成「项」；等云端曲库行到了，[LibrarySyncEngine]
+     * 的补绑定会按真类型回填（`isPlaylistPlaceholder` 放行类型不等的匹配）。
      */
     private fun placeholder(
         id: Long,
@@ -521,7 +524,7 @@ class LibraryPlaylistSync(
         updatedAtMs = now,
         addedAtMs = now,
         sortIndex = 0,
-        mediaType = MediaKind.AUDIO.name,
+        mediaType = MediaKind.UNKNOWN_NAME,
         serverId = null,
         syncState = LibraryMark.CLOUD_ONLY,
         accountKey = account,

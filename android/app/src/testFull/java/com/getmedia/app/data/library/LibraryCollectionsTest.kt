@@ -340,6 +340,10 @@ class LibraryCollectionsTest {
         assertNull("占位行没有云端身份，等曲库行到了再绑", placeholder.serverId)
         assertNull("占位行没有文件", placeholder.localPath)
         assertEquals("标题先放作品号", "not-yet-synced", placeholder.title)
+        assertEquals(
+            "类型必须标未知：云端列表不带类型，猜 AUDIO 会让视频条目落进音频分类（0.1.40 真机故障）",
+            com.getmedia.app.data.local.MediaKind.UNKNOWN_NAME, placeholder.mediaType,
+        )
         assertFalse(
             "占位行不能被当成本机新增上传",
             com.getmedia.app.data.local.SyncState.mayUploadToLibrary(

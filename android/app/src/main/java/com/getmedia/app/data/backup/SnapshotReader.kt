@@ -131,7 +131,11 @@ object SnapshotReader {
             format = o.optString("format", "m4a"),
             durationSec = o.optDoubleOrNull("duration_sec"),
             bytes = o.optLongOrNull("bytes"),
-            sourceUrl = o.optString("source_url"),
+            // 必须用 optStringOrNull：JSON 里是 null 时裸 `optString` 会返回字符串 "null"，
+            // 于是恢复出来的行带着一个字面量来源链接。本机导入（`platform=local`）的条目
+            // 本来就该是空串，被写成 "null" 之后 `RestoredMatcher` 会判成"信息不足"、
+            // 网页端"用来源链接现解析"也会拿着 "null" 去请求。
+            sourceUrl = o.optStringOrNull("source_url").orEmpty(),
             addedAtMs = o.optLong("added_at", 0),
             favorite = o.optBoolean("favorite", false),
             categoryId = o.optLongOrNull("category_id"),

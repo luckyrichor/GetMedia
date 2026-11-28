@@ -46,6 +46,21 @@ class LibrarySyncPrefs(context: Context) {
         prefs.edit().putBoolean("$account.bound-backfill", true).apply()
     }
 
+    /**
+     * "云端对账"做过没有（每账号一次）。
+     *
+     * 0.1.40 及以前，云端被硬删（没写墓碑）之后，本机那些还记着 `serverId` 的行会永远卡在
+     * `LibraryUploader.eligible()` 的第一道判断上：既不上传，也不进「上传本机新增」的计数，
+     * 界面上就是「0 条，点不了」。对账要拿云端 id 全集才能断言"这条真的没了"，所以只能
+     * 全量拉一次；做成就置位，避免每轮都全量。
+     */
+    fun cloudReconcileDone(account: String): Boolean =
+        prefs.getBoolean("$account.cloud-reconcile", false)
+
+    fun markCloudReconcileDone(account: String) {
+        prefs.edit().putBoolean("$account.cloud-reconcile", true).apply()
+    }
+
     fun requiresManualUpload(account: String, id: Long): Boolean =
         prefs.getBoolean("$account.restored.$id.manual", false)
 

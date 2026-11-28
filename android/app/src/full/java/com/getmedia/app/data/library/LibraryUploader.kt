@@ -156,7 +156,8 @@ class LibraryUploader(
             title = (t.localTitleOverride ?: t.title).trim().take(MAX_TITLE),
             uploader = t.uploader?.trim()?.take(MAX_UPLOADER)?.ifBlank { null },
             durationSec = t.durationSec?.takeIf { it > 0 },
-            sourceUrl = t.sourceUrl.orEmpty().trim().take(MAX_URL),
+            sourceUrl = t.sourceUrl.orEmpty().trim().take(MAX_URL).takeUnless { it.equals("null", true) }
+                .orEmpty(),
         )
     }
 

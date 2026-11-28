@@ -1,5 +1,7 @@
 package com.getmedia.app.data.library
 
+import com.getmedia.app.data.local.TrackEntity
+
 /**
  * 曲库条目在同步流程里的三个额外状态值（P0-2）。
  *
@@ -36,3 +38,19 @@ object LibraryMark {
     /** 待重放的删除：归档保护或版本冲突，等用户处理；不再自动重试。 */
     const val REMOVAL_WAITING = "WAITING"
 }
+
+/**
+ * 播放列表成员对不上曲库行时补出来的**占位行**（`LibraryPlaylists.placeholder`）：
+ * 有位置、没文件、没有云端身份，也还没见过云端标题。
+ *
+ * 判据只用本机列，不需要联网。三个条件缺一不可：
+ * - `serverId == null`：真正的云端行一定先有 id；
+ * - `CLOUD_ONLY`：播放列表补行时写的就是这个；
+ * - `confirmedTitle == null`：一旦绑过云端行就会写上服务器标题，之后不再算占位。
+ *
+ * 为什么单独抽出来：占位行的 `mediaType` 只能是 `MediaKind.UNKNOWN_NAME`（云端播放列表
+ * 只存三元组），所以**任何按类型相等来匹配的地方都必须对它放行**，否则视频占位行永远
+ * 绑不上视频云端行，界面上就一直停在错的位置。
+ */
+internal fun TrackEntity.isPlaylistPlaceholder(): Boolean =
+    serverId == null && syncState == LibraryMark.CLOUD_ONLY && confirmedTitle == null

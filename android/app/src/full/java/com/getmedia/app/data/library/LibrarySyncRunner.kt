@@ -7,6 +7,7 @@ import com.getmedia.app.data.cloud.CloudRemovedAsk
 import com.getmedia.app.data.cloud.CloudUploadAsk
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.LibraryCursorEntity
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.localextract.DirectExtractor
 import com.getmedia.app.data.repo.TrackRepository
 import kotlinx.coroutines.CancellationException
@@ -364,6 +365,10 @@ object LibrarySyncRunner {
         if (!mutex.tryLock()) return
         try {
             val db = AppDatabase.get(context)
+            // 存量修复：0.1.40 及以前，播放列表补出来的占位行把类型猜成了「音频」，视频条目
+            // 因此落在音频分类里。占位行的类型本来就无从得知，统一抹成"未知"，等云端曲库行
+            // 到了由补绑定回填。幂等，每轮跑一次（正常库上是 0 条命中，代价只有一次全表读）。
+            repairPlaceholderTypes(db)
             val token = syncToken(session, prefs)
             val client = LibrarySyncClient(token = token)
             val playlistClient = PlaylistSyncClient(token = token)
@@ -392,11 +397,18 @@ object LibrarySyncRunner {
                     // ③ 拉取：同时收墓碑、更新服务器权威字段。
                     // 还没做过"补绑定回填"就无视水位全量拉一次：本机导入的条目在服务器上有同键行，
                     // 但增量水位不会把它们送回来，否则这些行永远是"改不动的本机镜像"。
+                    // 同理，"云端对账"没做过也要全量拉一次：只有拿到云端 id 全集，才能认出
+                    // 那些 `serverId` 指向已被硬删（无墓碑）的行，并把它们脱钩重新排队。
                     val backfillBinding = !prefs.bindingBackfillDone(acc)
+                    val reconcile = !prefs.cloudReconcileDone(acc)
                     val pulled = LibrarySyncEngine(db, LibrarySyncApi(token = token))
-                        .pull(acc, full = backfillBinding)
+                        .pull(acc, full = backfillBinding || reconcile)
                     if (backfillBinding) prefs.markBindingBackfillDone(acc)
+                    if (reconcile) prefs.markCloudReconcileDone(acc)
                     if (pulled.bound > 0) note(db, acc, "${pulled.bound} 项本机条目已与云端对应条目关联")
+                    if (pulled.detached > 0) {
+                        note(db, acc, "${pulled.detached} 项云端已不存在，已重新排入「上传本机新增」")
+                    }
                     // ④ 标题草稿条件 PATCH（拉取之后，以最新服务器版本为准）
                     val titles = LibraryTitlePush(db, client, acc, valid = { token() != null }).push()
                     if (titles.conflicts > 0) {
@@ -472,6 +484,26 @@ object LibrarySyncRunner {
         if (token() != null) restoreState.value = RestoreStatus(
             account, message = "未完成云端核对：${e.message}",
         )
+    }
+
+    /**
+     * 把"猜成音频"的占位行改成"类型未知"。
+     *
+     * 判据用 [isPlaylistPlaceholder]：没有 `serverId`、状态是 `CLOUD_ONLY`、没见过云端标题。
+     * 这种行的类型本来就无从得知（云端播放列表只存平台三元组），只有 0.1.40 及以前会写
+     * `AUDIO`。改成 `MediaKind.UNKNOWN_NAME` 之后它不再出现在「音频」分类里，等云端曲库行
+     * 到了由 [LibrarySyncEngine] 的补绑定按真类型回填。
+     *
+     * 只改 `mediaType` 一列，其余字段原样 `copy`；幂等，没有命中就不开事务。
+     */
+    private suspend fun repairPlaceholderTypes(db: AppDatabase) {
+        val wrong = db.trackDao().allNow().filter {
+            it.mediaType != MediaKind.UNKNOWN_NAME && it.isPlaylistPlaceholder()
+        }
+        if (wrong.isEmpty()) return
+        db.withTransaction {
+            wrong.forEach { db.trackDao().updateExisting(it.copy(mediaType = MediaKind.UNKNOWN_NAME)) }
+        }
     }
 
     private suspend fun uploadNow(context: Context, session: SessionStore.Session, manual: Boolean) {

@@ -63,6 +63,7 @@ class LibraryUploaderTest {
         serverId: Long? = null,
         accountKey: String? = null,
         videoId: String = "BVupload${nextId}",
+        sourceUrl: String = "https://www.bilibili.com/video/$videoId?p=1",
         localTitleOverride: String? = null,
         favorite: Boolean = false,
         category: Long = 1,
@@ -75,7 +76,7 @@ class LibraryUploaderTest {
         durationSec = 12.5,
         audioBytes = 64,
         audioFormat = "m4a",
-        sourceUrl = "https://www.bilibili.com/video/$videoId?p=1",
+        sourceUrl = sourceUrl,
         localPath = localPath,
         favorite = favorite,
         localCategoryId = category,
@@ -127,6 +128,19 @@ class LibraryUploaderTest {
         )
         val candidates = LibraryUploader(db, FakeUploader(emptyMap()), account).candidates()
         assertEquals(listOf(good.id), candidates.map { it.id })
+    }
+
+    /**
+     * 旧快照读取把 JSON `null` 读成字面量 `"null"`（已在 [com.getmedia.app.data.backup.SnapshotReader]
+     * 修掉）。存量行还带着它：传上去会让网页端"用来源链接现解析"拿着 `"null"` 去请求。
+     */
+    @Test fun literalNullSourceUrlIsNotUploaded() = runBlocking {
+        insert(track(localPath = file().absolutePath, sourceUrl = "null"))
+        val transport = FakeUploader(mapOf("*" to created()))
+
+        LibraryUploader(db, transport, account).upload()
+
+        assertEquals("", transport.sent.single().sourceUrl)
     }
 
     /**

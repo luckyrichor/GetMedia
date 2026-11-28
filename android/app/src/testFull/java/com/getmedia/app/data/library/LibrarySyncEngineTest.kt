@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.LibraryCursorEntity
 import com.getmedia.app.data.local.LocalIds
+import com.getmedia.app.data.local.MediaKind
 import com.getmedia.app.data.local.SyncState
 import com.getmedia.app.data.local.TrackEntity
 import kotlinx.coroutines.runBlocking
@@ -109,6 +110,144 @@ class LibrarySyncEngineTest {
         assertEquals(LibraryMark.CLOUD_ONLY, row.syncState)
         assertEquals("绑定后换成云端标题", "真标题", row.title)
         assertEquals(1, result.bound)
+    }
+
+    /**
+     * 占位行的类型标的是"未知"（云端播放列表只存平台三元组），视频云端行到达时必须照样绑上。
+     *
+     * 0.1.40 真机故障：补绑定的候选按 `mediaType` 相等来筛，占位行猜的是 AUDIO，视频行
+     * 永远选不中，于是这条视频一直停在「音频」分类里，标题也一直是作品号。
+     */
+    @Test fun videoPlaceholderIsBoundEvenThoughItsTypeIsUnknown() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV9", 1)
+        db.trackDao().insertIgnore(
+            listOf(
+                TrackEntity(
+                    id = id, platform = "bilibili", videoId = "BV9", title = "BV9",
+                    uploader = null, durationSec = null, audioBytes = null, audioFormat = "",
+                    sourceUrl = "", localPath = null, addedAtMs = 1, updatedAtMs = 1,
+                    mediaType = MediaKind.UNKNOWN_NAME,
+                    syncState = LibraryMark.CLOUD_ONLY, accountKey = account,
+                ),
+            ),
+        )
+        val (e, _) = engine(
+            listOf(page(listOf(cloud(9, videoId = "BV9", title = "真标题", mediaType = "video")), hasMore = false)),
+        )
+        val result = e.pull(account)
+
+        assertEquals("占位行要绑定，不能另起一行", 1, rows().size)
+        val row = db.trackDao().byId(id)!!
+        assertEquals(9L, row.serverId)
+        assertEquals("类型要按云端改回视频", MediaKind.VIDEO.name, row.mediaType)
+        assertEquals("标题要换成云端标题", "真标题", row.title)
+        assertEquals(1, result.bound)
+    }
+
+    /**
+     * 服务端计数器被重置（清库、或硬删到 `MAX(updated_seq)` 回落）时，服务端会无视水位从 0
+     * 重发全量。客户端必须**跟着把水位降下来**。
+     *
+     * 0.1.40 真机故障：这里原来有 `.coerceAtLeast(since)`，设备每轮都拿一个永远高于全库最大
+     * 序号的水位去问，只拿得到空页——改名、新增的视频在另一台手机上永远收不到。
+     */
+    @Test fun watermarkFollowsServerWhenItsCounterWasReset() = runBlocking {
+        db.libraryAuxDao().putCursor(LibraryCursorEntity(account = account, lastPos = 156))
+        val (e, t) = engine(listOf(page(listOf(cloud(1), cloud(3, seq = 3)), hasMore = false)))
+
+        val result = e.pull(account)
+
+        assertEquals("这一页是按本机旧水位去问的", listOf(156L), t.calls)
+        assertEquals("水位要降到服务端给的真实位置", 3L, result.cursor)
+        assertEquals(3L, cursor())
+    }
+
+    /**
+     * 云端被硬删（没写墓碑）之后，本机那行的 `serverId` 是个指向虚空的指针：`eligible()` 第一道
+     * 判断 `serverId != null` 就返回 false，于是它既不上传、也不进「上传本机新增」的计数——
+     * 用户看到的是「0 条，点不了」。全量拉完之后必须把它脱钩，重新排成可上传的条目。
+     */
+    @Test fun orphanRowWhoseCloudRowVanishedIsDetached() = runBlocking {
+        val id = LocalIds.localId("local", "老友记", 1)
+        val file = java.io.File.createTempFile("gm-engine-", ".mp4").apply { writeBytes(ByteArray(64) { 1 }) }
+        try {
+            db.trackDao().insertIgnore(
+                listOf(
+                    TrackEntity(
+                        id = id, platform = "local", videoId = "老友记", title = "老友记",
+                        uploader = null, durationSec = null, audioBytes = 64, audioFormat = "mp4",
+                        sourceUrl = "", localPath = file.absolutePath, addedAtMs = 1, updatedAtMs = 1,
+                        mediaType = MediaKind.VIDEO.name,
+                        serverId = 40, serverSeq = 40, serverStorage = "metadata",
+                        confirmedTitle = "老友记", syncState = SyncState.LOCAL_ONLY.name,
+                        accountKey = account,
+                    ),
+                ),
+            )
+            // 云端只剩另一条，40 号既不在活行里也不在墓碑里
+            val (e, _) = engine(listOf(page(listOf(cloud(1)), hasMore = false)))
+
+            val result = e.pull(account, full = true)
+
+            assertEquals("要认出这条孤儿", 1, result.detached)
+            val row = db.trackDao().byId(id)!!
+            assertNull("云端身份要清掉，否则永远进不了上传候选", row.serverId)
+            assertNull(row.serverSeq)
+            assertNull(row.serverStorage)
+            assertNull("绑定基准也要清掉，等重新上传后再写", row.confirmedTitle)
+            assertEquals("有文件 → 重新排队成本机新增", SyncState.LOCAL_ONLY.name, row.syncState)
+            assertEquals("文件不能被碰", file.absolutePath, row.localPath)
+        } finally {
+            file.delete()
+        }
+    }
+
+    /** 云端写了墓碑的条目证明"知道它存在过"，不能算孤儿（否则会把用户刚删的东西又传上去）。 */
+    @Test fun tombstonedRowIsNotDetached() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV40", 1)
+        db.trackDao().insertIgnore(
+            listOf(
+                TrackEntity(
+                    id = id, platform = "bilibili", videoId = "BV40", title = "四十",
+                    uploader = null, durationSec = null, audioBytes = null, audioFormat = "",
+                    sourceUrl = "https://b/40", localPath = null, addedAtMs = 1, updatedAtMs = 1,
+                    // 收藏是"整理痕迹"：墓碑只会记成待确认，不会把行直接删掉
+                    favorite = true,
+                    serverId = 40, serverSeq = 40, serverStorage = "metadata",
+                    syncState = LibraryMark.CLOUD_ONLY, accountKey = account,
+                ),
+            ),
+        )
+        val (e, _) = engine(listOf(page(listOf(cloud(40, deleted = true)), hasMore = false)))
+
+        val result = e.pull(account, full = true)
+
+        assertEquals(0, result.detached)
+        assertEquals(40L, db.trackDao().byId(id)!!.serverId)
+    }
+
+    /** 增量拉取拿不到云端 id 全集，绝不能对账（否则会把云端还有的行误判成孤儿）。 */
+    @Test fun incrementalPullNeverReconciles() = runBlocking {
+        val id = LocalIds.localId("bilibili", "BV40", 1)
+        db.trackDao().insertIgnore(
+            listOf(
+                TrackEntity(
+                    id = id, platform = "bilibili", videoId = "BV40", title = "四十",
+                    uploader = null, durationSec = null, audioBytes = null, audioFormat = "",
+                    sourceUrl = "https://b/40", localPath = null, addedAtMs = 1, updatedAtMs = 1,
+                    serverId = 40, serverSeq = 40, serverStorage = "metadata",
+                    syncState = LibraryMark.CLOUD_ONLY, accountKey = account,
+                ),
+            ),
+        )
+        db.libraryAuxDao().putCursor(LibraryCursorEntity(account = account, lastPos = 5))
+        val (e, t) = engine(listOf(page(listOf(cloud(9, seq = 9)), hasMore = false)))
+
+        val result = e.pull(account)
+
+        assertEquals(listOf(5L), t.calls)
+        assertEquals(0, result.detached)
+        assertEquals(40L, db.trackDao().byId(id)!!.serverId)
     }
 
     @Test fun createsCloudOnlyRowsWithServerIdentity() = runBlocking {        val (e, t) = engine(listOf(page(listOf(cloud(1, page = 2), cloud(2)), hasMore = false)))

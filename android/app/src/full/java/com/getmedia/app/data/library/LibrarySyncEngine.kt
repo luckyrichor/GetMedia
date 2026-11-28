@@ -26,6 +26,10 @@ import com.getmedia.app.data.local.TrackEntity
  *    的防抖上传；而且这些行的"无整理痕迹"特征会让它们根本进不了快照（`MetadataSnapshot.keepInSnapshot`）。
  * 4. **水位只在整页全部应用成功后推进**：[applyPage] 里写行与写水位在同一个事务，
  *    中途抛异常整页回滚，水位留在上一页末尾，重跑幂等。
+ * 5. **全量拉完之后对账一次**：[reconcileOrphans]。云端既没有这一行也没有它的墓碑时，
+ *    本机那行的 `serverId` 就是个指向虚空的指针——它会让条目永远卡在"不能上传、
+ *    也不算本机新增"的夹缝里（`eligible()` 第一道判断就返回 false）。这条只在
+ *    **从 0 拉到尾且完整收完**时才做，增量拉取不碰。
  */
 class LibrarySyncEngine(
     private val db: AppDatabase,
@@ -48,6 +52,8 @@ class LibrarySyncEngine(
         val bound: Int = 0,
         /** 随记录一起作废的本机副本路径（本机导入的条目被云端删除时）；事务外再删文件。 */
         val orphanFiles: List<String> = emptyList(),
+        /** 本轮脱钩的孤儿行（云端查无此行，清掉 `serverId` 重新排队）。 */
+        val detached: Int = 0,
     )
 
     /**
@@ -58,8 +64,11 @@ class LibrarySyncEngine(
      *
      * 不在这里吞异常：调用方按 [LibrarySyncProblem] 决定是静默停手（`NOT_AVAILABLE`）、
      * 退避（`RATE_LIMITED`）还是提示（`LOGIN_REQUIRED`）。
+     *
+     * [reconcile] 默认跟 [full] 走：全量拉一次本来就是"我要一份完整视图"的语义，
+     * 顺手对账最省一次往返。**增量拉取一律不对账**——没有云端 id 全集，断言不了"这条没了"。
      */
-    suspend fun pull(account: String, full: Boolean = false): Result {
+    suspend fun pull(account: String, full: Boolean = false, reconcile: Boolean = full): Result {
         require(account.isNotBlank()) { "账号不能为空" }
         var cursor = if (full) 0L else db.libraryAuxDao().cursor(account)?.lastPos ?: 0L
         // 一次性回填：旧版本只在"新建云端行"时写 serverStorage，恢复匹配与老绑定行可能一直是空。
@@ -80,9 +89,16 @@ class LibrarySyncEngine(
         var marks = 0
         var removedRows = 0
         var bound = 0
+        // 对账用：这一轮从 0 开始拉，且把每一页都拉完了，才算"拿到了完整的云端 id 全集"。
+        // 只有全集在手，才能断言"本机有 serverId 的行在云端不存在"。
+        val fromZero = cursor == 0L
+        val seen = HashSet<Long>()
+        var complete = false
         while (true) {
             val page = transport.pull(cursor, pageSize)
             pages++
+            // 墓碑（deleted=true）也要收：它证明云端"知道"这条曾经存在，不能算孤儿。
+            page.items.mapTo(seen) { it.id }
             val applied = applyPage(account, page.items, cursor)
             // 文件删除放在事务外：DB 回滚时文件不该已经没了
             applied.orphanFiles.forEach { runCatching { java.io.File(it).delete() } }
@@ -93,9 +109,18 @@ class LibrarySyncEngine(
             removedRows += applied.removedRows
             bound += applied.bound
             cursor = applied.cursor
-            // 空页但 has_more=true 是服务端的边界抖动，直接停，别打空请求
-            if (!page.hasMore || page.items.isEmpty()) break
+            if (!page.hasMore) {
+                complete = true
+                break
+            }
+            // 空页但 has_more=true 是服务端的边界抖动，直接停，别打空请求（此时不算完整）
+            if (page.items.isEmpty()) break
         }
+        // 孤儿行脱钩：本机记着 `serverId`，云端却既没有这一行、也没有它的墓碑（04:30 那次
+        // 硬删就是这种形态）。这种行会永远卡在 `LibraryUploader.eligible()` 的第一道判断上
+        // （`serverId != null` 直接返回 false）——既不上传，也不进"上传本机新增"的计数，
+        // 用户看到的是「0 条，点不了」。脱钩成"只在这台手机上"之后才能重新上传。
+        val detached = if (reconcile && fromZero && complete) reconcileOrphans(account, seen, nowMs()) else 0
         if (backfill) {
             // 服务器没给 storage 的绑定行写占位值：`isKnownArchive` 只认 "archive"，
             // 所以它仍然会被当作"未知"，删除确认照常给勾选项，由服务端兜底。
@@ -104,7 +129,47 @@ class LibrarySyncEngine(
                 .forEach { db.trackDao().updateExisting(it.copy(serverStorage = "unknown")) }
         }
         return Result(added = added, skipped = skipped, tombstones = tombstones, pages = pages,
-            cursor = cursor, marks = marks, removedRows = removedRows, bound = bound)
+            cursor = cursor, marks = marks, removedRows = removedRows, bound = bound, detached = detached)
+    }
+
+    /**
+     * 云端"查无此行"的本机行脱钩（清掉 `serverId` 那一组列），重新排队成可上传的条目。
+     *
+     * 只对 `accountKey == account` 的行动手；`seen` 里既有活着的行也有墓碑，所以真正被删过
+     * （写了墓碑）的条目不会被误判成孤儿。
+     *
+     * 状态按本机还有没有文件分两种：
+     * - **有文件** → `LOCAL_ONLY`：它就是"只在这台手机上"的条目，下一轮上传/手动上传都能走；
+     * - **没文件** → `RESTORED`：内容在云端已经没了、本机也没有，只能当空壳，交给
+     *   `RestoredMatcher` 去核对/让用户重新下载或移除。留成 `SYNCED` 会让界面一直标
+     *   「云端未下载」并给一个点了必然 404 的下载按钮。
+     */
+    private suspend fun reconcileOrphans(account: String, seen: Set<Long>, now: Long): Int {
+        val orphans = db.trackDao().allNow().filter {
+            it.accountKey == account && it.serverId != null && it.serverId !in seen
+        }
+        if (orphans.isEmpty()) return 0
+        db.withTransaction {
+            orphans.forEach { row ->
+                val hasFile = row.localPath?.let {
+                    val f = java.io.File(it)
+                    f.isFile && f.length() > 0
+                } == true
+                db.trackDao().updateExisting(
+                    row.copy(
+                        serverId = null,
+                        serverSeq = null,
+                        // `serverPage` 是分集页码（作品身份的一部分，不是云端绑定），保留
+                        serverUpdatedAtMs = null,
+                        serverStorage = null,
+                        confirmedTitle = null,
+                        syncState = if (hasFile) SyncState.LOCAL_ONLY.name else SyncState.RESTORED.name,
+                        updatedAtMs = now,
+                    ),
+                )
+            }
+        }
+        return orphans.size
     }
 
     private data class Applied(val added: Int, val skipped: Int, val tombstones: Int, val cursor: Long,
@@ -224,9 +289,12 @@ class LibrarySyncEngine(
                     // 同键已存在：如果那条本机行还没有 serverId，就把"对应服务器哪一行"补上。
                     // 刚发起删除的键不补（否则又会被算成"云端有、本机删过"的冲突）。
                     if (key !in queuedKeys) {
-                        val candidate = unboundByKey[serverKey].orEmpty().singleOrNull {
+                        val sameKey = unboundByKey[serverKey].orEmpty()
+                        // 先按类型相等找；找不到再放行占位行——占位行的类型标的是"未知"
+                        // （云端播放列表不带类型），按相等去筛会让视频占位行永远绑不上。
+                        val candidate = sameKey.singleOrNull {
                             it.mediaType.equals(item.mediaType, ignoreCase = true)
-                        }
+                        } ?: sameKey.singleOrNull { it.isPlaylistPlaceholder() }
                         if (candidate != null) {
                             db.trackDao().updateExisting(bindSameKey(candidate, item, account, now))
                             bound++
@@ -246,7 +314,16 @@ class LibrarySyncEngine(
             // IGNORE 语义：万一判重漏了，也只会丢这条新行，绝不会覆盖已有行（REPLACE 会）
             if (fresh.isNotEmpty()) db.trackDao().insertIgnore(fresh)
 
-            val next = (items.maxOfOrNull { it.updatedSeq } ?: since).coerceAtLeast(since)
+            // 水位**跟着服务端走，允许回落**。服务端按 `updated_seq > since` 升序返回，所以
+            // 正常情况下本页最大序号一定大于请求水位；唯一小于它的情况是服务端计数器被重置
+            // （清库、或硬删到 MAX 回落），这时服务端会无视水位从 0 重发全量，本页最大序号
+            // 就是新的真实水位。
+            //
+            // 0.1.40 真机故障：这里原来还有 `.coerceAtLeast(since)`，于是"服务端重置 + 全量重发"
+            // 被客户端钉死在旧水位上——设备每轮都拿一个永远高于全库最大序号的值去问，只得到空页，
+            // 改名和新增条目（视频）在另一台手机上永远收不到。服务端 11-28 已加兜底（since 超过
+            // 全库最大序号时按全量重来），客户端不跟着降水位等于白做。
+            val next = items.maxOfOrNull { it.updatedSeq } ?: since
             aux.putCursor(LibraryCursorEntity(account = account, lastPos = next, lastAt = now))
             Applied(added = added, skipped = skipped, tombstones = tombstones, cursor = next,
                 marks = marks, removedRows = removedRows, bound = bound, orphanFiles = orphans)
@@ -265,10 +342,9 @@ class LibrarySyncEngine(
      */
     private fun bindSameKey(row: TrackEntity, item: CloudTrack, account: String, now: Long): TrackEntity {
         // 占位行（播放列表拉取补出来的"有位置、没文件"的条目）：标题只有作品号、
-        // 类型只能猜 AUDIO。绑定这一刻正好把服务器的标题与类型补上——它不是用户
+        // 类型标的是"未知"。绑定这一刻正好把服务器的标题与类型补上——它不是用户
         // 在这台手机上的整理结果，覆盖掉不会丢任何东西。
-        val placeholder = row.serverId == null && row.syncState == LibraryMark.CLOUD_ONLY &&
-            row.confirmedTitle == null
+        val placeholder = row.isPlaylistPlaceholder()
         val mediaType = if (placeholder) {
             runCatching { MediaKind.valueOf(item.mediaType.uppercase()) }.getOrDefault(MediaKind.AUDIO).name
         } else {
