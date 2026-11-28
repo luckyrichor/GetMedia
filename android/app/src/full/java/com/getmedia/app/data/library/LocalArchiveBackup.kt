@@ -1,6 +1,7 @@
 package com.getmedia.app.data.library
 
 import androidx.room.withTransaction
+import com.getmedia.app.data.download.UploadProgress
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.ArchiveState
 import com.getmedia.app.data.local.TrackEntity
@@ -51,8 +52,16 @@ class LocalArchiveBackup(
         val batch = dao.allNow().filter { pending(it, now) }.sortedBy { it.addedAtMs }
         for (track in batch) {
             val file = track.localPath?.let(::File)?.takeIf { it.isFile && it.length() > 0 } ?: continue
+            // 进度条的起止都放在这一条上：批量备份是串行的，同一时刻只有一条在传。
+            // `finally` 里收掉，失败/取消/成功都不会把进度留在界面上。
+            UploadProgress.start(track.id, track.title, file.length())
             try {
-                writeDone(track.id, transport.uploadFile(track.serverId!!, file))
+                writeDone(
+                    track.id,
+                    transport.uploadFile(track.serverId!!, file) { sent, total ->
+                        UploadProgress.update(track.id, sent, total)
+                    },
+                )
                 uploaded++
             } catch (e: LibrarySyncException) {
                 when {
@@ -66,6 +75,8 @@ class LocalArchiveBackup(
                     permanent(e) -> { markUnable(track.id, reasonOf(e)); unable++ }
                     else -> { writeFailure(track.id, e); failed++ }
                 }
+            } finally {
+                UploadProgress.finish()
             }
         }
         return Summary(uploaded, failed, unable, evicted, stopped, reason)

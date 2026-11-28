@@ -21,6 +21,7 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import androidx.activity.compose.BackHandler
 import com.getmedia.app.data.download.DownloadProgress
+import com.getmedia.app.data.download.UploadProgress
 import com.getmedia.app.data.repo.DiagnosticsStore
 import com.getmedia.app.data.cloud.cloudSync
 import com.getmedia.app.account.SessionStore
@@ -34,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import com.getmedia.app.ui.platformLabel
 import com.getmedia.app.ui.formatDuration
 import com.getmedia.app.ui.components.DownloadLine
+import com.getmedia.app.ui.components.UploadLine
 import com.getmedia.app.ui.components.uiAccentContainer
 import com.getmedia.app.ui.components.uiCardColor
 import com.getmedia.app.ui.components.uiHairline
@@ -1766,8 +1768,9 @@ internal fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () 
     val isCurrent = queue.getOrNull(index)?.track?.id == track.id
     val highlighted = if (selecting) selected else isCurrent
     val shape = RoundedCornerShape(16.dp)
-    // 这一条正在从远端下载吗（进度条就长在它自己身上，见 DownloadLine）
+    // 这一条正在从远端下载 / 正在往云端备份吗（进度条就长在它自己身上，见 DownloadLine / UploadLine）
     val downloading = DownloadProgress.state.collectAsState().value?.trackId == track.id
+    val uploading = UploadProgress.state.collectAsState().value?.trackId == track.id
 
     Row(
         modifier
@@ -1860,7 +1863,7 @@ internal fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () 
             } else {
                 null
             }
-            if (archiveText != null) {
+            if (archiveText != null && !uploading) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "未备份 · $archiveText",
@@ -1900,8 +1903,22 @@ internal fun LibraryAudioRow(track: TrackEntity, onPlay: () -> Unit, onMore: () 
                 style = MaterialTheme.typography.bodySmall,
                 color = uiMuted(),
             )
+            // 导入之后到真正开始传之间有一段空档（同步轮次要先传元数据拿到 serverId，
+            // 再回头备份文件）。这段时间界面上什么都不显示，用户就会以为"它没在上传"，
+            // 所以先把"排队中"说出来——`archiveNote` 有值就带上原因（退避中/稍后重试）。
+            if (!uploading && archive == ArchiveState.PENDING) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "等待备份到云端" + (track.archiveNote?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = uiMuted(),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             // 进度长在条目自己的下半部分：哪一条在传就显示在哪一条里，不用去页面上找
             DownloadLine(track.id, Modifier.padding(top = 6.dp))
+            UploadLine(track.id, Modifier.padding(top = 6.dp))
         }
         Box(
             Modifier

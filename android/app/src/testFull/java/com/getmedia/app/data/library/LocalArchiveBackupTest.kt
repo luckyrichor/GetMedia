@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.getmedia.app.data.download.UploadProgress
 import com.getmedia.app.data.local.AppDatabase
 import com.getmedia.app.data.local.ArchiveState
 import com.getmedia.app.data.local.TrackEntity
@@ -83,8 +84,24 @@ class LocalArchiveBackupTest {
 
     private class Fake(val answer: (Long) -> CloudTrack) : LocalFileUploadTransport {
         val calls = mutableListOf<Long>()
-        override suspend fun uploadFile(trackId: Long, file: File): CloudTrack {
+
+        /** 进到"正在传"这一刻（一个字节都还没写）界面上读到的那一帧。 */
+        var stateOnEntry: UploadProgress.Active? = null
+
+        /** 每次上报进度之后界面上读到的那一帧；空表示一次都没报。 */
+        val frames = mutableListOf<UploadProgress.Active?>()
+
+        override suspend fun uploadFile(
+            trackId: Long,
+            file: File,
+            onProgress: (sent: Long, total: Long) -> Unit,
+        ): CloudTrack {
             calls += trackId
+            stateOnEntry = UploadProgress.state.value
+            for (sent in listOf(file.length() / 2, file.length())) {
+                onProgress(sent, file.length())
+                frames += UploadProgress.state.value
+            }
             return answer(trackId)
         }
     }
@@ -116,12 +133,82 @@ class LocalArchiveBackupTest {
         assertTrue("传完必须保留本机副本（播放读的就是它）", file.isFile)
     }
 
+    /**
+     * 上传过程中界面要真的能看见进度——这是用户提的原话："看不到它是不是正在上传"。
+     *
+     * 钉三件事：进上传前就已经点亮（否则前几秒界面一片空白，看起来像没开始）、
+     * 分母是文件长度而不是 multipart 的总长度（含边界与表单头，百分比会从个位数起步）、
+     * 传完立刻收掉（不能留一条永远停在 100% 的进度条）。
+     */
+    @Test fun uploadProgressIsVisibleWhileUploadingAndGoneAfterwards() = runBlocking {
+        val file = audioFile()
+        val row = local(path = file.absolutePath)
+        db.trackDao().upsertAll(listOf(row))
+        val transport = Fake { cloud(it) }
+
+        backup(transport).run()
+
+        val onEntry = transport.stateOnEntry
+        assertEquals("一开始就要知道是哪一条在传", row.id, onEntry?.trackId)
+        assertEquals("还没写字节", 0L, onEntry?.done)
+        assertEquals("分母是文件长度", file.length(), onEntry?.total)
+
+        assertEquals(2, transport.frames.size)
+        assertEquals(row.id, transport.frames[0]?.trackId)
+        assertEquals(0.5f, transport.frames[0]?.fraction ?: -1f, 0.001f)
+        assertEquals(1f, transport.frames[1]?.fraction ?: -1f, 0.001f)
+
+        assertNull("传完必须收掉，否则界面永远停在「正在上传 100%」", UploadProgress.state.value)
+    }
+
+    @Test fun failedUploadAlsoClearsTheProgressLine() = runBlocking {
+        val row = local(path = audioFile().absolutePath)
+        db.trackDao().upsertAll(listOf(row))
+        val transport = object : LocalFileUploadTransport {
+            override suspend fun uploadFile(
+                trackId: Long,
+                file: File,
+                onProgress: (sent: Long, total: Long) -> Unit,
+            ): CloudTrack = throw LibrarySyncException(LibrarySyncProblem.NETWORK, "网络不可用")
+        }
+
+        backup(transport).run()
+
+        assertNull("失败也要收掉，原因由条目上的红字去说", UploadProgress.state.value)
+    }
+
+    @Test fun eachTrackInTheBatchLightsItsOwnLine() = runBlocking {
+        val first = local(path = audioFile().absolutePath)
+        val second = local(path = audioFile().absolutePath)
+        db.trackDao().upsertAll(listOf(first, second))
+        val seen = mutableListOf<Long?>()
+        val transport = object : LocalFileUploadTransport {
+            override suspend fun uploadFile(
+                trackId: Long,
+                file: File,
+                onProgress: (sent: Long, total: Long) -> Unit,
+            ): CloudTrack {
+                onProgress(file.length() / 2, file.length())
+                seen += UploadProgress.state.value?.trackId
+                return cloud(trackId)
+            }
+        }
+
+        backup(transport).run()
+
+        assertEquals("两条都要点亮过", 2, seen.size)
+        assertEquals("各自点自己那一条，不能串台", setOf(first.id, second.id), seen.toSet())
+    }
+
     @Test fun networkFailureBacksOffThenCoolsDown() = runBlocking {
         val row = local(path = audioFile().absolutePath)
         db.trackDao().upsertAll(listOf(row))
         val transport = object : LocalFileUploadTransport {
-            override suspend fun uploadFile(trackId: Long, file: File): CloudTrack =
-                throw LibrarySyncException(LibrarySyncProblem.NETWORK, "网络不可用")
+            override suspend fun uploadFile(
+                trackId: Long,
+                file: File,
+                onProgress: (sent: Long, total: Long) -> Unit,
+            ): CloudTrack = throw LibrarySyncException(LibrarySyncProblem.NETWORK, "网络不可用")
         }
 
         // 第 1 次失败：等 2 秒
@@ -150,10 +237,13 @@ class LocalArchiveBackupTest {
         val row = local(path = audioFile().absolutePath)
         db.trackDao().upsertAll(listOf(row))
         val transport = object : LocalFileUploadTransport {
-            override suspend fun uploadFile(trackId: Long, file: File): CloudTrack =
-                throw LibrarySyncException(
-                    LibrarySyncProblem.SERVER, "空间不足", code = "quota_exceeded",
-                )
+            override suspend fun uploadFile(
+                trackId: Long,
+                file: File,
+                onProgress: (sent: Long, total: Long) -> Unit,
+            ): CloudTrack = throw LibrarySyncException(
+                LibrarySyncProblem.SERVER, "空间不足", code = "quota_exceeded",
+            )
         }
 
         val summary = backup(transport).run()

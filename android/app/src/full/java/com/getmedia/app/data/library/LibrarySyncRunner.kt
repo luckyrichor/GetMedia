@@ -48,6 +48,10 @@ object LibrarySyncRunner {
     /** 本机改动后的防抖：连续改名/拖动只推一轮。 */
     private const val LOCAL_CHANGE_DELAY_MS = 1_500L
 
+    /** 撞上正在跑的一轮时，本机改动最多再试几次、每次隔多久。 */
+    private const val LOCAL_CHANGE_RETRIES = 4
+    private const val LOCAL_CHANGE_RETRY_MS = 5_000L
+
     /** 前台轮询间隔：让"另一台设备改了"在这台上最多一分钟就能看到。 */
     private const val POLL_INTERVAL_MS = 60_000L
 
@@ -115,7 +119,12 @@ object LibrarySyncRunner {
         localChangeJob?.cancel()
         localChangeJob = scope.launch {
             delay(LOCAL_CHANGE_DELAY_MS)
-            run(app)
+            // 撞上正在跑的一轮就等几秒再试：导入音频/视频之后用户就在等"它什么时候传上去"，
+            // 这一轮直接放弃的话，下一次完整轮次要等到下次进前台（最多五分钟）。
+            repeat(LOCAL_CHANGE_RETRIES) { attempt ->
+                if (run(app)) return@launch
+                if (attempt < LOCAL_CHANGE_RETRIES - 1) delay(LOCAL_CHANGE_RETRY_MS)
+            }
         }
     }
 
@@ -354,17 +363,24 @@ object LibrarySyncRunner {
         manualPromptOpen: Boolean = false,
     ): Boolean = prefs.enabled(account) && !manualPromptOpen
 
-    private suspend fun run(context: Context) {
+    /**
+     * 跑一轮完整同步（拉取 → 推送 → 备份文件）。
+     *
+     * 返回 false 只有一个含义：**撞上另一轮正在跑，这一轮什么都没做**。调用方（[onLocalChange]）
+     * 靠它决定要不要过几秒重试——导入之后用户就在等那条备份，直接放弃会让他最多等五分钟
+     * （前台轮询只拉不传）。其余情况（闸门关闭、开关关着）返回 true，重试没有意义。
+     */
+    private suspend fun run(context: Context): Boolean {
         val session = SessionStore.current.value
         if (!LibrarySyncGate.maySync(session)) {
             // 闸门关了就把待确认的询问收回去：账号已退出、或降级成免费档时不该继续挂着
             prompt.clear()
-            return
+            return true
         }
         val account = session!!.loginName
         val prefs = LibrarySyncPrefs(context)
-        if (!mayRunAutomatically(prefs, account, prompt.state.value?.manual == true)) return
-        if (!mutex.tryLock()) return
+        if (!mayRunAutomatically(prefs, account, prompt.state.value?.manual == true)) return true
+        if (!mutex.tryLock()) return false
         try {
             val db = AppDatabase.get(context)
             // 存量修复：0.1.40 及以前，播放列表补出来的占位行把类型猜成了「音频」，视频条目
@@ -477,6 +493,7 @@ object LibrarySyncRunner {
         } finally {
             mutex.unlock()
         }
+        return true
     }
 
     private suspend fun matchRestored(

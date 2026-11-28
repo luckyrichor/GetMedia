@@ -10,8 +10,13 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.Buffer
+import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -47,7 +52,17 @@ interface LibraryWriteTransport {
  * 二进制，超时、断流、限流的表现完全不同，混在一个接口里会让两边的错误处理互相牵制。
  */
 interface LocalFileUploadTransport {
-    suspend fun uploadFile(trackId: Long, file: File): CloudTrack
+    /**
+     * 把 [file] 传到 `POST /v2/tracks/{id}/file`。
+     *
+     * [onProgress] 每写出一段就回调一次（已写字节、文件总字节）。**按文件本身算**，
+     * 不含 multipart 的头与边界——界面要显示的是"这个文件传到哪了"。
+     */
+    suspend fun uploadFile(
+        trackId: Long,
+        file: File,
+        onProgress: (sent: Long, total: Long) -> Unit = { _, _ -> },
+    ): CloudTrack
 }
 
 /**
@@ -173,11 +188,16 @@ class LibrarySyncClient(
             call(request) { text -> LibrarySyncJson.singleTrack(text) }
         }
 
-    override suspend fun uploadFile(trackId: Long, file: File): CloudTrack = withContext(Dispatchers.IO) {
+    override suspend fun uploadFile(
+        trackId: Long,
+        file: File,
+        onProgress: (sent: Long, total: Long) -> Unit,
+    ): CloudTrack = withContext(Dispatchers.IO) {
         // 文件名只用来给后缀：服务端会自己生成 uuid 前缀的落盘名，不看这里的名字
+        val size = file.length()
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("file", file.name, file.asRequestBody(octet))
+            .addFormDataPart("file", file.name, progressBody(file.asRequestBody(octet), size, onProgress))
             .build()
         val request = Request.Builder()
             .url((base + PATH + "/" + trackId + "/file").toHttpUrl())
@@ -186,6 +206,38 @@ class LibrarySyncClient(
             .post(body)
             .build()
         call(uploadClient, request) { text -> LibrarySyncJson.singleTrack(text) }
+    }
+
+    /**
+     * 把请求体包一层，每写出一段就报一次进度。
+     *
+     * 为什么包在**文件那一部分**而不是整个 multipart：multipart 的 `contentLength` 含边界
+     * 与表单头，用它当分母会让进度从 0.1% 起步、结尾差几个字节；包住文件本身，分母就是
+     * 文件长度，界面上那个百分比才和"这个文件传到哪了"对得上。
+     *
+     * 只在 okio 真正把字节交给 socket 时回调（`ForwardingSink.write` 之后），
+     * 不是"从内存读出来"就算——否则进度条会先跑到 100% 再卡住等网络。
+     */
+    private fun progressBody(
+        delegate: RequestBody,
+        total: Long,
+        onProgress: (sent: Long, total: Long) -> Unit,
+    ): RequestBody = object : RequestBody() {
+        override fun contentType() = delegate.contentType()
+        override fun contentLength() = delegate.contentLength()
+        override fun writeTo(sink: BufferedSink) {
+            val forwarding = object : ForwardingSink(sink) {
+                private var written = 0L
+                override fun write(source: Buffer, byteCount: Long) {
+                    super.write(source, byteCount)
+                    written += byteCount
+                    onProgress(written, total)
+                }
+            }
+            val buffered = forwarding.buffer()
+            delegate.writeTo(buffered)
+            buffered.flush()
+        }
     }
 
     private fun <T> call(request: Request, parse: (String) -> T): T = call(client, request, parse)
