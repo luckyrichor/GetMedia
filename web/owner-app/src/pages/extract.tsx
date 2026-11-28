@@ -71,21 +71,24 @@ function savePageSize(n: number) {
 const COLS: { label: string; cls: string; mid?: boolean; tip?: string }[] = [
   { label: '序号', cls: 'e-no' },
   { label: '作品', cls: 'e-title' },
-  { label: '上传者', cls: 'e-who' },
+  { label: '作者', cls: 'e-who' },
   { label: '状态', cls: 'e-st' },
-  { label: '存放与输出', cls: 'e-out' },
+  { label: '存放', cls: 'e-store' },
+  { label: '格式', cls: 'e-fmt' },
   { label: '占用', cls: 'e-bytes', mid: true, tip: '服务器上实际存下来的文件大小；只存元数据时没有文件' },
   { label: '发起时间', cls: 'e-at' },
   { label: '操作', cls: 'e-ops' },
 ];
 
-/** 一条任务的「媒体类型 · 输出格式」：没选过格式的老任务按媒体类型的默认值显示。 */
-function mediaLabel(j: ExtractionJob): string {
-  const picked = (j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
+/** 一条任务选过的输出格式；没选过格式的老任务按媒体类型的默认值显示。 */
+function formatLabel(j: ExtractionJob): string {
+  return (j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
     .map((f) => FORMAT[f] ?? f)
     .join(' / ');
-  return `${j.media_type === 'audio' ? '音频' : '视频'} · ${picked}`;
 }
+
+/** 「视频」/「音频」——格式列的第二行，不单独占一列。 */
+const mediaTypeLabel = (j: ExtractionJob) => (j.media_type === 'audio' ? '音频' : '视频');
 
 export function ExtractPage() {
   const { show: toast, node: toastNode } = useToast();
@@ -119,6 +122,11 @@ export function ExtractPage() {
   /** 第几页（1 起）与每页条数：筛选一变就回第 1 页，否则会停在一个已经不存在的页码上。 */
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(readPageSize);
+
+  /** 展开了全文的作品行（按 job.id 记，轮询刷新不会丢）。 */
+  const [openIds, setOpenIds] = useState<number[]>([]);
+  const toggleOpen = (id: number) =>
+    setOpenIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const timer = useRef<number | null>(null);
 
@@ -460,17 +468,33 @@ export function ExtractPage() {
                     <tr data-job={j.id}>
                       <td class="e-no muted">{(pageSafe - 1) * pageSize + idx + 1}</td>
                       <td class="e-title">
-                        {/* 标题单行、超出用省略号（悬停看全文）；失败原因最多两行。
-                            以前这里是横向滚动：格子里再套一个滚动条，既跟表格本身的横滚打架，
-                            鼠标滚轮划过时还会把页面滚走。 */}
-                        <div class="t-main" title={j.title || j.input}>{j.title || j.input}</div>
-                        {/* 失败的任务把原因写在这行（不藏在 tooltip 里）：这条列宽够，
-                            而且失败时作品号没什么用，位置让给原因更值 */}
-                        {j.status === 'failed' && j.error_detail ? (
-                          <div class="t-sub bad-text" title={j.error_detail}>{j.error_detail}</div>
-                        ) : (
-                          <div class="t-sub">{j.video_id || '—'}</div>
-                        )}
+                        {/* 标题默认两行、超出省略号，**点一下展开全文**（再点收起）。
+                            不恢复横向滚动：格子里再套一个滚动条既跟表格本身的横滚打架，
+                            滚轮划过还会把页面滚走；展开是整行变高，不新增第二层滚动。
+                            `title` 仍然放全文，悬停也能看。 */}
+                        <button
+                          type="button"
+                          class="t-toggle"
+                          aria-expanded={openIds.includes(j.id)}
+                          title={j.title || j.input}
+                          onClick={() => toggleOpen(j.id)}
+                        >
+                          <span class={openIds.includes(j.id) ? 't-main open' : 't-main'}>
+                            {j.title || j.input}
+                          </span>
+                          {/* 失败的任务把原因写在这行（不藏在 tooltip 里）：这条列宽够，
+                              而且失败时作品号没什么用，位置让给原因更值 */}
+                          {j.status === 'failed' && j.error_detail ? (
+                            <span
+                              class={openIds.includes(j.id) ? 't-sub bad-text open' : 't-sub bad-text'}
+                              title={j.error_detail}
+                            >
+                              {j.error_detail}
+                            </span>
+                          ) : (
+                            <span class="t-sub">{j.video_id || '—'}</span>
+                          )}
+                        </button>
                       </td>
                       <td class="e-who">
                         <div class={j.uploader ? 'who-name' : 'who-name weak'} title={j.uploader ?? ''}>
@@ -483,9 +507,14 @@ export function ExtractPage() {
                           {STATUS_LABEL[j.status] ?? j.status}
                         </span>
                       </td>
-                      <td class="e-out">
-                        <div>{STORAGE[j.storage] ?? j.storage}</div>
-                        <div class="sub">{mediaLabel(j)}</div>
+                      {/* 存放与格式拆成两列：以前挤在一格里（「服务器存储 / 视频 · mp4」），
+                          扫一列「格式」找 mp4 得逐行读两行字。存放只有三种取值，窄列够用。 */}
+                      <td class="e-store">{STORAGE[j.storage] ?? j.storage}</td>
+                      <td class="e-fmt">
+                        <div class="fmt" title={`${mediaTypeLabel(j)} · ${formatLabel(j)}`}>
+                          {formatLabel(j)}
+                        </div>
+                        <div class="sub">{mediaTypeLabel(j)}</div>
                       </td>
                       <td class="e-bytes mid">
                         {j.bytes && j.bytes > 0

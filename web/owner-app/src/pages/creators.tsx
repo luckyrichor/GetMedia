@@ -243,7 +243,8 @@ const COLS: { label: string; cls: string; mid?: boolean; tip?: string }[] = [
   { label: '博主', cls: 'c-who' },
   { label: '状态', cls: 'c-st' },
   { label: '选取', cls: 'c-sel' },
-  { label: '存放与输出', cls: 'c-out' },
+  { label: '存放', cls: 'c-store' },
+  { label: '格式', cls: 'c-fmt' },
   { label: '进度', cls: 'c-prog', mid: true },
   { label: '占用', cls: 'c-bytes', mid: true, tip: '按作品平均码率估算，实际以服务器上的文件为准' },
   { label: '发起时间', cls: 'c-at' },
@@ -925,9 +926,10 @@ export function CreatorsPage() {
               <tbody>
                 {shownJobs.map((j, idx) => {
                   const cid = creatorId(j);
-                  const mediaLabel = `${j.media_type === 'audio' ? '音频' : '视频'} · `
-                    + (j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
-                      .map((f) => FORMAT[f] ?? f).join(' / ');
+                  // 「存放」与「格式」拆成两列之后，格式列只放格式本身，媒体类型退到第二行
+                  const fmtLabel = (j.formats?.length ? j.formats : [FORMATS_OF[j.media_type]?.[0] ?? 'source'])
+                    .map((f) => FORMAT[f] ?? f).join(' / ');
+                  const typeLabel = j.media_type === 'audio' ? '音频' : '视频';
                   return (
                     <Fragment key={j.id}>
                       <tr data-job={j.id} class={fresh === j.id ? 'job-fresh' : undefined}>
@@ -942,9 +944,10 @@ export function CreatorsPage() {
                           </span>
                         </td>
                         <td class="c-sel" title={selectionText(j)}>{selectionShort(j)}</td>
-                        <td class="c-out">
-                          <div>{STORAGE[j.storage] ?? j.storage}</div>
-                          <div class="sub">{mediaLabel}</div>
+                        <td class="c-store">{STORAGE[j.storage] ?? j.storage}</td>
+                        <td class="c-fmt">
+                          <div class="fmt" title={`${typeLabel} · ${fmtLabel}`}>{fmtLabel}</div>
+                          <div class="sub">{typeLabel}</div>
                         </td>
                         <td class="c-prog mid"><ProgCell job={j} /></td>
                         <td

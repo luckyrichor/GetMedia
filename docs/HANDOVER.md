@@ -19,7 +19,7 @@
 | 服务端 | release `20261127-9`，SQLite schema **21**，运行中 |
 | 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
 | 线上协议 | 隐私说明 **v5**、用户协议 **v2**（2026-11-27 生效） |
-| 线上管理台 | `index-DgeRBj1b.js` / `style-DFlE0QTN.css`（单个提取页：作品列单行省略、分页 5/10/20、宽屏表头吸顶；媒体库页改版 + 三个列表页的 SWR 缓存（内存 + sessionStorage）+ gate 两个请求并行，`src/swr.ts` 是缓存层，见 STATUS.local 2026-11-28 条目） |
+| 线上管理台 | `index-iRvgLjpu.js` / `style-Dp7X_UUy.css`（单个提取页：作品名两行截断 + 点击展开全文、分页 5/10/20、宽屏表头吸顶、作者列收窄；两页的「存放与输出」拆成「存放」+「格式」；媒体库页改版 + 三个列表页的 SWR 缓存（内存 + sessionStorage）+ gate 两个请求并行，`src/swr.ts` 是缓存层，见 STATUS.local 2026-11-28 条目） |
 | 线上公开站 | `index-CHhgq2uv.js` / `style-D1jGOt3t.css` |
 | 用户 | 一个人在用（admin），手机 1 / 手机 2 两台 |
 
@@ -47,7 +47,7 @@ export ANDROID_HOME=/Users/lc/Library/Android/sdk
 
 # 网页（在 web/ 下，npm 依赖已装好）
 cd web && npm run typecheck          # tsc --noEmit
-npm test                             # vitest，基线 251 项
+npm test                             # vitest，基线 254 项
 npm run build:owner                  # 产物 web/owner-app/dist/
 
 # 服务端（在仓库根）

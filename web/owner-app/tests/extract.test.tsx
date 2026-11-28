@@ -111,10 +111,12 @@ describe('单个提取', () => {
     expect(post.body).toEqual({
       input: 'BV1xx411c7mD', media_type: 'video', storage: 'archive', formats: ['mp4'],
     });
-    // 表格里能看到是谁的作品、存了什么
+    // 表格里能看到是谁的作品、存了什么：存放与格式各占一格
     expect(titles()).toEqual(['一个测试视频']);
     expect(text()).toContain('UP 主');
-    expect(text()).toContain('视频 · .mp4');
+    expect(document.querySelector('.ex-table tbody .e-store')!.textContent).toBe('服务器存储');
+    expect(document.querySelector('.ex-table tbody .e-fmt .fmt')!.textContent).toBe('.mp4');
+    expect(document.querySelector('.ex-table tbody .e-fmt .sub')!.textContent).toBe('视频');
   });
 
   test('切到音频时输出格式跟着换成音频那一类，不会留下无效组合', async () => {
@@ -310,5 +312,92 @@ describe('单个提取', () => {
     expect(document.querySelector('.box-foot')).toBeNull();
     await click(button('重置筛选'));
     await until(() => rowCount() === 1);
+  });
+
+  test('表头：作者 / 存放 / 格式 是三列，格式列第二行是媒体类型', async () => {
+    server(ownerRoutes({
+      [JOBS]: {
+        json: {
+          jobs: [
+            job({ id: 1, title: '任务 1', storage: 'archive', formats: ['mp4'], media_type: 'video' }),
+            job({ id: 2, title: '任务 2', storage: 'metadata', formats: [], media_type: 'audio' }),
+          ],
+        },
+      },
+    }));
+    mount('/extract');
+    await until(() => rowCount() === 2);
+
+    const heads = Array.from(document.querySelectorAll('.ex-table thead th')).map((n) => n.textContent);
+    expect(heads).toEqual(['序号', '作品', '作者', '状态', '存放', '格式', '占用', '发起时间', '操作']);
+
+    const cells = (i: number) => {
+      const r = document.querySelectorAll('.ex-table tbody tr')[i]!;
+      return {
+        who: r.querySelector('.e-who .who-name')!.textContent,
+        store: r.querySelector('.e-store')!.textContent,
+        fmt: r.querySelector('.e-fmt .fmt')!.textContent,
+        type: r.querySelector('.e-fmt .sub')!.textContent,
+        fmtTip: r.querySelector('.e-fmt .fmt')!.getAttribute('title'),
+      };
+    };
+    expect(cells(0)).toEqual({ who: 'UP 主', store: '服务器存储', fmt: '.mp4', type: '视频', fmtTip: '视频 · .mp4' });
+    // 没选过格式的老任务按媒体类型的默认值显示（音频默认 m4a）
+    expect(cells(1)).toEqual({ who: 'UP 主', store: '只存元数据', fmt: '.m4a', type: '音频', fmtTip: '音频 · .m4a' });
+  });
+
+  test('作品列：默认两行截断，点标题展开全文、再点收起', async () => {
+    const long = '【4K 修复·60 帧】这是一个特别特别长的视频标题，用来验证展开之后能看全';
+    server(ownerRoutes({
+      [JOBS]: {
+        json: {
+          jobs: [
+            job({ id: 1, title: long }),
+            job({ id: 2, title: '短标题' }),
+          ],
+        },
+      },
+    }));
+    mount('/extract');
+    await until(() => titles().length === 2);
+
+    // 两行截断是 CSS 做的，jsdom 量不出高度；这里断言「结构上是可展开的按钮 + 默认没有 open 类」
+    const toggles = Array.from(document.querySelectorAll('.ex-table .t-toggle'));
+    expect(toggles).toHaveLength(2);
+    const [first, second] = toggles;
+    expect(first!.tagName).toBe('BUTTON');
+    expect(first!.getAttribute('aria-expanded')).toBe('false');
+    expect(first!.getAttribute('title')).toBe(long); // 悬停仍是全文
+    expect(document.querySelectorAll('.ex-table .t-main.open')).toHaveLength(0);
+    // 标题文字本身没被截断成短字符串（截断只发生在一行/两行的视觉层）
+    expect(titles()[0]).toBe(long);
+
+    // 展开第 1 条：只有它变 open，第 2 条不受影响
+    await click(first as HTMLElement);
+    await until(() => document.querySelectorAll('.ex-table .t-main.open').length === 1);
+    expect(first!.getAttribute('aria-expanded')).toBe('true');
+    expect(second!.getAttribute('aria-expanded')).toBe('false');
+
+    // 再点一次收起
+    await click(document.querySelectorAll('.ex-table .t-toggle')[0] as HTMLElement);
+    await until(() => document.querySelectorAll('.ex-table .t-main.open').length === 0);
+  });
+
+  test('失败原因也随标题一起展开，收起后回到两行', async () => {
+    const reason = '上游返回 403：该视频为充电专属内容，需要大会员账号才能取流；如果确认账号有权限，请稍后重试';
+    server(ownerRoutes({
+      [JOBS]: {
+        json: { jobs: [job({ id: 1, status: 'failed', error_code: 'upstream_403', error_detail: reason, track_id: null })] },
+      },
+    }));
+    mount('/extract');
+    await until(() => document.querySelectorAll('.ex-table .t-sub.bad-text').length === 1);
+
+    const bad = () => document.querySelector('.ex-table .t-sub.bad-text')!;
+    expect(bad().classList.contains('open')).toBe(false);
+    expect(bad().getAttribute('title')).toBe(reason); // 不展开时悬停也能看全
+
+    await click(document.querySelector('.ex-table .t-toggle') as HTMLElement);
+    await until(() => document.querySelectorAll('.ex-table .t-sub.bad-text.open').length === 1);
   });
 });

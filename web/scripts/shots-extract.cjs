@@ -60,8 +60,30 @@ const JOBS = [
   ...Array.from({ length: 15 }, (_, i) => job(i + 6)),
 ];
 
-const CONFIG = {
-  cache_ttl_seconds: 86400, cache_quota_bytes: 5 * 1024 ** 3, archive_quota_bytes: 20 * 1024 ** 3,
+/** 批量提取页的桩数据：只为了量「存放 / 格式」拆成两列之后的列宽与表头。 */
+const LONG_NICK = '这是一个特别特别长的博主昵称用来验证两行截断和悬停看全文';
+const BATCH_JOBS = [
+  {
+    id: 1, platform: 'bilibili', creator_id: '12345', creator_name: LONG_NICK,
+    source_url: 'https://space.bilibili.com/12345', mode: 'latest_n',
+    since_ts: null, until_ts: null, limit_n: 20, include_pinned: true,
+    storage: 'archive', media_type: 'video', status: 'running', pause_reason: null,
+    total: 20, done: 6, failed: 1, estimated_bytes: 300 * 1024 * 1024,
+    created_at: now - 3600, updated_at: now - 60, started_at: now - 3500, finished_at: null,
+    formats: ['mp4'],
+  },
+  {
+    id: 2, platform: 'douyin', creator_id: '67194609689', creator_name: '短视频博主',
+    source_url: 'https://www.douyin.com/user/x', mode: 'all',
+    since_ts: null, until_ts: null, limit_n: null, include_pinned: false,
+    storage: 'metadata', media_type: 'audio', status: 'done', pause_reason: null,
+    total: 34, done: 34, failed: 0, estimated_bytes: 0,
+    created_at: now - 7200, updated_at: now - 6000, started_at: now - 7100, finished_at: now - 6000,
+    formats: [],
+  },
+];
+
+const CONFIG = {  cache_ttl_seconds: 86400, cache_quota_bytes: 5 * 1024 ** 3, archive_quota_bytes: 20 * 1024 ** 3,
   creator: { max_items: 200, max_start: 60 }, credential_vault: true,
 };
 const ME = { id: 'acct_1', login_name: 'owner1', tier: 'full', tier_expires_at: null, consent_required: false, recovery_confirmed: true, status: 'active' };
@@ -86,6 +108,7 @@ async function main() {
     if (p === '/v2/config/owner') return json(CONFIG);
     if (p === '/account/me') return json(ME);
     if (p === '/v2/extraction-jobs') return json({ jobs });
+    if (p === '/v2/creators/jobs') return json({ jobs: BATCH_JOBS });
     if (p.startsWith('/v2/media/')) return req.respond({ status: 200, contentType: 'video/mp4', body: '' });
     return json({});
   });
@@ -244,6 +267,77 @@ async function main() {
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await sleep(300);
   await shot('11-narrow-pager');
+
+  // 8) 回到 1280：量列宽 / 表头 / 每格有没有溢出，并截「展开全文」的样子
+  await page.setViewport({ width: 1280, height: 900, deviceScaleFactor: 2 });
+  jobs = JOBS;
+  await goto();
+  const cols = await page.evaluate(() => {
+    const t = document.querySelector('.ex-table');
+    const wrap = document.querySelector('.table-wrap');
+    const head = Array.from(t.querySelectorAll('thead th')).map((th) => ({
+      label: th.textContent.trim(), w: Math.round(th.getBoundingClientRect().width),
+    }));
+    const over = [];
+    t.querySelectorAll('tbody tr').forEach((tr) => {
+      Array.from(tr.children).forEach((td, i) => {
+        if (td.scrollWidth > td.clientWidth + 1) {
+          over.push({ col: head[i]?.label, cls: td.className, s: td.scrollWidth, c: td.clientWidth });
+        }
+      });
+    });
+    return {
+      head, total: Math.round(t.getBoundingClientRect().width),
+      wrapOver: wrap.scrollWidth - wrap.clientWidth,
+      cellOverflow: over,
+    };
+  });
+  console.log('  表头/列宽 =', JSON.stringify(cols));
+  // 点第一条的标题展开
+  await page.click('.ex-table tbody .t-toggle');
+  await sleep(260);
+  const expanded = await page.evaluate(() => {
+    const tr = document.querySelector('.ex-table tbody tr');
+    const main = tr.querySelector('.t-main');
+    return {
+      open: main.classList.contains('open'),
+      aria: tr.querySelector('.t-toggle').getAttribute('aria-expanded'),
+      h: Math.round(tr.getBoundingClientRect().height),
+      lines: Math.round(main.getBoundingClientRect().height / parseFloat(getComputedStyle(main).lineHeight)),
+    };
+  });
+  console.log('  展开后 =', JSON.stringify(expanded));
+  await shot('12-expanded');
+
+  // 9) 批量提取页：同样的表头/列宽实测
+  await page.goto(base + 'creators', { waitUntil: 'networkidle0' });
+  await page.waitForSelector('.cr-table tbody tr[data-job]');
+  await sleep(300);
+  const bcols = await page.evaluate(() => {
+    const t = document.querySelector('.cr-table');
+    const wrap = t.closest('.table-wrap');
+    const head = Array.from(t.querySelectorAll('thead th')).map((th) => ({
+      label: th.textContent.trim(), w: Math.round(th.getBoundingClientRect().width),
+    }));
+    const over = [];
+    t.querySelectorAll('tbody tr[data-job]').forEach((tr) => {
+      Array.from(tr.children).forEach((td, i) => {
+        if (td.scrollWidth > td.clientWidth + 1) {
+          over.push({ col: head[i]?.label, cls: td.className, s: td.scrollWidth, c: td.clientWidth });
+        }
+      });
+    });
+    const nick = document.querySelector('.cr-table .who-name');
+    return {
+      head, total: Math.round(t.getBoundingClientRect().width),
+      wrapOver: wrap ? wrap.scrollWidth - wrap.clientWidth : null,
+      cellOverflow: over,
+      nickClamp: getComputedStyle(nick).webkitLineClamp,
+      nickOverflow: getComputedStyle(nick).overflowX,
+    };
+  });
+  console.log('  批量页表头/列宽 =', JSON.stringify(bcols));
+  await shot('13-batch-columns');
 
   await browser.close();
   srv.close();

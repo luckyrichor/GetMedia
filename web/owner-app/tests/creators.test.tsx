@@ -519,7 +519,7 @@ describe('批量提取：任务表格与行内操作', () => {
     await until(() => jobRows().length === 1);
 
     const heads = Array.from(document.querySelectorAll('.cr-table thead th')).map((n) => n.textContent);
-    expect(heads).toEqual(['序号', '博主', '状态', '选取', '存放与输出', '进度', '占用', '发起时间', '操作']);
+    expect(heads).toEqual(['序号', '博主', '状态', '选取', '存放', '格式', '进度', '占用', '发起时间', '操作']);
 
     const r = jobRows()[0]!;
     expect(r.querySelector('.c-no')!.textContent).toBe('1');
@@ -623,7 +623,7 @@ describe('批量提取：任务表格与行内操作', () => {
     // 展开的是紧跟该行的一个 colspan 子行，不是弹窗、不是跳转
     const sub = document.querySelector('.cr-table tbody tr.job-sub')!;
     expect(sub).not.toBeNull();
-    expect(sub.querySelector('td')!.getAttribute('colspan')).toBe('9');
+    expect(sub.querySelector('td')!.getAttribute('colspan')).toBe('10');
     expect(sub.nextElementSibling === null || sub.previousElementSibling === jobRows()[0]).toBe(true);
 
     // 表头：序号 / 标题 / 时长 / 发布 / 提取
@@ -906,7 +906,7 @@ describe('批量提取：多格式与任务行信息', () => {
     expect(body.formats).toEqual(['m4a', 'mp3']);
   });
 
-  test('存放与输出两行：第一行存放方式，第二行「视频 · 原始格式」；指定日期只显示月日', async () => {
+  test('存放与格式是两列：存放一格、格式一格（第二行是媒体类型）；指定日期只显示月日', async () => {
     server(ownerRoutes({
       [JOBS]: {
         json: {
@@ -920,9 +920,17 @@ describe('批量提取：多格式与任务行信息', () => {
     mount('/creators');
     await until(() => jobRows().length === 2);
 
-    const out = (i: number) => Array.from(jobRows()[i]!.querySelectorAll('.c-out > div')).map((n) => n.textContent);
-    expect(out(0)).toEqual(['只存元数据', '视频 · 原始格式']);
-    expect(out(1)).toEqual(['服务器存储', '音频 · .m4a']);
+    const store = (i: number) => jobRows()[i]!.querySelector('.c-store')!.textContent;
+    const fmt = (i: number) => {
+      const cell = jobRows()[i]!.querySelector('.c-fmt')!;
+      return [cell.querySelector('.fmt')!.textContent, cell.querySelector('.sub')!.textContent];
+    };
+    expect(store(0)).toBe('只存元数据');
+    expect(fmt(0)).toEqual(['原始格式', '视频']);
+    expect(store(1)).toBe('服务器存储');
+    expect(fmt(1)).toEqual(['.m4a', '音频']);
+    // 格式列窄（88px），完整含义（媒体类型 · 格式）进 tooltip
+    expect(jobRows()[1]!.querySelector('.c-fmt .fmt')!.getAttribute('title')).toBe('音频 · .m4a');
     // 选取列：日期范围缩成月日，完整内容进 tooltip
     const two = (x: number) => String(x).padStart(2, '0');
     const md = (ts: number) => { const d = new Date(ts * 1000); return `${two(d.getMonth() + 1)}-${two(d.getDate())}`; };
