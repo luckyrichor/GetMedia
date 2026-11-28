@@ -48,8 +48,21 @@ sudo -u getmedia /opt/getmedia/venv/bin/python -m getmedia.cli ai-gc
 每天 04:10 由 `getmedia-ai-gc.timer` 自动跑。只删超过保留期、且没有排队/执行中任务的项目**文件**，
 记录保留并把状态置 `expired`；源来自媒体库的项目不会动到媒体库里的文件。
 
-## Android（由使用者在 Mac 上执行）
-命令在 WP5 之后补充；构建需要固定签名密钥，见 `tools/make-release-key.sh`。
+## Android（在 Mac 上执行）
+```bash
+cd android
+# 单测（基线 full 691 / free 411，全 0 failed）
+./gradlew testFullDebugUnitTest testFreeDebugUnitTest
+# 静态检查
+./gradlew lintFreeDebug lintFullDebug
+# 发版包（需要固定签名密钥，见 tools/make-release-key.sh）
+./gradlew assembleFreeRelease assembleFullRelease
+```
+- 构建慢，务必后台跑并把退出码单独接出来（`命令 > 日志 2>&1; echo exit=$?`），别接 `| tail`。
+- 发版包产出在 `android/app/build/outputs/apk/{free,full}/release/`；
+  `aapt2 dump badging` 核 `versionCode` / `versionName`，`apksigner verify --print-certs` 核证书
+  （应为 `8a092040…6691b`），然后按 [HANDOVER.md](HANDOVER.md) §4.3 走完归档 → 上传 → `release.json` → tag。
 
 ## 分支与提交
-每个工作包一个分支 `wp<N>-<简述>`，小步提交，只推分支；不推 main、不强推。
+主干是 `main`，直接提交并推送（发版时打 tag，`gh release create` 只挂免费版）。
+改动大、需要留退路时才另开分支；不强制推送。

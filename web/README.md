@@ -5,7 +5,7 @@
 | 目录 | 产物 | 部署路径 | 谁能看 |
 |---|---|---|---|
 | `public-app/` | 公开页（Vite + Preact + TS） | `/getmedia/` | 所有人 |
-| `owner-app/` | 管理台（同一个技术栈，独立 build） | `/getmedia/owner/` | owner 账号（nginx `auth_request` 守门） |
+| `owner-app/` | 管理台（同一个技术栈，独立 build） | `/getmedia/owner/` | `full` / `admin` 账号（nginx `auth_request` 守门，应用再 `require_tier` 复核） |
 | `shared/` | 接口客户端、错误文案、校验、Markdown 渲染 | — | 两边都用；**不得引用任何 owner 代码** |
 
 ## 开发与验证
@@ -18,7 +18,7 @@ npm run dev          # 公开页（vite，默认 5173）
 npm run dev:owner    # 管理台
 
 npm run typecheck
-npm run test         # vitest：公开页 59 项 + 管理台 6 项
+npm run test         # vitest，基线 259 项（含公开页、管理台与 shared）
 npm run build        # 两个产物都构建（tsc --noEmit 先跑）
 npm run size         # 产物体积：公开页 ≤ 60 KB、管理台 ≤ 80 KB（JS+CSS gzip）
 ```
@@ -26,7 +26,7 @@ npm run size         # 产物体积：公开页 ≤ 60 KB、管理台 ≤ 80 KB�
 ## 与后端的连接
 
 - 公开页：同源 `/getmedia/api/…`（nginx 按免费白名单放行，其余 404）。
-- 管理台：同源 `/getmedia/owner/api/…`（nginx 先 `auth_request` 判断是否 owner，再由应用 `require_tier` 复核）。
+- 管理台：同源 `/getmedia/owner/api/…`（nginx 先 `auth_request` 判身份，再由应用 `require_tier(*FULL_TIERS)` 复核等级）。
 - 基址都从 Vite 的 `base` 推导（`import.meta.env.BASE_URL`），**源码里没有绝对 URL**，换域名/前缀不用改代码。
 - 会话只在 HttpOnly Cookie（`__Secure-gm_session`）里；前端不接触令牌，也不写 localStorage/sessionStorage。
   写操作带 `X-GetMedia-CSRF`，服务端同时校验 `Origin`。

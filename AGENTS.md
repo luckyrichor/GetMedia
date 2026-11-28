@@ -6,7 +6,10 @@ GetMedia 是新的 Android 音视频提取、管理和播放项目，配套账�
 
 - 一切改动在本项目；同级 GetAudio、GetVideo 只读，不改分支、不提交、不推送。
 - 未经用户指示，不部署生产、不安装手机、不提交/推送，不修改签名密钥。
-- 免费版只保留本地功能，重型能力留到后续 owner 专属模块；不得仅隐藏 UI 而保留重型功能实现。
+- 免费版（`free`）只保留本地功能；云端同步、本机文件归档与重型能力只在完整版（`full` / `admin`）。
+  不得仅隐藏 UI 而保留重型功能实现——隔离由 `scan_forbidden.py heavy` 扫 `src/free` 与 `src/main` 兜底。
+  注意术语：代码与文档里的「owner」是**通道名**（`/getmedia/owner/`、`owner-app`），
+  等级早已改成 `free` / `full`（可有时效）/ `admin`（唯一，永久），不要再把等级写成 owner。
 - 既有 `GetAudio与GetVideo功能清单.md` 是旧项目静态盘点，不能作为 GetMedia 已实现功能说明，也不覆盖新版方案。
 
 ## 技术与环境
@@ -50,26 +53,57 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 - `android/`：单 app 工程；入口 `MainActivity.kt`、`GetMediaApp.kt`；包名取自 `android/app-ids.properties`。
 - `android/app/src/main/java/com/getmedia/app/data/localextract/`：分享链接解析、平台直提取、音轨处理。
 - `data/local/`：Room 数据库、媒体/类别/播放列表；`data/repo/`：本地文件与库管理。
+- `data/cloud/`：曲库同步（`LibrarySyncEngine` / `LibrarySyncRunner` / `LibrarySyncClient` / 本地删除队列 `LibraryLocalEdits` 与重放 `LibraryRemovalReplay`）。
+- `data/backup/`：元数据备份与恢复（`BackupManager`、`SnapshotReader`）。
+- `data/download/`：下载中心与 `DownloadProgress`（与上传的 `UploadProgress` 是两个独立槽位，别合并）。
+- `data/library/`：`LocalArchiveBackup`（本机导入原件自动上传，退避/冷却/`archiveState`）、`LibraryUploader`、`RepairRules`。
+- `data/export/`：批量导出（命名、计划、SAF 落地）。
 - `player/`：Media3、队列规则、播放状态持久化；`audioedit/`：本地音频剪辑；`ui/`：Compose 页面与背景。
-- WP5a 流程：输入分享链接 → 手机解析与下载音频 → 本地文件/Room 入库 → 播放、分类整理、列表或剪辑；`MediaKind` 已预留 VIDEO，但本分支只写入 AUDIO。
+- 主流程：分享链接或本机文件导入（音频/视频）→ 本地文件 + Room 入库 → 播放、分类整理、播放列表、剪辑；
+  完整版另有曲库同步（元数据 + 本机原件归档）与批量导出。
 - `server/getmedia/`：账号/配置/等级/反馈/协议/运维服务；入口见 `server/getmedia/main.py` 与 `server/getmedia/api.py`，契约见 `docs/contracts/`。
 - `deploy/`：生产部署模板；`tools/`：扫描、签名工具及测试。
 - `docs/reports/`：工作包报告；`docs/provenance.md` 与 `docs/reports/wp5-merge-map.md`：上游移植来源。
 
-## 当前进度（2026-11-20）
+## 当前进度（2026-11-28）
 
-- 阶段 5 已实现（0.1.11 / versionCode 12，已签名归档，未安装、未部署）：手机删除已绑定条目可选「同时从云端曲库移除」，服务端条件 DELETE 保护 archive；墓碑批量确认默认保留本机文件；绑定行改名走条件 PATCH，服务器为准。服务端小补丁未部署，真机验收等部署后另行批准。单测 free 326 / full 508，pytest 408 passed / 50 skipped，Lint 0 错误 / 26 警告。下一次 full versionCode ≥ 13。
-- 阶段 4 已实现。唯一匹配只关联原 Room 行。无匹配项经主动重新下载、校验后可由用户确认上传。冲突和证据不足均保留原样。0.1.10 / versionCode 11 已签名归档；恢复、匹配、直取和重新下载纳入 [整体验收清单](docs/acceptance-report.md)。下一次 full versionCode ≥ 12。
-- 阶段 3 已获用户认可，原条目直取通过。仅有元数据的分 P 真机未验，单测已覆盖。网页短链与显式分 P 问题列在 STATUS 待办。
-- 0.1.9 / versionCode 10 已签名归档。点云端行按原服务器条目 ID 直取已存文件，元数据或已清理缓存才走带目标的提取。两端核对作品、分 P 和类型，手机核对长度和可用 SHA-256 后只更新原 Room 行。旧调用保持原行为。
+**接手先看 [docs/HANDOVER.md](docs/HANDOVER.md)**——那份是唯一跟着版本走的现状说明（版本、基线、
+部署路径、踩坑、待办）。本节只给一个快照，细节与判据一律以 HANDOVER 为准。
 
-- 0.1.8 / versionCode 9 已签名归档并覆盖手机 2，首次安装时间保持不变。导出确认页已区分云端未下载和真实本机文件缺失，混合界面回归通过，真机双云端项新文案已截图后取消。free 320 / full 458 单测通过，双版 Lint 0 错误。C 由用户上传成功；A 的 B 站 P3 触发服务器错误下载 P1，旧云端行仍在，未修改下载代码。抖音本机提取方案待用户决定。详见本地阶段 3 报告。
+| 项 | 现状 |
+|---|---|
+| Android | `free` / `full` 两个包，**0.1.48 / versionCode 49**（tag `v0.1.48`），两台手机已 `adb install -r -d` |
+| 服务端 | release `20261128-2`，SQLite schema **21**，运行中 |
+| 线上协议 | 隐私说明 **v5**、用户协议 **v2**；`LibrarySyncGate.MIN_PRIVACY_FOR_SYNC = 5` |
+| 账号等级 | `free` / `full`（可有时效，默认 6 个月）/ `admin`（唯一 `luckyrichor`，永久） |
+| 测试基线 | Android **full 691 / free 411**（全 0 failed）、网页 vitest **259**、pytest **544 passed / 50 skipped** |
 
-- 0.1.7 手机 2 追加真机验证：抖音云端行下载因 `platform_needs_phone` 未通过，导出确认页显示通用缺文件提示；公开 B 站 71 秒视频本机提取成功，候选 1 条，停在上传确认。曲库自动同步暂停，服务端仍 7 行。详见阶段 3 报告。
+### 0.1.48 这一版做了什么
 
-- full 0.1.7 / versionCode 8 修复了首次上传弹窗：返回键及点外部只关闭，明确点「暂不上传」才保存拒绝。owner 账号可在「我的 → 数据备份」使用各账号独立的自动同步开关和手动确认入口。免费版和免费档不显示；手动入口可在自动同步关闭时使用。
-- 0.1.7 已签名归档并覆盖安装到手机 2，首次安装时间保持 2026-11-19 19:38:49。冷启动未弹，本机界面显示总计 36 个条目、合格上传候选 0 条；停在曲库同步设置，等待用户。未触碰手机 1。free 320 / full 457 项单测全过，双风味 Lint 0 错误，free 源码与 APK DEX 隔离扫描通过。下一次 full versionCode 至少 9。
-- 线上阶段 1 写接口与隐私 v3 已生效（用户确认 release 20261119-2）。用户在安装 0.1.6 前已同意 v3，因此手机 2 拉取符合预期。未同意零请求真机未验，单测已覆盖。详见本地阶段 3 报告。
+1. **删本机导入的条目，云端那份也一起删**——`LibraryLocalEdits.canQueueCloudDelete` 原来最后一句是
+   `restoredKey() != null`，而 `restoredIdentity` 只解析 bilibili/douyin，`local` 落到 `else -> null`，
+   于是本机导入的条目一条都进不了删除队列（云端行与归档文件原地不动，另一台手机还能下回来）。
+   新增 `localIdentity()`，`identityOf = restoredKey() ?: localIdentity()`；**不按 `loc_` 前缀筛**
+   （0.1.36 之前的老行 `videoId` 是标题算的），**也不改 `restoredIdentity`**（`RestoredMatcher` 与
+   `ServerExtractClient` 也在用）。服务端不用改：`delete_for_sync` 对 `local` 行会 `_unlink` 文件并把
+   `media_path/bytes/sha256/storage` 清回 metadata，重放幂等。
+2. **量词统一用「个」**——`MediaWording.counted` 去掉 `music` 分支，`deleteOneQuestion` 改「删除这个音频？」，
+   界面 10 处「首」→「个」。
+3. **网页端上传上限 200 MiB → 1 GB**——`UP_LIMIT = 1024 * 1024 ** 2`、`FILE_LIMIT` 再减 1 MiB。
+   原来那道 200 MiB 是前端自己挡的（注释还停在 nginx 210m 的年代）。手机端本来没有检查，
+   真边界是 nginx `client_max_body_size 1024m` 与归档池 5 GiB（`ensure_room`）。
+4. **413 说人话**——413 只可能来自边缘（应用自己的配额错误是 409 `quota_exceeded`），
+   以前落到 `INPUT` 兜底被 `LocalArchiveBackup.permanent()` 判成永久失败，现在单独回
+   「文件太大，服务器不接受这么大的上传（单个上限 1 GB）」。
+
+### 更早的里程碑（只记结论，过程见 PLAN §15-7）
+
+- 0.1.44：本机原件上传/下载闭环（nginx 子请求 413、裸 400 误判永久失败、下载进度透传）。
+- 0.1.45：改名跨设备同步（`localTitleOverride` 曾经永久挡住服务器的新名字）、「未备份」原因可见。
+- 0.1.46：下载可取消（靠写盘循环每 64 KB 查 `cancelled()`，只 cancel 协程停不下来）、草稿基线修正。
+- 0.1.47：上传进度条（`UploadProgress` + `ForwardingSink` 只在真写 socket 时回调）。
+- 阶段 1–6（0.1.6–0.1.16）：账号、同步写接口、备份恢复、原行匹配、直取、墓碑与条件写。
+- 0.1.29–0.1.41：收藏/类别/播放列表跨设备、列表占位行与补绑定、孤儿行对账、`optString` 的 `"null"` 坑。
 
 ## 历史进度（2026-11-19）
 
@@ -105,20 +139,38 @@ python3 tools/scan_forbidden.py heavy android/app/src/main android/app/src/free 
 
 ## 已知限制与下一步
 
-1. 用户验收前先检查 81 项单测、Lint 报告及 APK 版本；构建通过不等于真机验收。
-2. 后续需真机验证 B 站/抖音提取、播放、拖动、导入、剪辑、背景、冷启动恢复；本轮全部未做。
-3. Lint 和编译存在警告，详见报告；没有以升级依赖或改 UI 扩大本轮范围。
-4. 本轮未验证 release 签名、服务器服务、证书续期、真实 SMTP 和备份恢复。
-5. 内置壁纸公开发布前的替换要求见 DECISIONS，构建通过不代表素材已可发布。
-6. 若继续 WP5b，严格按方案及移植映射执行，不改原项目；不要因构建成功自动进入下一工作包。
+**待办以 [docs/HANDOVER.md](docs/HANDOVER.md) §6 为准**，那里带判据。当前只剩三类：
+
+1. **真机验收 0.1.48 未做**：删本机导入条目要看云端行变 `deleted=1`、`storage='metadata'`、
+   `media_path=NULL`，且盘上文件消失、另一台手机同步后消失；「管理云端备份」要显示「5 个」；
+   网页端要能传 >200 MB 的文件。
+2. **0.1.47 遗留未验**：断网导入时进度停住 → 消失 → 行内「未备份 · …」红字、恢复网络自动重试；
+   批量「下载缺的 N 项」中途取消。
+3. **管理台两页没在真账号点过**：`/invites` 与「权限管理」（改等级是否踢下线、改有效期是否即时生效）。
+
+几条长期约束，别踩：
+
+- 构建通过 ≠ 真机验收；发版前必须双端 md5/sha256 核对（本地归档 = `build/outputs/apk` = 服务器 `download/`）。
+- `versionCode` 必须递增，否则覆盖安装被系统拒绝（当前 49，下次 ≥ 50）。
+- 单文件上限 1 GiB 与归档池 5 GiB 是绑在一起的；只改 nginx 会把 413 换成 `quota_exceeded` 409。
+- 内置壁纸公开发布前要替换，见 DECISIONS；构建通过不代表素材已可发布。
+- 仓库是 public：服务器路径、账号片段、nginx 细节只写 `docs/STATUS.local.md`（不入库）；
+  `local-artifacts/` 只进 `.git/info/exclude`。
 
 ## 飞书与更新约定
 
 - `docs/PLAN.md` §2 决定 16 明确本任务不做飞书同步，用户另行处理。本轮没有飞书写入或新建目录；尚无 GetMedia 飞书目录/文档链接。
 - 后续用户明确恢复飞书同步时，先核对目录、身份和授权范围，再按要求创建及回查，不继承 GetAudio/GetVideo 的发布授权。
-- 每阶段更新本交接、STATUS 及对应报告。CLAUDE.md 仅引用本文件，不重复维护正文。
+- 每次发版更新本文件、[docs/HANDOVER.md](docs/HANDOVER.md)、[docs/STATUS.md](docs/STATUS.md) 与 `docs/PLAN.md` §15-7；
+  流水账写 `docs/STATUS.local.md`（本机，不入库）。CLAUDE.md 只有一行 `@AGENTS.md`，不重复维护正文。
 
 ## 更新日志
+
+- 2026-11-28：**0.1.48 / vc 49 已发布**（tag `v0.1.48`，GitHub Release 只挂免费版，两台手机已装）。
+  本版修掉「手机上删本机导入的条目、云端那份没删」（`localIdentity` 补上 `local` 行的队列身份）、
+  量词统一用「个」、网页端上传上限 200 MiB → 1 GB、413 改成说人话。基线 full 691 / free 411 / vitest 259。
+  本文件重写「当前进度」「已知限制」两节（原内容停在 0.1.11 / 2026-11-01，已过期），
+  并订正「owner 是等级」的旧说法——等级是 free/full/admin，owner 只是通道名。
 
 - 2026-11-17：定时倒计时遮挡排序控件的缺陷（三处同源）修复已提交并推送（`15a1481`），工具栏回归 10 项，free/full 单测当轮全过（当前基线 145/165，含导出节点 A 的 16 项）；导出方案按用户 6 点决定修订并确认，节点 A 已交付；`ui-plan.md` 出到 v3；P6 部署材料改到 v4（本地）。未部署、未安装、未退役。
 
